@@ -17,13 +17,17 @@ TODO: OT 자료 교수님께 받으면 업데이트하기
 
 ## 시간표 공유
 
-![](시간표 - 김근찬)
+### 시간표 - 김근찬
 
-![](시간표 - 조해민)
+![시간표 - 김근찬](https://storage.kesa.uk/public/capstone-data/1789130924040.jpg)
 
-![](시간표 - 서성윤)
+### 시간표 - 조해민
 
-TODO: 시간표 사진으로 채워넣기
+![시간표 - 조해민](https://storage.kesa.uk/public/capstone-data/1789130927264.png)
+
+### 시간표 - 서성윤
+
+![시간표 - 서성윤](https://storage.kesa.uk/public/capstone-data/1789130936545.jpg)
 
 ## 기타
 
