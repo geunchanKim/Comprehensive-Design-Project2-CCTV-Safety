@@ -83,9 +83,29 @@ fix: 위험구역 좌표 오류 수정
 
 ## 6. 폴더/네이밍 주의사항
 
-- 아직 초기 단계라 폴더명·모듈명은 미확정
-- 추후 팀원들과 상의 후 확정하여 이 섹션에 추가 예정
+### 최상위 폴더 구조
 
----
+```
+├── ai/         # YOLO 탐지·추적 모델, 위험 판정 로직
+├── backend/    # FastAPI 백엔드 (API, 실시간 알림)
+├── frontend/   # React 대시보드
+├── infra/      # 배포·인프라 설정 (Docker, compose.yaml, 서버 설정 등)
+├── docs/       # 회의록, 계획서 등 문서
+├── CONVENTION.md
+└── .github/
+```
+
+### 파일 네이밍 규칙
+
+| 영역 | 규칙 |
+|---|---|
+| `ai/`, `backend/` (Python) | snake_case (예: `object_detector.py`) |
+| `frontend/` (React/JS) | 컴포넌트 파일은 PascalCase (예: `Dashboard.jsx`), 나머지는 camelCase |
+| `infra/` | 소문자 + 하이픈 (예: `docker-compose.yaml`) |
+
+### 폴더명 표기 주의
+
+- 대소문자를 정확히 지킬 것 — 서버 배포 환경(Linux)은 대소문자를 구분하므로 로컬(Mac/Windows)에서 문제없어도 배포 시 깨질 수 있음
+- 폴더명 변경 시 팀 채널에 공지 후 진행 (다른 팀원 로컬 경로 꼬임 방지)
 
 *본 문서는 팀 협의에 따라 지속적으로 업데이트됩니다.*
