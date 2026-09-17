@@ -18,10 +18,6 @@ YOLO를 통한 박싱 및 라벨링
 
 등
 
-3D 월드 좌표 추출 후 위험영역 또는 운동 속도 및 방향 분석?
-
-데이터셋에 위험 구역 라벨링이 없다면 위험 구역은 사용자 UI를 통해 영역을 지정 받기?
-
 ## 데이터셋 목록
 
 - [https://aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&dataSetSn=71407]
