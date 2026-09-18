@@ -1,0 +1,40 @@
+# local-only docs
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node / web dashboard
+node_modules/
+dist/
+build/
+
+# env / secrets
+.env
+.env.*
+
+# model weights / large data / video (uncomment & adjust as the project grows)
+# *.pt
+# *.onnx
+# *.mp4
+# *.avi
+# data/
+# models/
+
+# logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
