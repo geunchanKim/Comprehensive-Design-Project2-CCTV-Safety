@@ -1,40 +1,57 @@
-# local-only docs
-CLAUDE.md
+# ===== 환경변수 / 비밀 정보 =====
+.env
+*.env.local
 
-# Python
+# ===== Python (backend/, ai/) =====
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
+env/
 .pytest_cache/
 .mypy_cache/
 
-# Node / web dashboard
+# ===== Node / React (frontend/) =====
 node_modules/
 dist/
 build/
+.next/
+.vite/
+npm-debug.log*
+yarn-error.log*
 
-# env / secrets
-.env
-.env.*
-
-# model weights / large data / video (uncomment & adjust as the project grows)
-# *.pt
-# *.onnx
-# *.mp4
-# *.avi
-# data/
-# models/
-
-# logs
+# ===== Docker =====
 *.log
-logs/
 
-# OS
+# ===== Unity (ai/ 시뮬레이션, 있다면) =====
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+UserSettings/
+*.csproj
+*.sln
+*.userprefs
+
+# ===== 데이터 / 대용량 파일 =====
+*.zip
+*.zip.part*
+data/raw/
+*.pt
+*.pth
+*.onnx
+
+# ===== IDE / 에디터 =====
+.vscode/
+.idea/
+*.swp
+
+# ===== OS =====
 .DS_Store
 Thumbs.db
 
-# editor
-.vscode/
-.idea/
+# ===== 개인 로컬 설정 (팀 공유 X) =====
+CLAUDE.md
