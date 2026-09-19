@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cctv_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cctv_user
+      POSTGRES_PASSWORD: cctv_password
+      POSTGRES_DB: cctv_safety_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cctv_user -d cctv_safety_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: cctv_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://cctv_user:cctv_password@db:5432/cctv_safety_db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:
