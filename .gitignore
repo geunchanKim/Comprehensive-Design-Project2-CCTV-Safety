@@ -38,7 +38,3 @@ Thumbs.db
 # editor
 .vscode/
 .idea/
-
-#unity
-*.sln
-*.slnx
