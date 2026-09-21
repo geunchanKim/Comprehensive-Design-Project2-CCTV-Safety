@@ -14,7 +14,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-      
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: cctv_pgadmin
@@ -35,9 +35,9 @@ services:
     container_name: cctv_backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://cctv_user:cctv_password@db:5432/cctv_safety_db
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
-      - "32130:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ../backend:/app
     depends_on:
