@@ -11,6 +11,7 @@
 - [프로젝트 소개](#프로젝트-소개)
 - [연구 목적](#연구-목적)
 - [연구 범위](#연구-범위)
+- [관련 연구 및 차별성](#관련-연구-및-차별성)
 - [Unity 환경이 필요한 이유](#unity-환경이-필요한-이유)
 - [연구 방법](#연구-방법)
 - [실험 설계](#실험-설계)
@@ -47,6 +48,22 @@
 4. 다양한 크기의 실제 실내 공간과 객체를 이용한 재현성 검증
 
 객체 탐지, PPE 착용 판별, 충돌 위험도 및 TTC 계산은 현재 핵심 연구 범위에서 제외하거나 좌표 추정이 안정화된 이후의 확장 과제로 다룹니다.
+
+## 관련 연구 및 차별성
+
+본 연구는 카메라 캘리브레이션, 영상 간 대응점 검출과 스테레오 삼각측량을 기반으로 합니다. Zhang의 평면 패턴 기반 캘리브레이션 방법을 이용해 카메라 내부 파라미터와 렌즈 왜곡을 추정하고, Hartley와 Sturm의 삼각측량 연구를 바탕으로 두 영상의 대응점에서 3D 좌표를 복원합니다. 초기 실험에서는 ArUco 마커를 사용해 두 카메라에서 동일한 지점을 안정적으로 식별합니다.
+
+기존 다중 카메라 연구가 사람·차량의 검출과 추적 성능 향상에 주로 집중한 것과 달리, 본 연구는 **두 대의 일반 CCTV만을 사용하여 카메라 배치 조건에 따른 3D 좌표 오차를 분석**합니다. 실제 공간을 동일한 축척으로 구현한 Unity에서 정답 좌표를 확보하고, 가상환경에서 검증한 방법을 실제 강의실과 DIY실에 적용한다는 점에서 차이가 있습니다.
+
+| 관련 연구 | 본 연구에서의 활용 |
+| --- | --- |
+| Zhang, *A Flexible New Technique for Camera Calibration* (2000) | ChArUco 기반 내부 파라미터 및 렌즈 왜곡 추정 |
+| Hartley & Sturm, *Triangulation* (1997) | 두 영상의 대응점을 이용한 3D 좌표 복원 |
+| Garrido-Jurado et al., *Automatic Generation and Detection of Highly Reliable Fiducial Markers under Occlusion* (2014) | ArUco 마커 기반 기준점 식별 |
+| Chavdarova et al., *WILDTRACK* (2018) | 다중 CCTV의 월드 좌표 기반 객체 위치 평가 참고 |
+| Borkman et al., *Unity Perception* (2021) | Unity 기반 정답 데이터 생성과 가상환경 실험 설계 참고 |
+
+세부 논문은 [Zhang의 카메라 캘리브레이션](https://doi.org/10.1109/34.888718), [Hartley와 Sturm의 삼각측량](https://doi.org/10.1006/cviu.1997.0547), [ArUco 마커 연구](https://doi.org/10.1016/j.patcog.2014.01.005), [WILDTRACK](https://arxiv.org/abs/1707.09299), [Unity Perception](https://arxiv.org/abs/2107.04259)을 참고합니다.
 
 ## Unity 환경이 필요한 이유
 
