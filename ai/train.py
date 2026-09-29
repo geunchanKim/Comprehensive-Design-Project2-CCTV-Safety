@@ -46,7 +46,7 @@ def main() -> None:
         imgsz=640,
         device=device,
         project=str(BASE_DIR / "runs"),
-        name="train_v2",
+        name="train_v1",
     )
 
 
