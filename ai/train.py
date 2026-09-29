@@ -6,6 +6,7 @@
 """
 
 from pathlib import Path
+import torch
 from ultralytics import YOLO
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,12 +19,17 @@ def main() -> None:
             f"{DATA_YAML} 이(가) 없습니다. 먼저 scripts/merge_datasets.py를 실행하세요."
         )
 
+    device = 0 if torch.cuda.is_available() else "cpu"
+    print(f"학습 장치: {'GPU (cuda:0)' if device == 0 else 'CPU'}")
+
     model = YOLO("yolo11n.pt")  # nano — 빠른 검증용. 정확도 필요하면 yolo11s.pt로 교체
 
     model.train(
         data=str(DATA_YAML),
-        epochs=50,
+        epochs=100,
+        patience=5,
         imgsz=640,
+        device=device,
         project=str(BASE_DIR / "runs"),
         name="train_v1",
     )
