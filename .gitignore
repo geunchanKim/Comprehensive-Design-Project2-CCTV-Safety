@@ -21,6 +21,16 @@ build/
 npm-debug.log*
 yarn-error.log*
 
+# ===== 데이터 / 대용량 파일 =====
+*.zip
+*.zip.part*
+data/raw/
+ai/datasets/
+ai/runs/
+*.pt
+*.pth
+*.onnx
+
 # ===== Docker =====
 *.log
 
