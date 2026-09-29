@@ -1,19 +1,22 @@
 """
 v2 데이터셋 생성 스크립트
 
-v1 병합본(datasets/merged: cart, desk)의 모든 이미지에
-COCO 사전학습 모델(yolo11n.pt)로 person, chair를 자동 라벨링(pseudo-labeling)해서
+datasets/raw/ 의 원본 데이터셋(cart, desk — train/valid/test 분할 그대로)을 읽어서
+1) cart=0, desk=1 로 클래스 id를 다시 매기고
+2) 모든 이미지에 COCO 사전학습 모델(yolo11n.pt)로 person, chair를 자동 라벨링(pseudo-labeling)해서
 4클래스 데이터셋(datasets/merged_v2)을 만든다.
 
 클래스 id
-  0: cart   (기존 라벨 그대로)
-  1: desk   (기존 라벨 그대로)
+  0: cart   (raw 원본 라벨)
+  1: desk   (raw 원본 라벨)
   2: person (COCO 모델 자동 라벨)
   3: chair  (COCO 모델 자동 라벨)
 
 실행 (ai/ 폴더에서)
   python scripts/pseudo_label_coco.py
   python scripts/pseudo_label_coco.py --conf 0.5 --preview 12
+그다음
+  python scripts/add_coco_subset.py
 """
 
 import argparse
@@ -28,11 +31,13 @@ import yaml
 from ultralytics import YOLO
 
 AI_DIR = Path(__file__).resolve().parent.parent          # ai/
-SRC_DIR = AI_DIR / "datasets" / "merged"                 # v1 병합본 (읽기만 함)
+RAW_DIR = AI_DIR / "datasets" / "raw"                    # 원본 (읽기만 함)
 DST_DIR = AI_DIR / "datasets" / "merged_v2"              # v2 결과
 PREVIEW_DIR = AI_DIR / "datasets" / "merged_v2_preview"  # 눈으로 확인용 이미지
 DATA_YAML = AI_DIR / "configs" / "data_v2.yaml"
 
+# (raw 아래 폴더명, 클래스 이름) — 순서대로 0, 1 번 클래스
+RAW_DATASETS = [("cart", "cart"), ("desk", "desk")]
 NAMES = ["cart", "desk", "person", "chair"]
 # COCO 클래스 id -> 새 클래스 id  (COCO: 0=person, 56=chair)
 COCO_TO_NEW = {0: 2, 56: 3}
@@ -50,12 +55,23 @@ def get_device():
     return "cpu"
 
 
-def read_base_labels(label_path: Path) -> list[str]:
-    """기존 cart/desk 라벨 읽기 (파일 끝 개행 없어도 OK)"""
+def read_raw_labels(label_path: Path, new_id: int, warn: Counter) -> list[str]:
+    """raw 라벨을 읽어서 클래스 id를 new_id로 교체 (파일 끝 개행 없어도 OK)"""
     if not label_path.exists():
+        warn["라벨 파일 없는 이미지"] += 1
         return []
-    text = label_path.read_text(encoding="utf-8")
-    return [line.strip() for line in text.splitlines() if line.strip()]
+    lines = []
+    for line in label_path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if len(parts) != 5:
+            warn["bbox 형식이 아닌 줄(무시)"] += 1
+            continue
+        if parts[0] != "0":
+            warn[f"원본 class id {parts[0]} 발견(→ {new_id}로 통일)"] += 1
+        lines.append(" ".join([str(new_id)] + parts[1:]))
+    return lines
 
 
 def pseudo_labels(model, img_path: Path, conf: float, device) -> list[str]:
@@ -70,8 +86,7 @@ def pseudo_labels(model, img_path: Path, conf: float, device) -> list[str]:
 
     lines = []
     for cls, (x, y, w, h) in zip(result.boxes.cls.tolist(), result.boxes.xywhn.tolist()):
-        new_id = COCO_TO_NEW[int(cls)]
-        lines.append(f"{new_id} {x:.6f} {y:.6f} {w:.6f} {h:.6f}")
+        lines.append(f"{COCO_TO_NEW[int(cls)]} {x:.6f} {y:.6f} {w:.6f} {h:.6f}")
     return lines
 
 
@@ -93,8 +108,9 @@ def draw_preview(img_path: Path, lines: list[str], out_path: Path):
 
 
 def main(conf: float, preview: int):
-    if not SRC_DIR.exists():
-        raise SystemExit(f"v1 병합본이 없어요: {SRC_DIR}\n먼저 python scripts/merge_datasets.py 실행")
+    for folder, _ in RAW_DATASETS:
+        if not (RAW_DIR / folder).exists():
+            raise SystemExit(f"원본 데이터셋이 없어요: {RAW_DIR / folder}")
 
     for d in (DST_DIR, PREVIEW_DIR):
         if d.exists():
@@ -105,39 +121,46 @@ def main(conf: float, preview: int):
     model = YOLO("yolo11n.pt")  # COCO 80클래스 원본 모델
 
     counter = Counter()
+    warn = Counter()
     preview_pool = []  # (이미지 경로, 라벨 줄)
-    used_splits = []
+    used_splits = set()
 
-    for split in SPLITS:
-        src_img_dir = SRC_DIR / "images" / split
-        if not src_img_dir.exists():
-            print(f"[스킵] {split}: {src_img_dir} 없음")
-            continue
-        used_splits.append(split)
+    for new_id, (folder, class_name) in enumerate(RAW_DATASETS):
+        for split in SPLITS:
+            src_img_dir = RAW_DIR / folder / split / "images"
+            src_lbl_dir = RAW_DIR / folder / split / "labels"
+            if not src_img_dir.exists():
+                print(f"[스킵] {folder}/{split}: images 폴더 없음")
+                continue
+            used_splits.add(split)
 
-        dst_img_dir = DST_DIR / "images" / split
-        dst_lbl_dir = DST_DIR / "labels" / split
-        dst_img_dir.mkdir(parents=True, exist_ok=True)
-        dst_lbl_dir.mkdir(parents=True, exist_ok=True)
+            dst_img_dir = DST_DIR / "images" / split
+            dst_lbl_dir = DST_DIR / "labels" / split
+            dst_img_dir.mkdir(parents=True, exist_ok=True)
+            dst_lbl_dir.mkdir(parents=True, exist_ok=True)
 
-        img_paths = sorted(p for p in src_img_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
-        for i, img_path in enumerate(img_paths, 1):
-            shutil.copy2(img_path, dst_img_dir / img_path.name)
+            img_paths = sorted(p for p in src_img_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
+            for img_path in img_paths:
+                out_name = f"{class_name}_{img_path.name}"   # 데이터셋 간 파일명 충돌 방지
+                dst_img = dst_img_dir / out_name
+                shutil.copy2(img_path, dst_img)
 
-            base = read_base_labels(SRC_DIR / "labels" / split / f"{img_path.stem}.txt")
-            extra = pseudo_labels(model, img_path, conf, device)
-            lines = base + extra
+                base = read_raw_labels(src_lbl_dir / f"{img_path.stem}.txt", new_id, warn)
+                extra = pseudo_labels(model, img_path, conf, device)
+                lines = base + extra
 
-            label_out = dst_lbl_dir / f"{img_path.stem}.txt"
-            label_out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+                (dst_lbl_dir / f"{dst_img.stem}.txt").write_text(
+                    "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+                )
 
-            for line in lines:
-                counter[(split, NAMES[int(line.split()[0])])] += 1
-            if extra:
-                preview_pool.append((dst_img_dir / img_path.name, lines))
+                for line in lines:
+                    counter[(split, NAMES[int(line.split()[0])])] += 1
+                if extra:
+                    preview_pool.append((dst_img, lines))
 
-            if i % 50 == 0 or i == len(img_paths):
-                print(f"  {split}: {i}/{len(img_paths)}")
+            print(f"[완료] {folder}/{split}: {len(img_paths)}장")
+
+    used_splits = [s for s in SPLITS if s in used_splits]
 
     # data_v2.yaml 생성
     data = {"path": str(DST_DIR), "names": {i: n for i, n in enumerate(NAMES)}}
@@ -157,6 +180,11 @@ def main(conf: float, preview: int):
         for img_path, lines in random.sample(preview_pool, min(preview, len(preview_pool))):
             draw_preview(img_path, lines, PREVIEW_DIR / f"check_{img_path.name}")
         print(f"[미리보기] {PREVIEW_DIR} 에 {min(preview, len(preview_pool))}장 저장")
+
+    if warn:
+        print("\n참고")
+        for msg, n in warn.items():
+            print(f"  {msg}: {n}")
 
     # 클래스별 박스 개수 요약
     print("\n클래스별 박스 개수")
