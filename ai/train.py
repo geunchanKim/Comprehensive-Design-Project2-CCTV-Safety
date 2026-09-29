@@ -42,11 +42,11 @@ def main() -> None:
     model.train(
         data=str(DATA_YAML),
         epochs=100,
-        patience=5,
+        patience=15,
         imgsz=640,
         device=device,
         project=str(BASE_DIR / "runs"),
-        name="train_v1",
+        name="train_v2",
     )
 
 
