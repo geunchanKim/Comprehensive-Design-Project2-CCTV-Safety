@@ -40,10 +40,11 @@ UserSettings/
 *.zip
 *.zip.part*
 data/raw/
+ai/datasets/
+ai/runs/
 *.pt
 *.pth
 *.onnx
-runs/
 
 # ===== IDE / 에디터 =====
 .vscode/
