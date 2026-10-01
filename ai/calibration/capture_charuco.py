@@ -1,3 +1,4 @@
+import argparse
 import time
 
 import cv2
@@ -33,7 +34,11 @@ def create_detector():
 
 
 def main() -> None:
-    CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="ChArUco 이미지 촬영")
+    parser.add_argument("--camera-id", required=True)
+    args = parser.parse_args()
+    captures_dir = CAPTURES_DIR / args.camera_id
+    captures_dir.mkdir(parents=True, exist_ok=True)
 
     detector = create_detector()
 
@@ -56,7 +61,7 @@ def main() -> None:
     print("SPACE: 저장")
     print("Q 또는 ESC: 종료")
 
-    saved_count = len(list(CAPTURES_DIR.glob("*.png")))
+    saved_count = len(list(captures_dir.glob("*.png")))
 
     while True:
         success, frame = camera.read()
@@ -131,7 +136,7 @@ def main() -> None:
 
             timestamp = int(time.time() * 1000)
             output_path = (
-                CAPTURES_DIR
+                captures_dir
                 / f"charuco_{timestamp}.png"
             )
 

@@ -36,8 +36,8 @@ ARUCO_DICTIONARY_ID = cv2.aruco.DICT_4X4_50
 # 생성할 마커 ID
 ARUCO_MARKER_IDS = list(range(8))
 
-# 최초 출력 규격: 160 × 160mm
-ARUCO_MARKER_LENGTH_M = 0.160
+# 실제 출력 규격: 180 × 180mm (검은 마커 영역 기준)
+ARUCO_MARKER_LENGTH_M = 0.180
 
 
 # ─────────────────────────────────────────────
