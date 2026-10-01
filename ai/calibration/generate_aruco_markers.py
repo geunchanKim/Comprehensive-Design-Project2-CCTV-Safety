@@ -13,6 +13,7 @@ from config import (
 )
 
 
+
 def mm_to_px(length_mm: float) -> int:
     return round(length_mm / 25.4 * DPI)
 
