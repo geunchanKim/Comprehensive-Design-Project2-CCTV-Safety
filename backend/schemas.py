@@ -3,24 +3,27 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 ObjectClass = Literal["person", "chair", "cart", "desk"]
+CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 
 
-class CameraUpsert(BaseModel):
-    camera_id: str = Field(min_length=1, max_length=64)
-    image_size: tuple[int, int] = (1920, 1080)
+class CameraCalibrationIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    method: CalibrationMethod
+    image_size: tuple[int, int]
     K: list[list[float]]
     dist: list[float]
-    R: list[list[float]]
-    t: list[float]
+    rvec: tuple[float, float, float]
+    tvec: tuple[float, float, float]
+    reproj_error_px: float = Field(ge=0)
 
     @model_validator(mode="after")
-    def validate_shapes(self):
+    def validate_calibration(self):
+        if any(value <= 0 for value in self.image_size):
+            raise ValueError("image_size must contain positive values")
         if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
             raise ValueError("K must be a 3x3 matrix")
-        if len(self.R) != 3 or any(len(row) != 3 for row in self.R):
-            raise ValueError("R must be a 3x3 matrix")
-        if len(self.t) != 3:
-            raise ValueError("t must contain 3 values")
+        if len(self.dist) != 5:
+            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
         return self
 
 
@@ -40,10 +43,10 @@ class DetectionIn(BaseModel):
 
 
 class CameraFrameIn(BaseModel):
-    camera_id: str
+    camera_id: str = Field(min_length=1, max_length=64)
     frame_id: int = Field(ge=0)
-    ts: int = Field(description="Edge capture/receive time in epoch milliseconds")
-    image_size: tuple[int, int] = (1920, 1080)
+    ts: int = Field(ge=0, description="Epoch milliseconds")
+    image_size: tuple[int, int]
     detections: list[DetectionIn]
 
     @model_validator(mode="after")
@@ -57,6 +60,8 @@ class CameraFrameIn(BaseModel):
 
 
 class DetectionBundleIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    pair_id: int = Field(ge=0)
     frames: list[CameraFrameIn] = Field(min_length=2, max_length=2)
 
     @model_validator(mode="after")
@@ -96,7 +101,40 @@ class DetectionResult(BaseModel):
 
 class DetectionBundleOut(BaseModel):
     bundle_id: int
+    session_id: str
+    pair_id: int
     sync_delta_ms: int
     status: Literal["processed"] = "processed"
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]
+
+
+class GroundTruthObjectIn(BaseModel):
+    object_id: str = Field(min_length=1, max_length=128)
+    cls: ObjectClass
+    world: tuple[float, float, float]
+    bbox: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)
+
+    @field_validator("bbox")
+    @classmethod
+    def valid_boxes(cls, value):
+        for camera_id, box in value.items():
+            x1, y1, x2, y2 = box
+            if not camera_id or min(box) < 0 or x2 <= x1 or y2 <= y1:
+                raise ValueError("ground-truth bbox must be a valid [x1, y1, x2, y2]")
+        return value
+
+
+class GroundTruthIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    frame: int = Field(ge=0)
+    ts: int = Field(ge=0)
+    objects: list[GroundTruthObjectIn]
+
+
+class GroundTruthOut(BaseModel):
+    ok: Literal[True] = True
+    ground_truth_id: int
+    session_id: str
+    frame: int
+    object_count: int

@@ -1,5 +1,6 @@
 import os
 
+import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
@@ -9,13 +10,15 @@ from sqlalchemy.orm import Session
 try:
     from .database import get_db
     from .geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
-    from .models import Camera, Detection, FrameBundle, GlobalObject, TrackLink
-    from .schemas import CameraUpsert, DetectionBundleIn, DetectionBundleOut
+    from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
+    from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
+                          GroundTruthIn, GroundTruthOut)
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
-    from models import Camera, Detection, FrameBundle, GlobalObject, TrackLink
-    from schemas import CameraUpsert, DetectionBundleIn, DetectionBundleOut
+    from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
+    from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
+                         GroundTruthIn, GroundTruthOut)
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
@@ -31,24 +34,27 @@ def _calibration(camera: Camera) -> Calibration:
     )
 
 
-@router.put("/cameras/{camera_id}", response_model=CameraUpsert)
-def upsert_camera(camera_id: str, body: CameraUpsert, db: Session = Depends(get_db)):
-    if camera_id != body.camera_id:
-        raise HTTPException(422, "path camera_id and body camera_id must match")
-    camera = db.get(Camera, camera_id) or Camera(id=camera_id)
+@router.put("/cameras/{camera_id}/calibration", response_model=CameraCalibrationIn)
+def upsert_camera_calibration(camera_id: str, body: CameraCalibrationIn, db: Session = Depends(get_db)):
+    rotation_matrix, _ = cv2.Rodrigues(np.asarray(body.rvec, dtype=float))
+    camera = db.get(Camera, (body.session_id, camera_id)) or Camera(session_id=body.session_id, id=camera_id)
+    camera.method = body.method
     camera.image_width, camera.image_height = body.image_size
     camera.intrinsic_matrix = body.K
     camera.distortion_coefficients = body.dist
-    camera.rotation_matrix = body.R
-    camera.translation_vector = body.t
+    camera.rotation_vector = list(body.rvec)
+    camera.rotation_matrix = rotation_matrix.tolist()
+    camera.translation_vector = list(body.tvec)
+    camera.reprojection_error_px = body.reproj_error_px
     db.add(camera)
     db.commit()
     return body
 
 
-def _object_id(db: Session, camera1, track1, camera2, track2, cls: str) -> int:
+def _object_id(db: Session, session_id, camera1, track1, camera2, track2, cls: str) -> int:
     link = db.scalar(
         select(TrackLink).where(
+            TrackLink.session_id == session_id,
             TrackLink.camera1_id == camera1,
             TrackLink.camera1_track_id == track1,
             TrackLink.camera2_id == camera2,
@@ -62,6 +68,7 @@ def _object_id(db: Session, camera1, track1, camera2, track2, cls: str) -> int:
     # Re-use identity when one camera reacquires its counterpart under a new local ID.
     link = db.scalar(
         select(TrackLink).where(
+            TrackLink.session_id == session_id,
             TrackLink.cls == cls,
             or_(
                 (TrackLink.camera1_id == camera1) & (TrackLink.camera1_track_id == track1),
@@ -72,11 +79,11 @@ def _object_id(db: Session, camera1, track1, camera2, track2, cls: str) -> int:
     if link:
         next_id = link.object_id
     else:
-        global_object = GlobalObject(cls=cls)
+        global_object = GlobalObject(session_id=session_id, cls=cls)
         db.add(global_object)
         db.flush()
         next_id = global_object.id
-    db.add(TrackLink(object_id=next_id,
+    db.add(TrackLink(session_id=session_id, object_id=next_id,
                      camera1_id=camera1, camera1_track_id=track1,
                      camera2_id=camera2, camera2_track_id=track2, cls=cls))
     return next_id
@@ -85,11 +92,17 @@ def _object_id(db: Session, camera1, track1, camera2, track2, cls: str) -> int:
 @router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
 def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
+    duplicate = db.scalar(select(FrameBundle.id).where(
+        FrameBundle.session_id == body.session_id,
+        FrameBundle.pair_id == body.pair_id,
+    ))
+    if duplicate is not None:
+        raise HTTPException(409, "this session/pair detection bundle was already stored")
     sync_delta = abs(frames[0].ts - frames[1].ts)
     if sync_delta > MAX_SYNC_DELTA_MS:
         raise HTTPException(422, f"frame timestamps differ by {sync_delta}ms (maximum {MAX_SYNC_DELTA_MS}ms)")
 
-    cameras = [db.get(Camera, frame.camera_id) for frame in frames]
+    cameras = [db.get(Camera, (body.session_id, frame.camera_id)) for frame in frames]
     missing = [frame.camera_id for frame, camera in zip(frames, cameras) if camera is None]
     if missing:
         raise HTTPException(404, f"camera calibration not found: {', '.join(missing)}")
@@ -100,7 +113,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     calibrations = [_calibration(camera) for camera in cameras]
     essential = fundamental_matrix(*calibrations)
     pixel_scale = float(np.mean([c.K[0, 0] for c in calibrations] + [c.K[1, 1] for c in calibrations]))
-    bundle = FrameBundle(sync_delta_ms=sync_delta)
+    bundle = FrameBundle(session_id=body.session_id, pair_id=body.pair_id, sync_delta_ms=sync_delta)
     db.add(bundle)
     db.flush()
 
@@ -110,7 +123,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
         records[frame.camera_id], normalized[frame.camera_id] = [], []
         for item in frame.detections:
             foot = foot_point(item.bbox)
-            record = Detection(bundle_id=bundle.id, camera_id=frame.camera_id, frame_id=frame.frame_id,
+            record = Detection(bundle_id=bundle.id, session_id=body.session_id,
+                               camera_id=frame.camera_id, frame_id=frame.frame_id,
                                captured_at_ms=frame.ts, track_id=item.track_id, cls=item.cls,
                                confidence=round(item.conf, 3), bbox=list(item.bbox), foot_pixel=list(foot))
             db.add(record)
@@ -129,7 +143,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                 world = triangulate(normalized[frames[0].camera_id][i], normalized[frames[1].camera_id][j], *calibrations)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            object_id = _object_id(db, frames[0].camera_id, item1.track_id, frames[1].camera_id, item2.track_id, object_class)
+            object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
+                                   frames[1].camera_id, item2.track_id, object_class)
             for record in (record1, record2):
                 record.object_id = object_id
                 record.world_x, record.world_y, record.world_z = map(float, world)
@@ -154,4 +169,21 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
         raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
-    return {"bundle_id": bundle.id, "sync_delta_ms": sync_delta, "matches": matches, "unmatched": unmatched}
+    return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
+            "sync_delta_ms": sync_delta, "matches": matches, "unmatched": unmatched}
+
+
+@router.post("/ground-truth", response_model=GroundTruthOut, status_code=status.HTTP_201_CREATED)
+def create_ground_truth(body: GroundTruthIn, db: Session = Depends(get_db)):
+    record = GroundTruth(session_id=body.session_id, frame=body.frame,
+                         captured_at_ms=body.ts,
+                         objects=[item.model_dump(mode="json") for item in body.objects])
+    db.add(record)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "ground truth for this session/frame was already stored") from exc
+    db.refresh(record)
+    return {"ground_truth_id": record.id, "session_id": record.session_id,
+            "frame": record.frame, "object_count": len(record.objects)}
