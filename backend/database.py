@@ -9,7 +9,8 @@ if not DATABASE_URL:
         "infra/.env 파일을 만들고 docker compose로 실행했는지 확인하세요."
     )
  
-engine = create_engine(DATABASE_URL)
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
  

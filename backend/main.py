@@ -2,9 +2,15 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from database import get_db
+try:
+    from .api import router
+    from .database import get_db
+except ImportError:  # Docker runs this directory as the import root.
+    from api import router
+    from database import get_db
 
 app = FastAPI(title="CCTV Safety Monitor API")
+app.include_router(router)
 
 
 @app.get("/health")
