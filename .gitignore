@@ -43,6 +43,7 @@ data/raw/
 *.pt
 *.pth
 *.onnx
+runs/
 
 # ===== IDE / 에디터 =====
 .vscode/
