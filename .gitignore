@@ -50,6 +50,8 @@ UserSettings/
 *.zip
 *.zip.part*
 data/raw/
+ai/datasets/
+ai/runs/
 *.pt
 *.pth
 *.onnx
