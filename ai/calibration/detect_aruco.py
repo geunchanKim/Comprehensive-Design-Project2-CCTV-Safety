@@ -53,12 +53,11 @@ def estimate_extrinsics(images_dir: Path, K: np.ndarray, dist: np.ndarray, marke
         raise RuntimeError("ArUco 외부 파라미터 계산에 실패했습니다.")
     projected, _ = cv2.projectPoints(object_points_array, rvec, tvec, K, dist)
     error = np.sqrt(np.mean(np.sum((projected.reshape(-1, 2) - image_points_array) ** 2, axis=1)))
-    R, _ = cv2.Rodrigues(rvec)
-    return R, tvec.reshape(3), float(error), used
+    return rvec.reshape(3), tvec.reshape(3), float(error), used
 
 
 def upload(url: str, camera_id: str, payload: dict) -> None:
-    endpoint = f"{url.rstrip('/')}/cameras/{camera_id}"
+    endpoint = f"{url.rstrip('/')}/cameras/{camera_id}/calibration"
     request = Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -78,6 +77,7 @@ def upload(url: str, camera_id: str, payload: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="18cm ArUco 기준 외부 캘리브레이션")
     parser.add_argument("--camera-id", required=True)
+    parser.add_argument("--session-id", required=True)
     parser.add_argument("--intrinsics", type=Path, required=True)
     parser.add_argument("--images", type=Path, required=True)
     parser.add_argument("--marker-id", type=int, default=0)
@@ -88,14 +88,16 @@ def main() -> None:
     intrinsic = json.loads(args.intrinsics.read_text(encoding="utf-8"))
     K = np.asarray(intrinsic["K"], dtype=np.float64)
     dist = np.asarray(intrinsic["dist"], dtype=np.float64)
-    R, t, error, used = estimate_extrinsics(args.images, K, dist, args.marker_id)
+    rvec, tvec, error, used = estimate_extrinsics(args.images, K, dist, args.marker_id)
     payload = {
-        "camera_id": args.camera_id,
+        "session_id": args.session_id,
+        "method": "charuco-aruco",
         "image_size": intrinsic["image_size"],
         "K": K.tolist(),
         "dist": dist.reshape(-1).tolist(),
-        "R": R.tolist(),
-        "t": t.tolist(),
+        "rvec": rvec.tolist(),
+        "tvec": tvec.tolist(),
+        "reproj_error_px": error,
     }
     output = args.output or OUTPUT_DIR / f"{args.camera_id}.json"
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +106,10 @@ def main() -> None:
     print(f"외부 파라미터 재투영 오차: {error:.4f}px ({used}장)")
     if args.backend_url:
         upload(args.backend_url, args.camera_id, payload)
-        print(f"백엔드 등록 완료: {args.backend_url.rstrip('/')}/cameras/{args.camera_id}")
+        print(
+            "백엔드 등록 완료: "
+            f"{args.backend_url.rstrip('/')}/cameras/{args.camera_id}/calibration"
+        )
 
 
 if __name__ == "__main__":
