@@ -3,6 +3,7 @@
 
 메시지를 백그라운드 스레드에서 서버로 보낸다 (POST /detections, POST /ground-truth 등).
 탐지 루프가 네트워크 때문에 멈추지 않게 큐에 넣고 바로 돌아온다.
+캘리브레이션 등록(PUT)은 탐지보다 먼저 끝나야 해서 put_now()로 바로 보낸다.
 
 - dry_run: 서버 없이 파일에 저장만 한다 (서버 준비 전 테스트용)
 - 보낸 메시지: sent_<경로>.jsonl  (예: sent_detections.jsonl, sent_ground-truth.jsonl)
@@ -46,6 +47,33 @@ class ServerClient:
             return self._session.get(f"{self.base_url}/health", timeout=self.timeout).ok
         except requests.RequestException:
             return False
+
+    def put_now(self, path: str, body: dict) -> bool:
+        """큐를 거치지 않고 바로 PUT 한다 (캘리브레이션 등록처럼 다음 단계 전에 꼭 끝나야 하는 요청)"""
+        sent_path = self._sent_path(path.rsplit("/", 1)[-1])     # /cameras/cam1/calibration → sent_calibration.jsonl
+        if self.dry_run:
+            self._append(sent_path, {"path": path, **body})
+            self.stats["sent"] += 1
+            self.status_counts[(path, "dry-run")] += 1
+            return True
+        try:
+            r = self._session.put(f"{self.base_url}{path}", json=body, timeout=self.timeout)
+            status, text = r.status_code, r.text
+        except requests.RequestException as e:
+            status, text = "network-error", str(e)
+        self.status_counts[(path, status)] += 1
+        if isinstance(status, int) and 200 <= status < 300:
+            self._append(sent_path, {"path": path, **body})
+            self.stats["sent"] += 1
+            return True
+        self.stats["failed"] += 1
+        try:
+            text = json.loads(text)
+        except (TypeError, ValueError):
+            pass
+        self._append(self.failed_path, {"path": path, "status": status, "response": text, "message": body})
+        print(f"[전송 실패] PUT {path} → {status} {str(text)[:200]}")
+        return False
 
     def send(self, message: dict, path: str = "/detections"):
         """큐에 넣고 바로 돌아온다. 큐가 꽉 차면 가장 오래된 메시지를 버린다."""

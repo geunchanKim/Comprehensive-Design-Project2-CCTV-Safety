@@ -14,9 +14,16 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   - track_id가 아직 없는 탐지는 뺀다 (서버는 0 이상 정수만 받음)
   - bbox는 이미지 안으로 자르고, 폭·높이가 0인 박스는 뺀다
   - 정답 좌표는 Unity (x, y, z) → 월드 (x, z, y) 로 바꿔서 보낸다
+  - 캘리브레이션은 session_id별로 관리되므로, 탐지를 보내기 전에 이번 session_id로
+    cam1·cam2 캘리브레이션을 먼저 등록한다 (PUT /cameras/{camera_id}/calibration)
+      --calib auto  (기본) 폴더의 cameras.json 으로 계산해서 등록 (unity_calibration.py)
+      --calib 파일   calibration.json 파일 값으로 등록
+      --calib none  등록 안 함 (실제 카메라처럼 백엔드가 직접 등록한 경우)
+    등록이 하나라도 실패하면 탐지를 보내지 않고 멈춘다
 
 결과 저장: runs/edge/<session_id>/
-  sent_detections.jsonl, sent_ground-truth.jsonl, failed.jsonl(상태 코드 + 응답), vis/
+  sent_detections.jsonl, sent_ground-truth.jsonl, sent_calibration.jsonl,
+  failed.jsonl(상태 코드 + 응답), vis/
 
 실행 (ai/ 폴더에서)
   python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --dry-run
@@ -34,6 +41,7 @@ import cv2
 
 from detector import AI_DIR, Detector, draw
 from server_client import ServerClient
+from unity_calibration import load_calibrations
 
 CAMERAS = ("cam1", "cam2")
 OUT_ROOT = AI_DIR / "runs" / "edge"
@@ -81,6 +89,32 @@ def build_ground_truth(session_id: str, row: dict) -> dict:
     return {"session_id": session_id, "frame": row["frame"], "ts": row["ts"], "objects": objects}
 
 
+def calibration_payloads(folder: Path, calib: str, session_id: str) -> dict:
+    """--calib 값에 따라 {camera_id: 등록할 값} 을 만든다. session_id는 이번 run 것으로 덮어쓴다."""
+    if calib == "auto":
+        if not (folder / "cameras.json").exists():
+            raise SystemExit(f"cameras.json 이 없어요: {folder} (실제 카메라면 --calib none 또는 --calib 파일)")
+        return load_calibrations(folder, session_id)
+    data = json.loads(Path(calib).read_text(encoding="utf-8"))
+    return {cam: {**v, "session_id": session_id} for cam, v in data.items()}
+
+
+def register_calibrations(client: ServerClient, payloads: dict) -> bool:
+    """cam1, cam2 캘리브레이션을 이번 session_id로 등록. 하나라도 실패하면 False"""
+    ok = True
+    for cam in CAMERAS:
+        if cam not in payloads:
+            print(f"[캘리브레이션] {cam} 값이 없어요")
+            ok = False
+            continue
+        body = {k: v for k, v in payloads[cam].items() if k != "camera_id"}
+        if client.put_now(f"/cameras/{cam}/calibration", body):
+            print(f"[캘리브레이션] {cam} 등록 ({body['method']}, {body['session_id']})")
+        else:
+            ok = False
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("folder", help="Unity 출력 폴더 (cam1/, cam2/, frames.jsonl)")
@@ -88,6 +122,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="서버로 보내지 않고 파일로만 저장")
     parser.add_argument("--only", choices=["all", "detections", "gt"], default="all", help="보낼 종류")
     parser.add_argument("--run", type=int, default=None, help="run 번호 직접 지정 (기본: 자동 증가)")
+    parser.add_argument("--calib", default="auto",
+                        help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
     parser.add_argument("--model", choices=["v2", "ensemble"], default="v2")
     parser.add_argument("--conf", type=float, default=0.4)
     parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
@@ -114,9 +150,15 @@ def main():
 
     send_det = args.only in ("all", "detections")
     send_gt = args.only in ("all", "gt")
+
     detectors = {cam: Detector(model=args.model, conf=args.conf) for cam in CAMERAS} if send_det else {}
     mode = "dry-run" if args.dry_run else args.server
     print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode}")
+
+    # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록
+    if send_det and args.calib != "none":
+        if not register_calibrations(client, calibration_payloads(folder, args.calib, session_id)):
+            raise SystemExit(f"캘리브레이션 등록 실패 → 탐지를 보내지 않고 멈춥니다. 자세한 내용: {client.failed_path}")
 
     stats = {"pairs": 0, "skipped": 0, "removed": 0, "empty": 0, "gt": 0}
     t0 = time.perf_counter()
