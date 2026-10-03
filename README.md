@@ -1,195 +1,277 @@
-# Unity 가상환경 기반 산업현장 안전 탐지
+# CCTV Safety
 
-> 2D CCTV 영상과 3D 가상환경을 연계한 위험물·개인보호구(PPE) 탐지 연구
+> 두 대의 CCTV 영상에서 객체를 탐지·추적하고, 멀티뷰 기하로 3D 위치를 복원하는 산업현장 안전 모니터링 프로젝트
 
-![Status](https://img.shields.io/badge/status-planning-blue)
-![Unity](https://img.shields.io/badge/simulation-Unity-black)
-![YOLO](https://img.shields.io/badge/detection-YOLO-00FFFF)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![YOLO](https://img.shields.io/badge/YOLO-11-111F68)
+![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white)
+![Status](https://img.shields.io/badge/status-integration_testing-orange)
 
-## 한눈에 보기
+## Overview
 
-산업현장의 CCTV 영상에서 **작업자·위험물·개인보호구를 탐지**하고, 두 카메라의 2D 바운딩 박스를 이용해 객체의 **3D 위치를 추정**하는 프로젝트입니다. Unity 가상 산업현장에서 추정 좌표와 실제 좌표를 비교하고, 이를 바탕으로 기존 TTC(Time To Collision) 위험 판단 방식의 정확도를 개선합니다.
+CCTV Safety는 두 카메라의 2D 탐지 결과를 같은 객체끼리 연결하고 삼각측량하여 실제 공간의 3D 위치를 추정합니다. 실제 위험 상황을 반복 재현하기 어려운 문제를 해결하기 위해 Unity를 가상 CCTV 환경으로 사용하며, Unity 정답 좌표와 추정 좌표를 비교해 오차를 측정합니다.
 
-| 항목 | 내용 |
+현재 `person`, `chair`, `cart`, `desk` 탐지부터 카메라별 ByteTrack 추적, 서버 전송, 에피폴라 매칭, 3D 삼각측량, Ground Truth 저장까지 연결되어 있습니다. 실제 CCTV 전환을 위한 ChArUco·ArUco 캘리브레이션 도구도 제공합니다.
+
+### 현재 검증 결과
+
+| 항목 | 결과 |
 | --- | --- |
-| 프로젝트 | 종합설계프로젝트2 |
-| 현재 단계 | 연구 방향 구체화 및 관련 모델 조사 |
-| 구현 상태 | 개발 예정 |
-| 핵심 기술 | Unity, YOLO, 스테레오 기하, TTC |
-| 탐지 대상 | 작업자, 위험물, 안전모, 안전조끼 |
-| 최종 목표 | 3D 실제 거리 기반 산업현장 위험 판단 |
+| Unity 샘플 | `unity-classroom-01`, 10프레임 |
+| 사람 탐지 | cam1 10/10, cam2 6/10 |
+| Unity 캘리브레이션 왕복 오차 | 0 mm |
+| 양쪽 카메라 탐지 쌍 | 6쌍 |
+| 탐지 쌍 에피폴라 거리 | 약 11–22 px |
+| 직접 삼각측량 바닥 오차 | 약 20 cm |
+| 실제 서버 연동 | calibration, detections, ground-truth HTTP 200/201 |
+| 백엔드 자동 테스트 | 8 passed |
 
-## 목차
+> 위 수치는 제한된 Unity 샘플의 중간 검증 결과이며 최종 성능 지표가 아닙니다.
 
-- [연구 배경](#연구-배경)
-- [핵심 목표](#핵심-목표)
-- [시스템 구성](#시스템-구성)
-- [연구 범위](#연구-범위)
-- [검증 방법](#검증-방법)
-- [개발 계획](#개발-계획)
-- [저장소 및 실행 안내](#저장소-및-실행-안내)
-- [팀 구성](#팀-구성)
-
-## 연구 배경
-
-실제 산업현장은 깊이와 거리를 포함하는 3D 공간이지만, 일반 CCTV 영상에서 직접 얻는 정보는 픽셀 단위의 2D 좌표입니다. 2D 좌표만으로 객체 간 실제 거리와 충돌 가능성을 판단하면 원근, 카메라 각도, 가림 등에 의해 오차가 발생할 수 있습니다.
-
-또한 실제 현장에서 위험 상황을 재현하거나 충분한 정답 3D 좌표 데이터를 확보하기 어렵습니다. 본 프로젝트는 Unity를 이용해 다양한 상황과 정답 데이터를 생성하고, 2D 탐지 결과로부터 3D 위치를 복원해 이 문제를 해결하고자 합니다.
-
-## 핵심 목표
-
-1. **가상 데이터 생성** — Unity 환경에서 영상과 정답 3D 좌표를 함께 수집합니다.
-2. **객체 및 PPE 탐지** — 작업자와 위험물을 탐지하고 작업자별 안전모·안전조끼 착용 여부를 판단합니다.
-3. **3D 좌표 추정** — 두 카메라의 바운딩 박스와 카메라 파라미터로 객체의 3D 위치를 계산합니다.
-4. **위험 판단 개선** — 3D 위치, 실제 거리, 이동 속도와 방향을 활용해 TTC 판단의 정확도를 높입니다.
-
-### 핵심 연구 질문
-
-- 실제 데이터가 부족한 상황에서 학습·검증 데이터를 어떻게 확보할 것인가?
-- YOLO의 2D 바운딩 박스로 3D 좌표를 얼마나 빠르고 정확하게 추정할 수 있는가?
-- 3D 거리 정보로 기존 2D 기반 TTC 방식의 한계를 줄일 수 있는가?
-- 실제 공사 현장 영상에서 작업자별 PPE 착용 여부를 안정적으로 구분할 수 있는가?
-
-## 시스템 구성
+## Architecture
 
 ```mermaid
 flowchart LR
-    A[Unity 3D 가상환경] --> B[가상 CCTV 2대]
-    A --> C[정답 3D 좌표]
-    B --> D[2D 영상]
-    D --> E[YOLO 객체·PPE 탐지]
-    E --> F[bbox 대표점 추출]
-    F --> G[3D 좌표 추정]
-    C --> H[좌표·거리 오차 평가]
-    G --> H
-    G --> I[3D 기반 TTC 판단]
-    E --> J[작업자별 PPE 판단]
-    I --> K[위험 상황 결과]
-    J --> K
+    U[Unity 가상환경<br/>cam1 · cam2 · GT] --> E[Edge Pipeline]
+    C[실제 CCTV 2대] --> E
+    E --> Y[YOLO v2 탐지<br/>ByteTrack 추적]
+    Y --> D[POST /detections]
+    U --> G[POST /ground-truth]
+    UC[Unity cameras.json] --> K[카메라 캘리브레이션]
+    RC[ChArUco · ArUco] --> K
+    K --> P[PUT /cameras/id/calibration]
+    D --> B[FastAPI Backend]
+    G --> B
+    P --> B
+    B --> M[에피폴라 매칭]
+    M --> T[3D 삼각측량]
+    T --> V[GT 오차 평가]
 ```
 
-| 구분 | 데이터 |
-| --- | --- |
-| 입력 | 두 카메라의 영상, 카메라 내부·외부 파라미터 |
-| 중간 결과 | 객체별 bbox, 대표 2D 좌표, 추정 3D 좌표, PPE 착용 상태 |
-| 정답 데이터 | Unity 객체의 실제 3D 좌표와 객체 간 거리 |
-| 최종 출력 | 위험 여부, 좌표 오차, 처리 속도, 탐지 성능 |
+1. Unity 폴더 또는 실제 CCTV에서 두 카메라 영상을 가져옵니다.
+2. 카메라마다 독립적으로 YOLO 탐지와 ByteTrack 추적을 수행합니다.
+3. bbox 하단 중앙을 객체의 바닥 접점으로 사용합니다.
+4. 백엔드는 같은 클래스의 탐지를 에피폴라 거리와 헝가리안 알고리즘으로 연결합니다.
+5. 연결된 두 점을 삼각측량해 월드 좌표를 계산합니다.
+6. Unity 실험에서는 Ground Truth와 비교해 위치 오차를 평가합니다.
 
-## 연구 범위
+## Features
 
-### 1. Unity 가상환경 및 데이터 생성
-
-기업 멘토가 제공한 환경 자료를 참고해 산업현장과 유사한 3D 공간을 구성합니다. 작업자, 위험물, 안전장비 및 현장 구조물을 배치하고 카메라 시점, 거리, 조명, 가림 조건을 바꾸어 다양한 시나리오를 생성합니다.
-
-- 객체 종류와 식별 정보
-- 객체의 실제 3D 좌표
-- 카메라별 2D 좌표와 바운딩 박스
-- 카메라 위치·방향 및 내부·외부 파라미터
-- 객체 간 실제 거리와 충돌 예상 정보
-
-### 2. YOLO 기반 객체 및 PPE 탐지
-
-공사 현장에 적합한 YOLO 모델과 공개 데이터셋을 조사합니다. 보호구의 존재 여부만 확인하지 않고, 탐지된 작업자와 보호구를 연결해 **작업자별 착용·미착용 상태**를 판단합니다.
-
-### 3. bbox 기반 3D 좌표 추정
-
-YOLO bbox의 중심점 또는 하단 중심점을 대표 좌표로 사용합니다. 두 카메라의 대표 좌표와 카메라 파라미터를 스테레오 기하 기반 알고리즘에 입력해 예상 3D 좌표를 계산합니다. 여건이 허용되면 학습 기반 2D→3D 추정 방법도 비교합니다.
-
-### 4. TTC 기반 위험 판단
-
-추정한 3D 위치와 객체 간 실제 거리, 이동 속도 및 방향을 함께 사용해 충돌 예상 시간을 계산합니다. 동일한 시나리오에서 기존 2D 방식과 개선된 3D 방식을 비교합니다.
-
-ABB 사업과 연계해 수학과와 공동 연구를 진행하며, 좌표 변환과 위험도 계산에 필요한 수학적 모델을 보완할 계획입니다.
-
-### 개발 우선순위
-
-| 구분 | 주요 내용 | 우선순위 |
+| 영역 | 구현 내용 | 상태 |
 | --- | --- | :---: |
-| 가상환경 | Unity 산업현장 구축 | 필수 |
-| 카메라 | 가상 CCTV 2대 구성 및 캘리브레이션 | 필수 |
-| 데이터 | 2D 탐지 좌표와 정답 3D 좌표 수집 | 필수 |
-| 객체·PPE 탐지 | YOLO 모델 적용 및 보호구 착용 판단 | 필수 |
-| 좌표 복원 | 두 영상의 bbox를 이용한 3D 좌표 계산 | 필수 |
-| 성능 평가 | 좌표 오차와 전체 처리 속도 측정 | 필수 |
-| 위험 판단 | 3D 좌표 기반 TTC 개선 | 필수 |
-| 학습 기반 추정 | 학습형 2D→3D 방법 구현 및 비교 | 선택 |
+| AI | YOLO v2 `person`, `chair`, `cart`, `desk` 탐지 | ✅ |
+| Tracking | 카메라별 ByteTrack 객체 추적 | ✅ |
+| Edge | Unity 폴더 읽기, dry-run, 비동기 서버 전송 | ✅ |
+| Calibration | Unity `cameras.json` → `K`, `rvec`, `tvec` 변환 | ✅ |
+| Calibration | 실제 CCTV용 ChArUco·ArUco 도구 | ✅ |
+| Backend | 캘리브레이션·탐지·Ground Truth API | ✅ |
+| Geometry | 에피폴라 매칭과 3D 삼각측량 | ✅ |
+| Evaluation | Unity GT 저장과 좌표 오차 비교 기반 | 🚧 |
+| Safety | PPE 착용 판별과 3D TTC 위험 판단 | 📋 |
 
-## 검증 방법
-
-| 검증 항목 | 주요 지표 |
-| --- | --- |
-| 객체 탐지 | Precision, Recall, mAP, 클래스별 오탐·미탐 |
-| PPE 판단 | 안전모·안전조끼 착용/미착용 분류 정확도 |
-| 3D 좌표 추정 | Unity 정답 좌표 대비 위치·거리 오차 |
-| 처리 성능 | 전체 FPS, 탐지·좌표 복원·위험 판단 지연 시간 |
-| TTC 위험 판단 | 위험/정상 시나리오 정확도, 오탐률, 미탐률 |
-| 환경 변화 대응 | 카메라 각도, 거리, 조명, 가림에 따른 성능 변화 |
-
-모델과 데이터셋은 탐지 클래스, 현장 적합성, 정확도, 처리 속도, 라벨 품질 및 라이선스를 기준으로 선정합니다. 가상환경 검증 이후 실제 영상에 적용할 때 발생하는 도메인 차이도 별도로 기록합니다.
-
-## 개발 계획
-
-### Phase 1 · 환경 및 데이터
-
-- [ ] 멘토 제공 자료 분석 및 현장 구성 요소 정의
-- [ ] Unity 3D 산업현장 구축
-- [ ] 가상 카메라 두 대의 위치와 촬영 조건 설정
-- [ ] 객체의 3D 좌표와 카메라별 2D 좌표 수집
-
-### Phase 2 · 탐지
-
-- [ ] 공사 현장용 YOLO 모델 및 데이터셋 조사
-- [ ] 안전모·안전조끼 착용/미착용 탐지
-- [ ] 작업자와 PPE를 연결하는 착용 판단 로직 설계
-
-### Phase 3 · 좌표 추정
-
-- [ ] bbox 대표점 정의
-- [ ] 카메라 캘리브레이션 및 3D 좌표 추정 구현
-- [ ] 추정 좌표와 Unity 정답 좌표 비교
-- [ ] 좌표 오차와 처리 속도 측정
-
-### Phase 4 · 위험 판단 및 통합 검증
-
-- [ ] 3D 위치 기반 TTC 위험 판단 설계
-- [ ] Unity 환경에서 전체 파이프라인 검증
-- [ ] 기존 2D 방식과 개선된 3D 방식 비교
-- [ ] 학습 기반 2D→3D 추정 방법 비교 *(선택)*
-
-## 기대 효과 및 고려사항
-
-**기대 효과**
-
-- 실제 위험 상황을 재현하지 않고 다양한 실험 데이터를 생성할 수 있습니다.
-- 두 CCTV 영상으로 3D 위치를 복원해 실제 거리 기반 위험 판단이 가능합니다.
-- 작업자별 안전모·안전조끼 착용 여부까지 안전관리 범위를 확장할 수 있습니다.
-
-**고려사항**
-
-- Unity와 실제 CCTV 영상 사이의 도메인 차이
-- 두 카메라의 시간 동기화 및 캘리브레이션 오차
-- 소형 객체, 가림, 조명 변화에 따른 탐지 성능 저하
-- 시스템 결과는 현장 관리자의 판단을 지원하며 단독으로 안전을 보장하지 않음
-
-## 저장소 및 실행 안내
-
-현재 저장소에는 프로젝트 기획 문서만 있으며 실행 가능한 코드는 아직 없습니다.
+## Repository
 
 ```text
 .
-└── README.md    # 프로젝트 개요, 연구 방법 및 개발 계획
+├── ai/
+│   ├── calibration/       # ChArUco·ArUco 실제 카메라 캘리브레이션
+│   ├── configs/           # YOLO 데이터셋 설정
+│   ├── edge/              # 탐지·추적, Unity 입력, 서버 전송
+│   ├── scripts/           # 데이터 병합·자동 라벨링 도구
+│   └── train.py           # YOLO 학습 진입점
+├── backend/
+│   ├── alembic/           # 데이터베이스 마이그레이션
+│   ├── tests/             # API·기하 계산 테스트
+│   ├── api.py             # FastAPI 엔드포인트
+│   ├── geometry.py        # 매칭·삼각측량
+│   └── models.py          # SQLAlchemy 모델
+├── docs/
+│   ├── meeting-notes/     # 회의 기록
+│   ├── specs/             # Unity·Edge·Backend 메시지 계약
+│   └── detections-api.md  # 탐지·삼각측량 API 설명
+├── infra/                 # PostgreSQL·Backend Docker Compose
+└── unity-sim/             # Unity 시뮬레이터 서브모듈
 ```
 
-구현이 시작되면 Unity 프로젝트 구조, Python 개발 환경, YOLO 모델 준비 방법과 데이터 생성·실험 실행 절차를 추가할 예정입니다.
+## Quick Start
 
-## 팀 구성
+### 1. 저장소 받기
 
-| 구분 | 이름 | 주요 역할 |
+```bash
+git clone --recurse-submodules https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety.git
+cd Comprehensive-Design-Project2-CCTV-Safety
+```
+
+이미 저장소를 받은 경우 Unity 서브모듈을 초기화합니다.
+
+```bash
+git submodule update --init --recursive
+```
+
+### 2. AI 환경 준비
+
+```powershell
+cd ai
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+v2 모델 가중치를 `ai/runs/train_v2/weights/best.pt`에 준비합니다. 직접 학습하려면 데이터셋을 준비한 뒤 실행합니다.
+
+```powershell
+python train.py --version v2
+```
+
+### 3. Unity 샘플 dry-run
+
+Unity 출력은 다음 구조를 사용합니다.
+
+```text
+unity-classroom-01/
+├── cam1/000001.jpg
+├── cam2/000001.jpg
+├── frames.jsonl
+└── cameras.json
+```
+
+서버로 보내지 않고 탐지·메시지 생성까지만 확인합니다.
+
+```powershell
+cd ai
+python edge/unity_reader.py <Unity_출력_폴더> --dry-run --max-frames 10 --save-every 1
+```
+
+결과는 `ai/runs/edge/<session_id>/`에 저장됩니다.
+
+```text
+sent_calibration.jsonl
+sent_detections.jsonl
+sent_ground-truth.jsonl
+failed.jsonl
+vis/
+```
+
+### 4. 백엔드 실행
+
+`infra/.env` 파일을 만듭니다.
+
+```dotenv
+POSTGRES_USER=cctv_user
+POSTGRES_PASSWORD=change-me
+POSTGRES_DB=cctv_safety_db
+PGADMIN_DEFAULT_EMAIL=admin@example.com
+PGADMIN_DEFAULT_PASSWORD=change-me
+BACKEND_PORT=8000
+PGADMIN_PORT=5050
+```
+
+Docker Compose로 PostgreSQL과 FastAPI를 실행합니다.
+
+```powershell
+cd infra
+docker compose up --build
+```
+
+- API 상태: `http://localhost:8000/health`
+- Swagger UI: `http://localhost:8000/docs`
+- pgAdmin: `http://localhost:5050`
+
+### 5. 전체 파이프라인 실행
+
+```powershell
+cd ai
+python edge/unity_reader.py <Unity_출력_폴더> --server http://localhost:8000 --calib auto
+```
+
+실행할 때마다 폴더 이름에 `-runN`이 붙은 새 `session_id`가 생성됩니다. 엣지는 해당 세션의 cam1·cam2 캘리브레이션을 먼저 등록하고, 이후 탐지 결과와 Ground Truth를 전송합니다.
+
+## Real Camera Calibration
+
+실제 CCTV는 ChArUco 보드로 내부 파라미터를 계산하고, 두 카메라가 함께 보는 18cm ArUco 마커로 공통 월드 좌표계를 설정합니다.
+
+```powershell
+cd ai/calibration
+pip install -r requirements.txt
+
+python generate_charuco_board.py
+python generate_aruco_markers.py
+
+python capture_charuco.py --camera-id cam1
+python calibrate_camera.py --camera-id cam1 --images captures/cam1
+
+python capture_images.py --camera-id cam1 --marker-id 0
+python detect_aruco.py `
+  --camera-id cam1 `
+  --session-id cctv-classroom-01-run1 `
+  --intrinsics output/cam1_intrinsics.json `
+  --images captures/aruco/cam1 `
+  --backend-url http://localhost:8000
+```
+
+cam2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야 합니다. 자세한 촬영 조건은 [`ai/calibration/README.md`](ai/calibration/README.md)를 참고하세요.
+
+## API Summary
+
+| Method | Endpoint | 설명 |
 | --- | --- | --- |
-| 학부생 | 김근찬 | AI 탐지 모델 및 좌표 추정 |
-| 학부생 | 조해민 | 시스템 연동 및 데이터 처리 |
-| 학부생 | 서성윤 | Unity 가상환경 및 결과 시각화 |
-| 대학원생 | 양영준·박주환·김채현 | 프로젝트 자문 및 협업 |
-| 기업 멘토 | 손희문 부장 | 산업현장 환경 자료 및 요구사항 자문 |
+| `GET` | `/health` | 서버 상태 확인 |
+| `GET` | `/health/db` | 데이터베이스 연결 확인 |
+| `PUT` | `/cameras/{camera_id}/calibration` | 세션별 카메라 캘리브레이션 등록 |
+| `POST` | `/detections` | 동기화된 두 카메라 탐지 묶음 처리 |
+| `POST` | `/ground-truth` | Unity 정답 좌표 저장 |
 
-> 세부 역할은 구현 범위와 프로젝트 진행 상황에 따라 조정될 수 있습니다.
+핵심 규칙:
+
+- 월드 좌표는 `[X, Y, Z]`, 단위는 m, Z는 높이입니다.
+- Unity `(x, y, z)`는 엣지에서 `(x, z, y)`로 변환합니다.
+- bbox는 비정규화 픽셀 좌표 `[x1, y1, x2, y2]`입니다.
+- 두 프레임의 기본 허용 시간 차이는 50 ms입니다.
+- 기본 에피폴라 매칭 허용 오차는 30 px이며 `MAX_EPIPOLAR_ERROR_PX`로 변경할 수 있습니다.
+
+전체 계약은 [`docs/specs/message-spec.md`](docs/specs/message-spec.md), 요청·응답 예시는 [`docs/detections-api.md`](docs/detections-api.md)를 참고하세요.
+
+## Tests
+
+```powershell
+python -m pytest backend/tests -q
+```
+
+현재 테스트는 bbox 하단 중앙 계산, 왜곡 보정, 에피폴라 매칭, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 Ground Truth 저장을 확인합니다.
+
+## Roadmap
+
+- [x] YOLO v2 학습 파이프라인
+- [x] Unity 폴더 기반 엣지 파이프라인
+- [x] 카메라별 ByteTrack 추적
+- [x] 세션별 카메라 캘리브레이션 등록
+- [x] 에피폴라 매칭과 3D 삼각측량 API
+- [x] ChArUco·ArUco 실제 카메라 캘리브레이션 도구
+- [ ] S2 2인 데이터로 매칭 임계값 검증
+- [ ] Unity GT 대비 프레임별 3D 오차 자동 평가
+- [ ] 실제 Tapo CCTV 두 대 연동
+- [ ] 작업자별 PPE 착용 여부 판단
+- [ ] 3D 거리·속도 기반 TTC 위험 판단
+
+## Documentation
+
+- [AI 학습 안내](ai/README.md)
+- [실제 카메라 캘리브레이션](ai/calibration/README.md)
+- [Unity·Edge·Backend 메시지 명세](docs/specs/message-spec.md)
+- [탐지·삼각측량 API](docs/detections-api.md)
+- [협업 및 커밋 규칙](CONVENTION.md)
+
+## Team
+
+| 이름 | 주요 역할 |
+| --- | --- |
+| 김근찬 | AI 탐지 모델, 엣지 파이프라인, 좌표 추정 |
+| 조해민 | 백엔드 API, 데이터 처리, 카메라 캘리브레이션 |
+| 서성윤 | Unity 가상환경, 데이터 생성, 결과 시각화 |
+| 양영준·박주환·김채현 | 프로젝트 자문 및 공동 연구 |
+| 손희문 부장 | 산업현장 요구사항 및 환경 자료 자문 |
+
+## Notice
+
+이 프로젝트는 종합설계프로젝트 연구용 프로토타입입니다. 계산 결과는 현장 안전관리자의 판단을 보조하기 위한 것이며, 단독으로 작업자의 안전을 보장하지 않습니다.
