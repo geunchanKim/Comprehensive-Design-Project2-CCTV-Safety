@@ -22,7 +22,7 @@ except ImportError:  # Docker runs this directory as the import root.
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
-MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "5"))
+MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "30"))
 
 
 def _calibration(camera: Camera) -> Calibration:
