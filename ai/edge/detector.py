@@ -61,8 +61,9 @@ class Detector:
     """frame(BGR 이미지) → [{track_id, cls, conf, bbox}] 리스트"""
 
     def __init__(self, model: str = "v2", conf: float = 0.4, device: str | None = None,
-                 tracker: str = "bytetrack.yaml"):
+                 tracker: str = "bytetrack.yaml", imgsz: int = 640):
         self.conf = conf
+        self.imgsz = imgsz          # 모델 입력 크기. 1920 이미지를 이 크기로 줄여서 본다 (크면 작은 물체에 유리, 느림)
         self.device = device or get_device()
         self.tracker = tracker
         if model == "v2":
@@ -77,7 +78,7 @@ class Detector:
     def __call__(self, frame, track: bool = True) -> list[dict]:
         detections = []
         for model, class_map, offset in self.models:
-            kwargs = dict(conf=self.conf, classes=list(class_map), device=self.device, verbose=False)
+            kwargs = dict(conf=self.conf, classes=list(class_map), device=self.device, imgsz=self.imgsz, verbose=False)
             if track:
                 result = model.track(frame, persist=True, tracker=self.tracker, **kwargs)[0]
             else:
