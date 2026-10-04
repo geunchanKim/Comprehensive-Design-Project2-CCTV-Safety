@@ -82,6 +82,7 @@ def main():
 
     gt_n, hit_n, iou_sum = defaultdict(int), defaultdict(int), defaultdict(float)
     fp_n, no_id_n = defaultdict(int), defaultdict(int)
+    part_n, part_hit = defaultdict(int), defaultdict(int)     # (클래스, 잘림/전신, 높이 구간) 별 탐지율
     out_rows = []
     t0 = time.perf_counter()
     for row in rows:
@@ -102,7 +103,8 @@ def main():
                 vr = o.get("visible_ratio")                  # 필드가 없는 예전 데이터는 전부 센다
                 vis_ok = vr is None or (vr.get(cam) is not None and vr[cam] >= args.min_visible)
                 if bb and vis_ok:
-                    gts.append({"cls": o["cls"], "bbox": bb, "object_id": o["object_id"]})
+                    cut = bb[0] <= 3 or bb[1] <= 3 or bb[2] >= img.shape[1] - 3 or bb[3] >= img.shape[0] - 3
+                    gts.append({"cls": o["cls"], "bbox": bb, "object_id": o["object_id"], "cut": cut})
             matched, unmatched = match(gts, dets, args.iou)
             for gi, g in enumerate(gts):
                 key = (g["cls"], cam)
@@ -111,7 +113,12 @@ def main():
                 if hit:
                     hit_n[key] += 1
                     iou_sum[key] += matched[gi][1]
+                h = g["bbox"][3] - g["bbox"][1]
+                sub = ("잘림" if g["cut"] else "전신", "<300" if h < 300 else ("300~450" if h < 450 else "450+"))
+                part_n[(g["cls"],) + sub] += 1
+                part_hit[(g["cls"],) + sub] += hit
                 out_rows.append({"frame": frame, "camera": cam, "object_id": g["object_id"], "cls": g["cls"],
+                                 "cut": int(g["cut"]), "box_h": round(h),
                                  "detected": int(hit), "iou": round(matched[gi][1], 3) if hit else "",
                                  "conf": dets[matched[gi][0]]["conf"] if hit else ""})
             for di in unmatched:
@@ -123,7 +130,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{folder.name}_{tag}.csv"
     with open(out, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["frame", "camera", "object_id", "cls", "detected", "iou", "conf"])
+        w = csv.DictWriter(f, fieldnames=["frame", "camera", "object_id", "cls", "cut", "box_h", "detected", "iou", "conf"])
         w.writeheader()
         w.writerows(out_rows)
 
@@ -137,6 +144,10 @@ def main():
         if track:
             line += f"{no_id_n[key]:>8}"
         print(line)
+    print("\n사람: 화면 가장자리에 잘렸는지 · 박스 높이(px)별 탐지율")
+    for key in sorted(k for k in part_n if k[0] == "person"):
+        n, h = part_n[key], part_hit[key]
+        print(f"  {key[1]:<4}{key[2]:>8}  {h}/{n} ({100 * h / n:.0f}%)")
     print(f"\n탐지율 = IoU {args.iou} 이상으로 맞춘 정답 / 가려짐 {args.min_visible} 미만 정답 수")
     print(f"오탐 = 정답과 안 맞는 박스" + (", id없음 = 추적 번호가 없어 엣지가 버리는 박스" if track else ""))
     print(f"결과: {out}")
