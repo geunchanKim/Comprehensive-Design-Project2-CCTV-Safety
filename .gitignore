@@ -11,6 +11,7 @@ venv/
 env/
 .pytest_cache/
 .mypy_cache/
+*.db
 
 # ===== Node / React (frontend/) =====
 node_modules/
@@ -20,6 +21,18 @@ build/
 .vite/
 npm-debug.log*
 yarn-error.log*
+
+# ===== 데이터 / 대용량 파일 =====
+*.zip
+*.zip.part*
+data/raw/
+ai/datasets/
+ai/runs/
+ai/calibration/captures/
+ai/calibration/output/
+*.pt
+*.pth
+*.onnx
 
 # ===== Docker =====
 *.log
