@@ -33,7 +33,7 @@ import cv2
 
 AI_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AI_DIR / "edge"))
-from detector import Detector  # noqa: E402
+from detector import Detector, parse_class_conf  # noqa: E402
 
 CAMERAS = ("cam1", "cam2")
 
@@ -62,7 +62,8 @@ def match(gts, dets, thr):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("folder", help="Unity 폴더 (cam1/, cam2/, frames.jsonl)")
-    parser.add_argument("--model", choices=["v2", "ensemble"], default="v2")
+    parser.add_argument("--model", choices=["v2", "coco", "ensemble"], default="v2")
+    parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--no-track", action="store_true", help="추적 끄고 모델 박스 전부 평가")
@@ -76,7 +77,7 @@ def main():
     if args.max_frames:
         rows = rows[:args.max_frames]
     track = not args.no_track
-    detectors = {c: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz) for c in CAMERAS}
+    detectors = {c: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf)) for c in CAMERAS}
     tag = f"{'track' if track else 'notrack'}_conf{args.conf}_img{args.imgsz}_{args.model}"
     print(f"{folder.name} | {len(rows)}프레임 | {tag}")
 

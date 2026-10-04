@@ -3,8 +3,14 @@
 
 모델 선택 (--model)
   v2       (기본) 4클래스 단일 모델: runs/train_v2/weights/best.pt
-  ensemble 두 모델 조합: COCO 원본(yolo11n.pt) → person, chair / v1 → cart, desk
-           v2에서 의자 탐지가 약할 때 쓰는 대안
+  coco     COCO 원본(yolo11n.pt)으로 person, chair만 탐지
+           Unity S1~S3 측정: 사람 97%(v2 66%), 의자 84%(v2 46%), 오탐도 적음
+  ensemble 두 모델 조합: COCO 원본 → person, chair / v1 → cart, desk
+           (v1 카트·책상은 Unity 화면에서 오탐이 많아 Unity 실험에는 비추천)
+
+클래스별 conf (--class-conf person=0.5,chair=0.4)
+  클래스마다 다른 기준을 쓴다. 없는 클래스는 --conf 를 쓴다.
+  coco 모델 기본값: person 0.5, chair 0.4 (Unity 측정에서 탐지율·오탐 균형이 가장 좋았던 값)
 
 탐지 결과는 서버와 약속한 형식 {track_id, cls, conf, bbox:[x1,y1,x2,y2](픽셀)} 로 만든다.
 
@@ -32,6 +38,14 @@ WEIGHTS = {
 OUT_DIR = AI_DIR / "runs" / "edge"
 
 CLASSES = ("person", "chair", "cart", "desk")
+DEFAULT_CLASS_CONF = {"coco": {"person": 0.5, "chair": 0.4}}
+
+
+def parse_class_conf(text: str | None) -> dict:
+    """'person=0.5,chair=0.4' → {'person': 0.5, 'chair': 0.4}"""
+    if not text:
+        return {}
+    return {k.strip(): float(v) for k, v in (item.split("=") for item in text.split(","))}
 # ensemble 모드에서 두 모델이 각자 추적기를 가지므로 track_id가 겹치지 않게 v1 쪽에 더해주는 값
 TRACK_ID_OFFSET = 10000
 COLORS = {"person": (0, 200, 0), "chair": (220, 0, 220), "cart": (0, 165, 255), "desk": (255, 120, 0)}
@@ -61,24 +75,29 @@ class Detector:
     """frame(BGR 이미지) → [{track_id, cls, conf, bbox}] 리스트"""
 
     def __init__(self, model: str = "v2", conf: float = 0.4, device: str | None = None,
-                 tracker: str = "bytetrack.yaml", imgsz: int = 640):
+                 tracker: str = "bytetrack.yaml", imgsz: int = 640, class_conf: dict | None = None):
         self.conf = conf
+        # 클래스별 기준: 직접 준 값 > 모델 기본값 > conf
+        self.class_conf = {**DEFAULT_CLASS_CONF.get(model, {}), **(class_conf or {})}
         self.imgsz = imgsz          # 모델 입력 크기. 1920 이미지를 이 크기로 줄여서 본다 (크면 작은 물체에 유리, 느림)
         self.device = device or get_device()
         self.tracker = tracker
         if model == "v2":
             self.models = [load_model(WEIGHTS["v2"], set(CLASSES), 0)]
+        elif model == "coco":
+            self.models = [load_model(WEIGHTS["coco"], {"person", "chair"}, 0)]
         elif model == "ensemble":
             self.models = [load_model(WEIGHTS["coco"], {"person", "chair"}, 0),
                            load_model(WEIGHTS["v1"], {"cart", "desk"}, TRACK_ID_OFFSET)]
         else:
-            raise ValueError(f"model은 v2 또는 ensemble 이어야 해요: {model}")
+            raise ValueError(f"model은 v2, coco, ensemble 중 하나여야 해요: {model}")
         self.model_name = model
 
     def __call__(self, frame, track: bool = True) -> list[dict]:
         detections = []
         for model, class_map, offset in self.models:
-            kwargs = dict(conf=self.conf, classes=list(class_map), device=self.device, imgsz=self.imgsz, verbose=False)
+            min_conf = min([self.conf, *self.class_conf.values()])      # 모델에는 가장 낮은 기준으로 묻고, 아래에서 클래스별로 거른다
+            kwargs = dict(conf=min_conf, classes=list(class_map), device=self.device, imgsz=self.imgsz, verbose=False)
             if track:
                 result = model.track(frame, persist=True, tracker=self.tracker, **kwargs)[0]
             else:
@@ -90,6 +109,8 @@ class Detector:
             ids = boxes.id.int().tolist() if boxes.id is not None else [None] * len(boxes)
             for cls_idx, conf, xyxy, tid in zip(boxes.cls.int().tolist(), boxes.conf.tolist(),
                                                 boxes.xyxy.tolist(), ids):
+                if conf < self.class_conf.get(class_map[cls_idx], self.conf):
+                    continue
                 detections.append({
                     "track_id": None if tid is None else tid + offset,
                     "cls": class_map[cls_idx],
@@ -136,7 +157,8 @@ def open_source(source: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default="0", help="웹캠 번호, 영상 파일, RTSP 주소")
-    parser.add_argument("--model", choices=["v2", "ensemble"], default="v2")
+    parser.add_argument("--model", choices=["v2", "coco", "ensemble"], default="v2")
+    parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4")
     parser.add_argument("--session", default="local-test", help="session_id")
     parser.add_argument("--camera", default="cam1", help="camera_id")
     parser.add_argument("--conf", type=float, default=0.4)
@@ -147,7 +169,7 @@ def main():
     parser.add_argument("--no-track", action="store_true", help="추적 없이 탐지만")
     args = parser.parse_args()
 
-    detector = Detector(model=args.model, conf=args.conf)
+    detector = Detector(model=args.model, conf=args.conf, class_conf=parse_class_conf(args.class_conf))
     print(f"모델: {detector.model_name} | 장치: {detector.device} | 클래스: {', '.join(CLASSES)}")
 
     cap, is_file = open_source(args.source)
