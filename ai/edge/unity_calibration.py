@@ -20,7 +20,7 @@ Unity 카메라는 렌즈 왜곡이 없고 위치·방향을 정확히 알기 �
   정답 bbox 아래 가운데와 투영점의 거리도 보여준다 (bbox가 대충 맞는지 확인용)
 
 실행 (ai/ 폴더에서)
-  python edge/unity_calibration.py runs/unity_runs/unity-classroom-01 --check
+  python edge/unity_calibration.py runs/unity/unity-classroom-01 --check
   → <폴더>/calibration.json 저장
 """
 
