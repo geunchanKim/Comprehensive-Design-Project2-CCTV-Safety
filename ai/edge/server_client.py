@@ -7,6 +7,7 @@
 
 - dry_run: 서버 없이 파일에 저장만 한다 (서버 준비 전 테스트용)
 - 보낸 메시지: sent_<경로>.jsonl  (예: sent_detections.jsonl, sent_ground-truth.jsonl)
+- /detections 서버 응답(매칭 결과, 3D 좌표): responses_detections.jsonl
 - 실패한 메시지: failed.jsonl — HTTP 상태 코드와 서버 응답 본문을 같이 저장 (BE 공유용)
 """
 
@@ -123,6 +124,11 @@ class ServerClient:
                     status, body = r.status_code, r.text
                     if r.ok:
                         self._append(self._sent_path(path), message)
+                        if path == "/detections":   # 서버가 계산한 매칭·3D 좌표 (오차 측정용)
+                            try:
+                                self._append(self.out_dir / "responses_detections.jsonl", r.json())
+                            except ValueError:
+                                pass
                         self.stats["sent"] += 1
                         self.status_counts[(path, status)] += 1
                         continue
