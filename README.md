@@ -8,11 +8,20 @@
 ![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white)
 ![Status](https://img.shields.io/badge/status-integration_testing-orange)
 
-## Overview
+## 프로젝트 소개
 
-CCTV Safety는 두 카메라의 2D 탐지 결과를 같은 객체끼리 연결하고 삼각측량하여 실제 공간의 3D 위치를 추정합니다. 실제 위험 상황을 반복 재현하기 어려운 문제를 해결하기 위해 Unity를 가상 CCTV 환경으로 사용하며, Unity 정답 좌표와 추정 좌표를 비교해 오차를 측정합니다.
+CCTV Safety는 두 카메라에서 탐지한 객체를 서로 연결하고, 삼각측량을 통해 실제 공간의 3D 위치를 추정하는 프로젝트입니다.
 
-현재 `person`, `chair`, `cart`, `desk` 탐지부터 카메라별 ByteTrack 추적, 서버 전송, 에피폴라 매칭, 3D 삼각측량, Ground Truth 저장까지 연결되어 있습니다. 실제 CCTV 전환을 위한 ChArUco·ArUco 캘리브레이션 도구도 제공합니다.
+실제 위험 상황을 반복해서 재현하기 어렵기 때문에 Unity를 가상 CCTV 환경으로 활용합니다. Unity의 정답 좌표(Ground Truth)와 추정 좌표를 비교해 위치 오차를 측정하며, 이후 실제 CCTV 환경으로 전환할 수 있도록 ChArUco·ArUco 캘리브레이션 도구도 제공합니다.
+
+현재 구현 범위는 다음과 같습니다.
+
+- `person`, `chair`, `cart`, `desk` 탐지
+- 카메라별 ByteTrack 객체 추적
+- 탐지 결과 및 Ground Truth 서버 전송
+- 에피폴라 기하 기반 객체 매칭
+- 삼각측량 기반 3D 위치 추정
+- Unity 및 실제 CCTV용 카메라 캘리브레이션
 
 ### 현재 검증 결과
 
@@ -29,7 +38,7 @@ CCTV Safety는 두 카메라의 2D 탐지 결과를 같은 객체끼리 연결�
 
 > 위 수치는 제한된 Unity 샘플의 중간 검증 결과이며 최종 성능 지표가 아닙니다.
 
-## Architecture
+## 시스템 구성
 
 ```mermaid
 flowchart LR
@@ -56,7 +65,7 @@ flowchart LR
 5. 연결된 두 점을 삼각측량해 월드 좌표를 계산합니다.
 6. Unity 실험에서는 Ground Truth와 비교해 위치 오차를 평가합니다.
 
-## Features
+## 주요 기능
 
 | 영역 | 구현 내용 | 상태 |
 | --- | --- | :---: |
@@ -70,7 +79,7 @@ flowchart LR
 | Evaluation | Unity GT 저장과 좌표 오차 비교 기반 | 🚧 |
 | Safety | PPE 착용 판별과 3D TTC 위험 판단 | 📋 |
 
-## Repository
+## 프로젝트 구조
 
 ```text
 .
@@ -94,7 +103,9 @@ flowchart LR
 └── unity-sim/             # Unity 시뮬레이터 서브모듈
 ```
 
-## Quick Start
+## 빠른 시작
+
+> 권장 실행 순서: **저장소 준비 → AI 환경 설정 → 샘플 확인 → 백엔드 실행 → 전체 파이프라인 연동**
 
 ### 1. 저장소 받기
 
@@ -124,7 +135,7 @@ v2 모델 가중치를 `ai/runs/train_v2/weights/best.pt`에 준비합니다. �
 python train.py --version v2
 ```
 
-### 3. Unity 샘플 dry-run
+### 3. Unity 샘플 확인
 
 Unity 출력은 다음 구조를 사용합니다.
 
@@ -136,7 +147,7 @@ unity-classroom-01/
 └── cameras.json
 ```
 
-서버로 보내지 않고 탐지·메시지 생성까지만 확인합니다.
+먼저 서버 전송 없이 탐지와 메시지 생성이 정상적으로 동작하는지 확인합니다.
 
 ```powershell
 cd ai
@@ -178,16 +189,20 @@ docker compose up --build
 - Swagger UI: `http://localhost:8000/docs`
 - pgAdmin: `http://localhost:5050`
 
-### 5. 전체 파이프라인 실행
+### 5. 전체 파이프라인 연동
 
 ```powershell
 cd ai
 python edge/unity_reader.py <Unity_출력_폴더> --server http://localhost:8000 --calib auto
 ```
 
-실행할 때마다 폴더 이름에 `-runN`이 붙은 새 `session_id`가 생성됩니다. 엣지는 해당 세션의 cam1·cam2 캘리브레이션을 먼저 등록하고, 이후 탐지 결과와 Ground Truth를 전송합니다.
+실행할 때마다 폴더 이름에 `-runN`이 붙은 새 `session_id`가 생성됩니다. 엣지 파이프라인은 다음 순서로 데이터를 전송합니다.
 
-## Real Camera Calibration
+1. cam1·cam2 캘리브레이션 등록
+2. 카메라별 탐지 결과 전송
+3. Unity Ground Truth 전송
+
+## 실제 카메라 캘리브레이션
 
 실제 CCTV는 ChArUco 보드로 내부 파라미터를 계산하고, 두 카메라가 함께 보는 18cm ArUco 마커로 공통 월드 좌표계를 설정합니다.
 
@@ -210,9 +225,9 @@ python detect_aruco.py `
   --backend-url http://localhost:8000
 ```
 
-cam2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야 합니다. 자세한 촬영 조건은 [`ai/calibration/README.md`](ai/calibration/README.md)를 참고하세요.
+cam2도 반드시 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야 합니다. 자세한 촬영 조건은 [`ai/calibration/README.md`](ai/calibration/README.md)를 참고하세요.
 
-## API Summary
+## API 요약
 
 | Method | Endpoint | 설명 |
 | --- | --- | --- |
@@ -232,7 +247,7 @@ cam2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야
 
 전체 계약은 [`docs/specs/message-spec.md`](docs/specs/message-spec.md), 요청·응답 예시는 [`docs/detections-api.md`](docs/detections-api.md)를 참고하세요.
 
-## Tests
+## 테스트
 
 ```powershell
 python -m pytest backend/tests -q
@@ -240,7 +255,7 @@ python -m pytest backend/tests -q
 
 현재 테스트는 bbox 하단 중앙 계산, 왜곡 보정, 에피폴라 매칭, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 Ground Truth 저장을 확인합니다.
 
-## Roadmap
+## 로드맵
 
 - [x] YOLO v2 학습 파이프라인
 - [x] Unity 폴더 기반 엣지 파이프라인
@@ -254,7 +269,7 @@ python -m pytest backend/tests -q
 - [ ] 작업자별 PPE 착용 여부 판단
 - [ ] 3D 거리·속도 기반 TTC 위험 판단
 
-## Documentation
+## 문서
 
 - [AI 학습 안내](ai/README.md)
 - [실제 카메라 캘리브레이션](ai/calibration/README.md)
@@ -262,7 +277,7 @@ python -m pytest backend/tests -q
 - [탐지·삼각측량 API](docs/detections-api.md)
 - [협업 및 커밋 규칙](CONVENTION.md)
 
-## Team
+## 팀
 
 | 이름 | 주요 역할 |
 | --- | --- |
@@ -272,6 +287,6 @@ python -m pytest backend/tests -q
 | 양영준·박주환·김채현 | 프로젝트 자문 및 공동 연구 |
 | 손희문 부장 | 산업현장 요구사항 및 환경 자료 자문 |
 
-## Notice
+## 유의 사항
 
 이 프로젝트는 종합설계프로젝트 연구용 프로토타입입니다. 계산 결과는 현장 안전관리자의 판단을 보조하기 위한 것이며, 단독으로 작업자의 안전을 보장하지 않습니다.
