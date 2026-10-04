@@ -13,7 +13,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 
 | # | 보내는 쪽 → 받는 쪽 | 주소 | 내용 | 담당 |
 |---|---|---|---|---|
-| ⓪ | Unity → 엣지 | 폴더 (`unity_runs/<이름>/`) | 두 카메라 이미지, 정답 좌표, 카메라 설정 | 성윤 → 근찬 |
+| ⓪ | Unity → 엣지 | 폴더 (`ai/runs/unity/<이름>/`) | 두 카메라 이미지, 정답 좌표, 카메라 설정 | 성윤 → 근찬 |
 | ① | 엣지 → 서버 | `PUT /cameras/{camera_id}/calibration` | 이번 run의 cam1·cam2 캘리브레이션 (탐지보다 **먼저**) | 근찬 → 해민 |
 | ② | 엣지 → 서버 | `POST /detections` | 두 카메라 탐지 결과 묶음 | 근찬 → 해민 |
 | ③ | 엣지 → 서버 | `POST /ground-truth` | 물체의 정답 좌표 (Unity 실험만) | 근찬 → 해민 |
@@ -40,7 +40,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 시나리오 1회 재생 = 폴더 1개. 자세한 요구사항은 Unity 요청 이슈(`[REQ] Unity 시뮬레이션 데이터 출력 형식`) 참고.
 
 ```
-unity_runs/unity-classroom-01/
+ai/runs/unity/unity-classroom-01/
 ├── cam1/000001.jpg ...    1920×1080 JPG, 초당 10프레임
 ├── cam2/000001.jpg ...    cam1과 같은 번호 = 같은 Unity 프레임
 ├── frames.jsonl           한 줄 = 한 프레임 {"frame", "ts", "objects": [...]}

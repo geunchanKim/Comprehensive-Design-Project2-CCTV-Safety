@@ -14,8 +14,8 @@ Unity 폴더의 frames.jsonl(정답 좌표)을 프레임별로 맞대서 오차�
 
 실행 (ai/ 폴더에서)
   python eval/eval_position.py runs/edge/unity-classroom-02-run3
-  python eval/eval_position.py runs/edge/unity-classroom-02-run3 --gt runs/unity_runs/unity-classroom-02
-  (--gt 를 안 주면 session 이름에서 -runN 을 떼고 runs/unity_runs/ 에서 찾는다)
+  python eval/eval_position.py runs/edge/unity-classroom-02-run3 --gt runs/unity/unity-classroom-02
+  (--gt 를 안 주면 session 이름에서 -runN 을 떼고 runs/unity/ 에서 찾는다)
 """
 
 import argparse
@@ -91,7 +91,7 @@ def main():
         gt_dir = Path(args.gt)
     else:
         base = re.sub(r"-run\d+$", "", run_dir.name)
-        gt_dir = AI_DIR / "runs" / "unity_runs" / base
+        gt_dir = AI_DIR / "runs" / "unity" / base
     for p in (run_dir / "responses_detections.jsonl", gt_dir / "frames.jsonl"):
         if not p.exists():
             raise SystemExit(f"파일이 없어요: {p}")

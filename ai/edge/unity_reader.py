@@ -26,9 +26,9 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   failed.jsonl(상태 코드 + 응답), vis/
 
 실행 (ai/ 폴더에서)
-  python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --dry-run
-  python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --server http://121.182.60.2:32130
-  python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --server http://121.182.60.2:32130 --only gt
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --dry-run
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130 --only gt
 """
 
 import argparse

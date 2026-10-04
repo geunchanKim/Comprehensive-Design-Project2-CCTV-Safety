@@ -15,8 +15,8 @@ Unity 데이터가 나오기 전에, 영상(또는 웹캠)으로 Unity와 똑같
 (영상 속 실제 사람과는 상관없음. /ground-truth 전송과 좌표 변환 확인용)
 
 실행 (ai/ 폴더에서)
-  python edge/make_fake_unity_run.py --cam1 영상.mp4 --frames 50 --dummy-gt
-  python edge/make_fake_unity_run.py --cam1 영상1.mp4 --cam2 영상2.mp4 --out runs/unity_runs/fake-classroom-02
+  python tools/make_fake_unity_run.py --cam1 영상.mp4 --frames 50 --dummy-gt
+  python tools/make_fake_unity_run.py --cam1 영상1.mp4 --cam2 영상2.mp4 --out runs/unity/fake-classroom-02
 """
 
 import argparse
@@ -50,7 +50,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cam1", required=True, help="영상 파일 또는 웹캠 번호")
     parser.add_argument("--cam2", default=None, help="없으면 cam1 이미지를 cam2로 복사")
-    parser.add_argument("--out", default=str(AI_DIR / "runs" / "unity_runs" / "fake-classroom-01"))
+    parser.add_argument("--out", default=str(AI_DIR / "runs" / "unity" / "fake-classroom-01"))
     parser.add_argument("--frames", type=int, default=50, help="만들 프레임 수")
     parser.add_argument("--dummy-gt", action="store_true", help="가짜 정답 좌표 넣기")
     args = parser.parse_args()
