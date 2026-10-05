@@ -1,18 +1,27 @@
 """
-엣지 탐지기: 영상 프레임에서 4클래스(person, chair, cart, desk)를 탐지·추적한다.
+엣지 탐지기: 영상 프레임에서 물체를 탐지·추적하고, 좌표 계산에 쓸 발 위치(foot)를 붙인다.
 
 모델 선택 (--model)
-  v2       (기본) 4클래스 단일 모델: runs/train_v2/weights/best.pt
-  coco     COCO 원본(yolo11n.pt)으로 person, chair만 탐지
+  coco     (기본) COCO 원본(yolo11n.pt). person, chair, suitcase, backpack 탐지 가능
            Unity S1~S3 측정: 사람 97%(v2 66%), 의자 84%(v2 46%), 오탐도 적음
-  ensemble 두 모델 조합: COCO 원본 → person, chair / v1 → cart, desk
-           (v1 카트·책상은 Unity 화면에서 오탐이 많아 Unity 실험에는 비추천)
+  v2       우리가 학습한 4클래스 모델(person, chair, cart, desk): runs/train_v2/weights/best.pt
+  ensemble COCO 원본 → person, chair / v1 → cart, desk
+
+보낼 클래스 (--classes person,chair)
+  모델이 찾을 수 있는 클래스 중 실제로 내보낼 것만 고른다.
+  coco 기본값은 person, chair (suitcase, backpack은 서버가 지원한 뒤 켠다)
 
 클래스별 conf (--class-conf person=0.5,chair=0.4)
   클래스마다 다른 기준을 쓴다. 없는 클래스는 --conf 를 쓴다.
-  coco 모델 기본값: person 0.5, chair 0.4 (Unity 측정에서 탐지율·오탐 균형이 가장 좋았던 값)
+  coco 기본값: person 0.5, chair 0.4 (Unity 측정에서 탐지율·오탐 균형이 가장 좋았던 값)
 
-탐지 결과는 서버와 약속한 형식 {track_id, cls, conf, bbox:[x1,y1,x2,y2](픽셀)} 로 만든다.
+발 위치 (--foot box|ankle)
+  box   (기본) 박스 아래 가운데 ((x1+x2)/2, y2)
+  ankle 사람은 포즈 모델(yolo11n-pose)로 찾은 두 발목의 가운데. 발목이 안 보이면 box로 대신함
+        사람이 아닌 물체는 항상 box
+        Unity S1~S3 측정: 위치 오차 15.8cm(box) → 5.8cm(ankle)
+
+탐지 결과 형식 {track_id, cls, conf, bbox:[x1,y1,x2,y2], foot:[x,y], foot_src:"box"|"ankle"} (픽셀)
 
 실행 (ai/ 폴더에서)
   python edge/detector.py --source 0 --show                     # 웹캠
@@ -37,8 +46,12 @@ WEIGHTS = {
 }
 OUT_DIR = AI_DIR / "runs" / "edge"
 
-CLASSES = ("person", "chair", "cart", "desk")
-DEFAULT_CLASS_CONF = {"coco": {"person": 0.5, "chair": 0.4}}
+CLASSES = ("person", "chair", "cart", "desk")          # v2 모델 클래스
+COCO_CLASSES = ("person", "chair", "suitcase", "backpack")  # coco 모델에서 쓸 수 있는 클래스
+DEFAULT_CLASSES = {"coco": ("person", "chair"), "v2": CLASSES, "ensemble": CLASSES}
+DEFAULT_CLASS_CONF = {"coco": {"person": 0.5, "chair": 0.4, "suitcase": 0.4, "backpack": 0.4}}
+POSE_WEIGHTS = "yolo11n-pose.pt"                       # 없으면 자동 다운로드
+LEFT_ANKLE, RIGHT_ANKLE = 15, 16                       # COCO 키포인트 번호
 
 
 def parse_class_conf(text: str | None) -> dict:
@@ -46,9 +59,48 @@ def parse_class_conf(text: str | None) -> dict:
     if not text:
         return {}
     return {k.strip(): float(v) for k, v in (item.split("=") for item in text.split(","))}
+
+
+def parse_classes(text: str | None) -> tuple | None:
+    """'person,chair' → ('person', 'chair'), 없으면 None (모델 기본값)"""
+    return tuple(c.strip() for c in text.split(",") if c.strip()) if text else None
+
+
+def box_foot(bbox) -> list:
+    """박스 아래 가운데"""
+    x1, _, x2, y2 = bbox
+    return [round((x1 + x2) / 2, 1), round(y2, 1)]
+
+
+def iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def attach_feet(detections: list[dict], people: list[tuple], ankle_conf: float = 0.5, min_iou: float = 0.5):
+    """탐지마다 foot, foot_src를 붙인다.
+    people: 포즈 모델 결과 [(박스, [(x, y, conf) × 17]), ...]
+    사람 탐지는 박스가 가장 많이 겹치는 포즈 결과(IoU ≥ min_iou)를 찾아,
+    두 발목 신뢰도가 모두 ankle_conf 이상이면 두 발목 가운데, 아니면 박스 아래 가운데."""
+    for d in detections:
+        d["foot"], d["foot_src"] = box_foot(d["bbox"]), "box"
+        if d["cls"] != "person" or not people:
+            continue
+        score, best = max(((iou(d["bbox"], box), kps) for box, kps in people), key=lambda t: t[0])
+        if score < min_iou:
+            continue
+        left, right = best[LEFT_ANKLE], best[RIGHT_ANKLE]
+        if left[2] >= ankle_conf and right[2] >= ankle_conf:
+            d["foot"] = [round((left[0] + right[0]) / 2, 1), round((left[1] + right[1]) / 2, 1)]
+            d["foot_src"] = "ankle"
+    return detections
 # ensemble 모드에서 두 모델이 각자 추적기를 가지므로 track_id가 겹치지 않게 v1 쪽에 더해주는 값
 TRACK_ID_OFFSET = 10000
-COLORS = {"person": (0, 200, 0), "chair": (220, 0, 220), "cart": (0, 165, 255), "desk": (255, 120, 0)}
+COLORS = {"person": (0, 200, 0), "chair": (220, 0, 220), "cart": (0, 165, 255), "desk": (255, 120, 0),
+          "suitcase": (0, 200, 255), "backpack": (255, 200, 0)}
 
 
 def get_device() -> str:
@@ -72,26 +124,56 @@ def load_model(weights, wanted: set, offset: int):
 
 
 class Detector:
-    """frame(BGR 이미지) → [{track_id, cls, conf, bbox}] 리스트"""
+    """frame(BGR 이미지) → [{track_id, cls, conf, bbox, foot, foot_src}] 리스트"""
 
-    def __init__(self, model: str = "v2", conf: float = 0.4, device: str | None = None,
-                 tracker: str = "bytetrack.yaml", imgsz: int = 640, class_conf: dict | None = None):
+    def __init__(self, model: str = "coco", conf: float = 0.4, device: str | None = None,
+                 tracker: str = "bytetrack.yaml", imgsz: int = 640, class_conf: dict | None = None,
+                 classes: tuple | None = None, foot: str = "box", ankle_conf: float = 0.5):
+        if foot not in ("box", "ankle"):
+            raise ValueError(f"foot은 box 또는 ankle 이어야 해요: {foot}")
         self.conf = conf
+        self.classes = tuple(classes or DEFAULT_CLASSES.get(model, CLASSES))
+        self.foot = foot
+        self.ankle_conf = ankle_conf
         # 클래스별 기준: 직접 준 값 > 모델 기본값 > conf
         self.class_conf = {**DEFAULT_CLASS_CONF.get(model, {}), **(class_conf or {})}
         self.imgsz = imgsz          # 모델 입력 크기. 1920 이미지를 이 크기로 줄여서 본다 (크면 작은 물체에 유리, 느림)
         self.device = device or get_device()
         self.tracker = tracker
+        wanted = set(self.classes)
         if model == "v2":
-            self.models = [load_model(WEIGHTS["v2"], set(CLASSES), 0)]
+            self._check_classes(wanted, CLASSES, model)
+            self.models = [load_model(WEIGHTS["v2"], wanted, 0)]
         elif model == "coco":
-            self.models = [load_model(WEIGHTS["coco"], {"person", "chair"}, 0)]
+            self._check_classes(wanted, COCO_CLASSES, model)
+            self.models = [load_model(WEIGHTS["coco"], wanted, 0)]
         elif model == "ensemble":
-            self.models = [load_model(WEIGHTS["coco"], {"person", "chair"}, 0),
-                           load_model(WEIGHTS["v1"], {"cart", "desk"}, TRACK_ID_OFFSET)]
+            self._check_classes(wanted, CLASSES, model)
+            self.models = [m for m in (
+                load_model(WEIGHTS["coco"], wanted & {"person", "chair"}, 0) if wanted & {"person", "chair"} else None,
+                load_model(WEIGHTS["v1"], wanted & {"cart", "desk"}, TRACK_ID_OFFSET) if wanted & {"cart", "desk"} else None,
+            ) if m]
         else:
-            raise ValueError(f"model은 v2, coco, ensemble 중 하나여야 해요: {model}")
+            raise ValueError(f"model은 coco, v2, ensemble 중 하나여야 해요: {model}")
         self.model_name = model
+        # 발목 방식이면 포즈 모델을 하나 더 쓴다 (사람 박스와 짝지어 발목만 가져옴)
+        self.pose = YOLO(POSE_WEIGHTS) if foot == "ankle" else None
+
+    @staticmethod
+    def _check_classes(wanted: set, available: tuple, model: str):
+        extra = wanted - set(available)
+        if extra:
+            raise ValueError(f"{model} 모델은 {extra} 클래스를 찾을 수 없어요. 가능: {', '.join(available)}")
+
+    def _pose_people(self, frame) -> list[tuple]:
+        """포즈 모델 → [(박스, [(x, y, conf) × 17]), ...]"""
+        r = self.pose.predict(frame, conf=0.25, imgsz=self.imgsz, device=self.device, verbose=False)[0]
+        if r.keypoints is None or r.boxes is None or len(r.boxes) == 0:
+            return []
+        xy = r.keypoints.xy.tolist()
+        cf = r.keypoints.conf.tolist() if r.keypoints.conf is not None else [[1.0] * len(p) for p in xy]
+        return [(box, [(x, y, c) for (x, y), c in zip(pts, cs)])
+                for box, pts, cs in zip(r.boxes.xyxy.tolist(), xy, cf)]
 
     def __call__(self, frame, track: bool = True) -> list[dict]:
         detections = []
@@ -117,7 +199,8 @@ class Detector:
                     "conf": round(conf, 3),
                     "bbox": [round(v, 1) for v in xyxy],
                 })
-        return detections
+        people = self._pose_people(frame) if self.pose and any(d["cls"] == "person" for d in detections) else []
+        return attach_feet(detections, people, self.ankle_conf)
 
 
 def build_message(session_id: str, camera_id: str, frame_id: int, ts: int, frame, detections: list[dict]) -> dict:
@@ -140,8 +223,11 @@ def draw(frame, detections: list[dict]):
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"{d['cls']} #{d['track_id']} {d['conf']:.2f}" if d["track_id"] is not None else f"{d['cls']} {d['conf']:.2f}"
         cv2.putText(frame, label, (x1, max(y1 - 6, 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
-        # 좌표 계산에 쓸 발 위치(bbox 하단 중심)
-        cv2.circle(frame, ((x1 + x2) // 2, y2), 4, color, -1)
+        # 좌표 계산에 쓸 발 위치 (발목이면 흰 테두리)
+        fx, fy = map(int, d.get("foot") or box_foot(d["bbox"]))
+        cv2.circle(frame, (fx, fy), 5, color, -1)
+        if d.get("foot_src") == "ankle":
+            cv2.circle(frame, (fx, fy), 8, (255, 255, 255), 2)
     return frame
 
 
@@ -157,8 +243,10 @@ def open_source(source: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default="0", help="웹캠 번호, 영상 파일, RTSP 주소")
-    parser.add_argument("--model", choices=["v2", "coco", "ensemble"], default="v2")
+    parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
+    parser.add_argument("--classes", default=None, help="보낼 클래스. 예: person,chair (기본: 모델별 기본값)")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4")
+    parser.add_argument("--foot", choices=["box", "ankle"], default="box", help="발 위치: 박스 아래 / 두 발목 가운데")
     parser.add_argument("--session", default="local-test", help="session_id")
     parser.add_argument("--camera", default="cam1", help="camera_id")
     parser.add_argument("--conf", type=float, default=0.4)
@@ -169,8 +257,9 @@ def main():
     parser.add_argument("--no-track", action="store_true", help="추적 없이 탐지만")
     args = parser.parse_args()
 
-    detector = Detector(model=args.model, conf=args.conf, class_conf=parse_class_conf(args.class_conf))
-    print(f"모델: {detector.model_name} | 장치: {detector.device} | 클래스: {', '.join(CLASSES)}")
+    detector = Detector(model=args.model, conf=args.conf, class_conf=parse_class_conf(args.class_conf),
+                        classes=parse_classes(args.classes), foot=args.foot)
+    print(f"모델: {detector.model_name} | 장치: {detector.device} | 클래스: {', '.join(detector.classes)} | 발 위치: {detector.foot}")
 
     cap, is_file = open_source(args.source)
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -184,7 +273,7 @@ def main():
         print(f"저장 위치: {out}")
 
     frame_idx = processed = 0
-    counts = {c: 0 for c in CLASSES}
+    counts = {c: 0 for c in detector.classes}
     t0 = time.perf_counter()
     try:
         while True:
