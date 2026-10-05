@@ -39,7 +39,7 @@ from pathlib import Path
 
 import cv2
 
-from detector import AI_DIR, Detector, draw
+from detector import AI_DIR, Detector, draw, parse_class_conf
 from server_client import ServerClient
 from unity_calibration import load_calibrations
 
@@ -124,8 +124,10 @@ def main():
     parser.add_argument("--run", type=int, default=None, help="run 번호 직접 지정 (기본: 자동 증가)")
     parser.add_argument("--calib", default="auto",
                         help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
-    parser.add_argument("--model", choices=["v2", "ensemble"], default="v2")
+    parser.add_argument("--model", choices=["v2", "coco", "ensemble"], default="v2")
+    parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
+    parser.add_argument("--imgsz", type=int, default=640, help="모델 입력 크기 (640 기본, 1280이면 작은 물체에 유리하지만 느림)")
     parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
     parser.add_argument("--save-every", type=int, default=0, help="N프레임마다 박스 그린 이미지 저장 (0 = 안 함)")
     args = parser.parse_args()
@@ -151,7 +153,7 @@ def main():
     send_det = args.only in ("all", "detections")
     send_gt = args.only in ("all", "gt")
 
-    detectors = {cam: Detector(model=args.model, conf=args.conf) for cam in CAMERAS} if send_det else {}
+    detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf)) for cam in CAMERAS} if send_det else {}
     mode = "dry-run" if args.dry_run else args.server
     print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode}")
 
