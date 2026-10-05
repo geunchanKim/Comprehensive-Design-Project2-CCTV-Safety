@@ -1,4 +1,4 @@
-# PR마다 백엔드 테스트를 자동으로 돌린다.
+# PR마다 백엔드·엣지 테스트를 자동으로 돌린다.
 name: CI
 
 on:
@@ -29,3 +29,25 @@ jobs:
         env:
           DATABASE_URL: sqlite:///./test_cctv.db
         run: python -m pytest backend/tests -q
+
+  edge-test:
+    name: edge-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # YOLO·torch는 무거워서 설치하지 않는다. 그것 없이 도는 부분만 검사
+      - name: 의존성 설치
+        run: pip install numpy opencv-python-headless requests pytest
+
+      - name: 문법 검사 (ai/ 전체)
+        run: python -m compileall -q ai/edge ai/eval ai/tools
+
+      - name: 테스트
+        run: python -m pytest ai/tests -q
