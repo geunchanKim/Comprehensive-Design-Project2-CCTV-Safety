@@ -15,7 +15,7 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   - bbox는 이미지 안으로 자르고, 폭·높이가 0인 박스는 뺀다
   - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot box: 박스 아래 가운데, ankle: 두 발목 가운데)
     foot도 이미지 안으로 자른다. 서버가 foot을 지원하기 전에는 서버가 무시한다
-  - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표의 다른 클래스(예: backpack)는 빼고 보낸다
+  - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표에 그 밖의 클래스가 있으면 빼고 보낸다
   - 정답 좌표는 Unity (x, y, z) → 월드 (x, z, y) 로 바꿔서 보낸다
   - 캘리브레이션은 session_id별로 관리되므로, 탐지를 보내기 전에 이번 session_id로
     cam1·cam2 캘리브레이션을 먼저 등록한다 (PUT /cameras/{camera_id}/calibration)
@@ -48,8 +48,8 @@ from unity_calibration import load_calibrations
 
 CAMERAS = ("cam1", "cam2")
 OUT_ROOT = AI_DIR / "runs" / "edge"
-# 서버(ObjectClass)가 받는 클래스. 서버가 suitcase, backpack을 추가하면 여기에도 추가한다
-SERVER_CLASSES = {"person", "chair", "cart", "desk"}
+# 서버(ObjectClass)가 받는 클래스. 서버에 클래스가 추가되면 여기에도 추가한다
+SERVER_CLASSES = {"person", "chair", "cart", "desk", "suitcase", "backpack"}
 
 
 def unity_to_world(p):
@@ -140,7 +140,7 @@ def main():
     parser.add_argument("--foot", choices=["box", "ankle"], default="box", help="발 위치: 박스 아래 / 두 발목 가운데")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
-    parser.add_argument("--imgsz", type=int, default=640, help="모델 입력 크기 (640 기본, 1280이면 작은 물체에 유리하지만 느림)")
+    parser.add_argument("--imgsz", type=int, default=1280, help="모델 입력 크기 (1280 기본. 640이면 빠르지만 작거나 먼 물체를 놓침)")
     parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
     parser.add_argument("--save-every", type=int, default=0, help="N프레임마다 박스 그린 이미지 저장 (0 = 안 함)")
     args = parser.parse_args()
