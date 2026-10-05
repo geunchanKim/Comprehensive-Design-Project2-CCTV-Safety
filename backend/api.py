@@ -22,7 +22,7 @@ except ImportError:  # Docker runs this directory as the import root.
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
-MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "30"))
+MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "50"))
 
 
 def _calibration(camera: Camera) -> Calibration:
@@ -132,7 +132,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             normalized[frame.camera_id].append(undistort(foot, calibration))
 
     matches, used = [], [set(), set()]
-    for object_class in ("person", "chair", "cart", "desk"):
+    for object_class in ("person", "chair", "cart", "desk", "suitcase", "backpack"):
         indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class] for frame in frames]
         points = [[normalized[frame.camera_id][i] for i in indexes[n]] for n, frame in enumerate(frames)]
         for local1, local2, error in match_class(points[0], points[1], essential, pixel_scale, MAX_EPIPOLAR_ERROR_PX):

@@ -37,7 +37,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       APP_COMMIT_SHA: ${APP_COMMIT_SHA:-unknown}
-      MAX_EPIPOLAR_ERROR_PX: ${MAX_EPIPOLAR_ERROR_PX:-30}
+      MAX_EPIPOLAR_ERROR_PX: ${MAX_EPIPOLAR_ERROR_PX:-50}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:

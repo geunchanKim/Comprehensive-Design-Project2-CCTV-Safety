@@ -31,7 +31,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 | 이미지 좌표 | 픽셀, 원점 = 좌상단, x는 오른쪽, y는 아래쪽 |
 | bbox | `[x1, y1, x2, y2]` 픽셀 절대좌표 (정규화 안 함) |
 | 시간 `ts` | epoch ms. Unity는 시뮬레이션 시각(시작 + frame × 100ms), 실제 카메라는 엣지 수신 시각 |
-| 클래스 | 서버 지원: `person`, `chair`, `cart`, `desk` / 추가 예정: `suitcase`(카트 대신), `backpack`(통로 적치물) |
+| 클래스 | 서버 지원: `person`, `chair`, `cart`, `desk`, `suitcase`(카트 대신), `backpack`(통로 적치물) |
 | camera_id | `cam1`, `cam2` |
 | session_id | 폴더 이름 + `-runN`. 실행할 때마다 N이 1씩 늘어난다. 예: `unity-classroom-01-run3` |
 
@@ -138,7 +138,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 서버가 할 일 (참고)
 - 발 위치 = `foot`이 있으면 그 점, 없으면 bbox 아래 가운데 `((x1+x2)/2, y2)`. `K`·`dist`로 왜곡 보정
 - 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 높이(z) 검사 + 헝가리안 매칭
-- 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 30px, 높이 검사와 함께 50px 제안
+- 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 50px
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -20~20cm, 발목: -10~40cm 제안)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 짝지은 쌍을 삼각측량
@@ -184,4 +184,4 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 엣지 탐지 모델 | ✅ COCO 원본 (사람 64 → 97%, 의자 오차 85 → 4cm) |
 | 발 위치 `foot` | ⏳ 엣지 전송 구현, 서버 지원 요청 중 |
 | 에피폴라 기준 + 높이 검사 | ⏳ 50px + z 범위 검사 제안, 서버 반영 요청 중 |
-| `suitcase`, `backpack` 클래스 | ⏳ 서버 `ObjectClass` 추가 요청 예정 |
+| `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |

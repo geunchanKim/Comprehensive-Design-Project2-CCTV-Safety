@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_cctv.db")
 os.environ.setdefault("APP_COMMIT_SHA", "test-commit")
-os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "30")
+os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "50")
 
 from fastapi.testclient import TestClient
 
@@ -51,7 +51,7 @@ def test_health_exposes_deployment_settings():
     assert response.json() == {
         "status": "ok",
         "commit": "test-commit",
-        "max_epipolar_error_px": 30.0,
+        "max_epipolar_error_px": 50.0,
     }
 
 
@@ -68,6 +68,21 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     assert result["matches"][0]["observations"][0]["conf"] == 0.988
     assert result["matches"][0]["observations"][0]["foot_pixel"] == [960.0, 540.0]
     assert abs(result["matches"][0]["world"]["z"] - 10) < 0.01
+
+
+def test_accepts_suitcase_and_backpack_classes():
+    for pair_id, object_class in enumerate(("suitcase", "backpack"), start=10):
+        session_id = f"class-{object_class}"
+        put_camera("cam1", [0, 0, 0], session_id)
+        put_camera("cam2", [-1, 0, 0], session_id)
+        payload = detection_payload(pair_id=pair_id, session_id=session_id)
+        for frame in payload["frames"]:
+            frame["detections"][0]["cls"] = object_class
+
+        response = client.post("/detections", json=payload)
+
+        assert response.status_code == 201, response.text
+        assert response.json()["matches"][0]["cls"] == object_class
 
 
 def test_same_frame_and_tracks_are_allowed_in_another_session():
