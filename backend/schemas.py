@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-ObjectClass = Literal["person", "chair", "cart", "desk"]
+ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 
 
