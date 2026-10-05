@@ -5,8 +5,14 @@
 탐지 루프가 네트워크 때문에 멈추지 않게 큐에 넣고 바로 돌아온다.
 캘리브레이션 등록(PUT)은 탐지보다 먼저 끝나야 해서 put_now()로 바로 보낸다.
 
+큐가 꽉 찼을 때
+- 기본 (drop_when_full=False): 자리가 날 때까지 기다린다. 폴더 재생처럼 메시지를 하나도 잃으면 안 될 때
+- drop_when_full=True: 가장 오래된 메시지를 버린다. 실시간 카메라처럼 최신 프레임이 더 중요할 때
+close()는 기본으로 큐가 빌 때까지 기다린다.
+
 - dry_run: 서버 없이 파일에 저장만 한다 (서버 준비 전 테스트용)
 - 보낸 메시지: sent_<경로>.jsonl  (예: sent_detections.jsonl, sent_ground-truth.jsonl)
+- /detections 서버 응답(매칭 결과, 3D 좌표): responses_detections.jsonl
 - 실패한 메시지: failed.jsonl — HTTP 상태 코드와 서버 응답 본문을 같이 저장 (BE 공유용)
 """
 
@@ -22,12 +28,13 @@ import requests
 
 class ServerClient:
     def __init__(self, base_url: str | None, out_dir: Path, dry_run: bool = False,
-                 timeout: float = 5.0, max_queue: int = 300):
+                 timeout: float = 5.0, max_queue: int = 300, drop_when_full: bool = False):
         if not dry_run and not base_url:
             raise ValueError("서버 주소(--server)가 없으면 --dry-run 으로 실행하세요")
         self.base_url = base_url.rstrip("/") if base_url else None
         self.dry_run = dry_run
         self.timeout = timeout
+        self.drop_when_full = drop_when_full
         self.out_dir = out_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         self.failed_path = out_dir / "failed.jsonl"
@@ -35,7 +42,6 @@ class ServerClient:
         self.status_counts: Counter = Counter()      # (경로, 상태 코드) → 개수
 
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
-        self._busy = False
         self._session = requests.Session()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -76,23 +82,32 @@ class ServerClient:
         return False
 
     def send(self, message: dict, path: str = "/detections"):
-        """큐에 넣고 바로 돌아온다. 큐가 꽉 차면 가장 오래된 메시지를 버린다."""
+        """큐에 넣는다. 꽉 차면 기본은 자리가 날 때까지 기다리고, drop_when_full이면 가장 오래된 것을 버린다."""
         item = (path, message)
+        if not self.drop_when_full:
+            self._queue.put(item)
+            return
         try:
             self._queue.put_nowait(item)
         except queue.Full:
             try:
                 self._queue.get_nowait()
+                self._queue.task_done()
                 self.stats["dropped"] += 1
             except queue.Empty:
                 pass
             self._queue.put_nowait(item)
 
-    def close(self, wait: float = 30.0):
-        """남은 메시지를 최대 wait초 동안 보내고 끝낸다"""
-        deadline = time.time() + wait
-        while (not self._queue.empty() or self._busy) and time.time() < deadline:
+    def close(self, wait: float | None = None):
+        """남은 메시지를 다 보낼 때까지 기다린다 (wait초를 주면 그만큼만). 못 보낸 게 있으면 경고"""
+        deadline = None if wait is None else time.time() + wait
+        while self._queue.unfinished_tasks:
+            if deadline is not None and time.time() > deadline:
+                break
             time.sleep(0.05)
+        left = self._queue.unfinished_tasks
+        if left or self.stats["dropped"]:
+            print(f"[경고] 서버로 보내지 못한 메시지: 남음 {left}건, 버림 {self.stats['dropped']}건")
 
     def summary(self) -> str:
         codes = ", ".join(f"{p} {c}: {n}건" for (p, c), n in sorted(self.status_counts.items(), key=str))
@@ -108,7 +123,6 @@ class ServerClient:
     def _worker(self):
         while True:
             path, message = self._queue.get()
-            self._busy = True
             try:
                 if self.dry_run:
                     self._append(self._sent_path(path), message)
@@ -123,6 +137,11 @@ class ServerClient:
                     status, body = r.status_code, r.text
                     if r.ok:
                         self._append(self._sent_path(path), message)
+                        if path == "/detections":   # 서버가 계산한 매칭·3D 좌표 (오차 측정용)
+                            try:
+                                self._append(self.out_dir / "responses_detections.jsonl", r.json())
+                            except ValueError:
+                                pass
                         self.stats["sent"] += 1
                         self.status_counts[(path, status)] += 1
                         continue
@@ -137,4 +156,4 @@ class ServerClient:
                 if self.status_counts[(path, status)] in (1, 10) or self.status_counts[(path, status)] % 100 == 0:
                     print(f"[전송 실패] {path} → {status} {str(body)[:200]}")
             finally:
-                self._busy = False
+                self._queue.task_done()

@@ -1,6 +1,6 @@
 # 엣지·Unity·서버 메시지 양식
 
-> 작성: 2026-10-02 · 수정: 2026-10-03 (Unity 폴더 방식, run마다 캘리브레이션 등록, GT는 엣지가 전송)
+> 작성: 2026-10-02 · 수정: 2026-10-05 (foot 필드, 높이 검사 제안, 클래스 추가 예정)
 > 트랙 A(엣지) 기준. 바뀌면 이 문서부터 고친다.
 
 ## 1. 전체 흐름
@@ -13,7 +13,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 
 | # | 보내는 쪽 → 받는 쪽 | 주소 | 내용 | 담당 |
 |---|---|---|---|---|
-| ⓪ | Unity → 엣지 | 폴더 (`unity_runs/<이름>/`) | 두 카메라 이미지, 정답 좌표, 카메라 설정 | 성윤 → 근찬 |
+| ⓪ | Unity → 엣지 | 폴더 (`ai/runs/unity/<이름>/`) | 두 카메라 이미지, 정답 좌표, 카메라 설정 | 성윤 → 근찬 |
 | ① | 엣지 → 서버 | `PUT /cameras/{camera_id}/calibration` | 이번 run의 cam1·cam2 캘리브레이션 (탐지보다 **먼저**) | 근찬 → 해민 |
 | ② | 엣지 → 서버 | `POST /detections` | 두 카메라 탐지 결과 묶음 | 근찬 → 해민 |
 | ③ | 엣지 → 서버 | `POST /ground-truth` | 물체의 정답 좌표 (Unity 실험만) | 근찬 → 해민 |
@@ -31,7 +31,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 | 이미지 좌표 | 픽셀, 원점 = 좌상단, x는 오른쪽, y는 아래쪽 |
 | bbox | `[x1, y1, x2, y2]` 픽셀 절대좌표 (정규화 안 함) |
 | 시간 `ts` | epoch ms. Unity는 시뮬레이션 시각(시작 + frame × 100ms), 실제 카메라는 엣지 수신 시각 |
-| 클래스 | `person`, `chair`, `cart`, `desk` |
+| 클래스 | 서버 지원: `person`, `chair`, `cart`, `desk` / 추가 예정: `suitcase`(카트 대신), `backpack`(통로 적치물) |
 | camera_id | `cam1`, `cam2` |
 | session_id | 폴더 이름 + `-runN`. 실행할 때마다 N이 1씩 늘어난다. 예: `unity-classroom-01-run3` |
 
@@ -40,7 +40,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 시나리오 1회 재생 = 폴더 1개. 자세한 요구사항은 Unity 요청 이슈(`[REQ] Unity 시뮬레이션 데이터 출력 형식`) 참고.
 
 ```
-unity_runs/unity-classroom-01/
+ai/runs/unity/unity-classroom-01/
 ├── cam1/000001.jpg ...    1920×1080 JPG, 초당 10프레임
 ├── cam2/000001.jpg ...    cam1과 같은 번호 = 같은 Unity 프레임
 ├── frames.jsonl           한 줄 = 한 프레임 {"frame", "ts", "objects": [...]}
@@ -104,11 +104,20 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | `detections[].cls` | string | 클래스 |
 | `detections[].conf` | float | 0~1 |
 | `detections[].bbox` | [float ×4] | `[x1, y1, x2, y2]`, 이미지 안, 폭·높이 > 0 |
+| `detections[].foot` | [float ×2] | (선택) 좌표 계산에 쓸 발 위치 `[x, y]` 픽셀, 이미지 안 |
+| `detections[].foot_src` | string | (선택) `ankle`: 두 발목 가운데 / `box`: 박스 아래 가운데 |
+
+`foot` 정의 (엣지 `--foot ankle`)
+- 사람: 포즈 모델(yolo11n-pose)의 두 발목(COCO 키포인트 15, 16) 신뢰도가 모두 0.5 이상이면 두 발목 가운데
+- 발목이 안 보이거나 사람이 아니면: 박스 아래 가운데 `((x1+x2)/2, y2)`
+- 두 발목 가운데는 바닥에서 약 15cm 위 (Unity 측정 7~25cm)
+- Unity S1~S3 정답 비교: 위치 오차 평균 15.8cm(박스) → 5.8cm(발목)
 
 엣지 전송 규칙
 - 추론 실패(이미지 누락·손상, 모델 오류) 묶음은 보내지 않는다
 - track_id가 아직 없는 탐지(처음 잡힌 순간)는 뺀다
-- bbox는 이미지 범위로 자르고, 1px 미만 박스는 뺀다
+- bbox, foot은 이미지 범위로 자르고, 1px 미만 박스는 뺀다
+- 서버가 받는 클래스만 보낸다 (모르는 클래스가 하나라도 있으면 묶음 전체가 422)
 - 같은 `(session_id, pair_id)`를 다시 보내면 409
 
 ```json
@@ -117,18 +126,22 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
   "pair_id": 3,
   "frames": [
     {"camera_id": "cam1", "frame_id": 3, "ts": 1790900000300, "image_size": [1920, 1080],
-     "detections": [{"track_id": 1, "cls": "person", "conf": 0.93, "bbox": [807.0, 47.0, 1026.0, 688.0]}]},
+     "detections": [{"track_id": 1, "cls": "person", "conf": 0.93, "bbox": [807.0, 47.0, 1026.0, 688.0],
+                     "foot": [921.5, 676.0], "foot_src": "ankle"}]},
     {"camera_id": "cam2", "frame_id": 3, "ts": 1790900000300, "image_size": [1920, 1080],
-     "detections": [{"track_id": 1, "cls": "person", "conf": 0.57, "bbox": [372.0, 10.0, 452.0, 331.0]}]}
+     "detections": [{"track_id": 1, "cls": "person", "conf": 0.57, "bbox": [372.0, 10.0, 452.0, 331.0],
+                     "foot": [412.0, 331.0], "foot_src": "box"}]}
   ]
 }
 ```
 
 서버가 할 일 (참고)
-- 발 위치 = bbox 아래 가운데 `((x1+x2)/2, y2)`, `K`·`dist`로 왜곡 보정
-- 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 헝가리안 매칭
-- 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 5px에서는 실제 탐지가 매칭되지 않음 (샘플 11~22px). 우선 30px로 테스트하고 S2(2명) 데이터로 적정값을 정한다
-- 짝지은 쌍을 삼각측량 (샘플 기준 바닥 오차 약 20cm)
+- 발 위치 = `foot`이 있으면 그 점, 없으면 bbox 아래 가운데 `((x1+x2)/2, y2)`. `K`·`dist`로 왜곡 보정
+- 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 높이(z) 검사 + 헝가리안 매칭
+- 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 30px, 높이 검사와 함께 50px 제안
+- 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -20~20cm, 발목: -10~40cm 제안)
+  - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
+- 짝지은 쌍을 삼각측량
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 
@@ -167,5 +180,8 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | GT 전송 주체 | ✅ 엣지 (Unity 원본 값을 엣지가 변환) |
 | Unity 캘리브레이션 등록 | ✅ 엣지가 run마다 등록 (`--calib auto`) |
 | 실제 카메라 캘리브레이션 등록 | ✅ 백엔드 (ChArUco·ArUco) |
-| 에피폴라 매칭 기준 | ⏳ 우선 30px, S2 데이터로 확정 |
-| 사람 정답 bbox | ⏳ 실제 몸보다 크게 나옴 → Unity에서 메시 꼭짓점 기준으로 수정 요청 |
+| 사람 정답 bbox | ✅ Unity에서 메시 꼭짓점 기준으로 수정 |
+| 엣지 탐지 모델 | ✅ COCO 원본 (사람 64 → 97%, 의자 오차 85 → 4cm) |
+| 발 위치 `foot` | ⏳ 엣지 전송 구현, 서버 지원 요청 중 |
+| 에피폴라 기준 + 높이 검사 | ⏳ 50px + z 범위 검사 제안, 서버 반영 요청 중 |
+| `suitcase`, `backpack` 클래스 | ⏳ 서버 `ObjectClass` 추가 요청 예정 |

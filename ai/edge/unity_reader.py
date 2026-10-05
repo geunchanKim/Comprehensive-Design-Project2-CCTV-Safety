@@ -13,6 +13,9 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   - 탐지 0개면 detections: [] 로 보낸다
   - track_id가 아직 없는 탐지는 뺀다 (서버는 0 이상 정수만 받음)
   - bbox는 이미지 안으로 자르고, 폭·높이가 0인 박스는 뺀다
+  - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot box: 박스 아래 가운데, ankle: 두 발목 가운데)
+    foot도 이미지 안으로 자른다. 서버가 foot을 지원하기 전에는 서버가 무시한다
+  - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표의 다른 클래스(예: backpack)는 빼고 보낸다
   - 정답 좌표는 Unity (x, y, z) → 월드 (x, z, y) 로 바꿔서 보낸다
   - 캘리브레이션은 session_id별로 관리되므로, 탐지를 보내기 전에 이번 session_id로
     cam1·cam2 캘리브레이션을 먼저 등록한다 (PUT /cameras/{camera_id}/calibration)
@@ -26,9 +29,9 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   failed.jsonl(상태 코드 + 응답), vis/
 
 실행 (ai/ 폴더에서)
-  python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --dry-run
-  python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --server http://121.182.60.2:32130
-  python edge/unity_reader.py runs/unity_runs/fake-classroom-01 --server http://121.182.60.2:32130 --only gt
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --dry-run
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130 --only gt
 """
 
 import argparse
@@ -39,12 +42,14 @@ from pathlib import Path
 
 import cv2
 
-from detector import AI_DIR, Detector, draw
+from detector import AI_DIR, Detector, draw, parse_class_conf, parse_classes
 from server_client import ServerClient
 from unity_calibration import load_calibrations
 
 CAMERAS = ("cam1", "cam2")
 OUT_ROOT = AI_DIR / "runs" / "edge"
+# 서버(ObjectClass)가 받는 클래스. 서버가 suitcase, backpack을 추가하면 여기에도 추가한다
+SERVER_CLASSES = {"person", "chair", "cart", "desk"}
 
 
 def unity_to_world(p):
@@ -75,13 +80,19 @@ def clean_detections(dets: list[dict], width: int, height: int) -> tuple[list[di
         if x2 - x1 < 1 or y2 - y1 < 1:
             removed += 1
             continue
-        kept.append({**d, "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]})
+        item = {**d, "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]}
+        if d.get("foot"):
+            fx, fy = d["foot"]
+            item["foot"] = [round(max(0.0, min(fx, float(width))), 1), round(max(0.0, min(fy, float(height))), 1)]
+        kept.append(item)
     return kept, removed
 
 
 def build_ground_truth(session_id: str, row: dict) -> dict:
     objects = []
     for o in row.get("objects", []):
+        if o["cls"] not in SERVER_CLASSES:          # 서버가 모르는 클래스를 보내면 묶음 전체가 422
+            continue
         item = {"object_id": o["object_id"], "cls": o["cls"], "world": unity_to_world(o["world"])}
         if o.get("bbox"):
             item["bbox"] = o["bbox"]
@@ -124,8 +135,12 @@ def main():
     parser.add_argument("--run", type=int, default=None, help="run 번호 직접 지정 (기본: 자동 증가)")
     parser.add_argument("--calib", default="auto",
                         help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
-    parser.add_argument("--model", choices=["v2", "ensemble"], default="v2")
+    parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
+    parser.add_argument("--classes", default=None, help="보낼 클래스. 예: person,chair (기본: 모델별 기본값)")
+    parser.add_argument("--foot", choices=["box", "ankle"], default="box", help="발 위치: 박스 아래 / 두 발목 가운데")
+    parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
+    parser.add_argument("--imgsz", type=int, default=640, help="모델 입력 크기 (640 기본, 1280이면 작은 물체에 유리하지만 느림)")
     parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
     parser.add_argument("--save-every", type=int, default=0, help="N프레임마다 박스 그린 이미지 저장 (0 = 안 함)")
     args = parser.parse_args()
@@ -151,9 +166,14 @@ def main():
     send_det = args.only in ("all", "detections")
     send_gt = args.only in ("all", "gt")
 
-    detectors = {cam: Detector(model=args.model, conf=args.conf) for cam in CAMERAS} if send_det else {}
+    classes = parse_classes(args.classes)
+    unsupported = set(classes or ()) - SERVER_CLASSES
+    if unsupported:
+        raise SystemExit(f"서버가 아직 받지 않는 클래스예요: {unsupported}. 서버 지원 후 SERVER_CLASSES에 추가하세요")
+    detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf),
+                               classes=classes, foot=args.foot) for cam in CAMERAS} if send_det else {}
     mode = "dry-run" if args.dry_run else args.server
-    print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode}")
+    print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode} | 모델 {args.model}, 발 위치 {args.foot}")
 
     # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록
     if send_det and args.calib != "none":

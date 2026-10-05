@@ -1,0 +1,65 @@
+# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드를 자동 배포한다.
+# 배포는 실습 서버에 설치한 self-hosted runner(cctv-server)가 직접 실행한다.
+# 보안: 이 워크플로는 PR에서 실행되지 않는다 (외부 코드가 서버에서 돌지 않도록).
+name: Deploy
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:            # Actions 탭에서 손으로 다시 배포
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false     # 배포는 겹치지 않게 차례로
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - name: 백엔드 테스트
+        env:
+          DATABASE_URL: sqlite:///./test_cctv.db
+        run: python -m pytest backend/tests -q
+
+  deploy:
+    needs: test                       # 테스트가 통과해야 배포
+    runs-on: [self-hosted, cctv-server]
+    timeout-minutes: 15
+    env:
+      SHA: ${{ github.sha }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      HEALTH_URL: http://127.0.0.1:32130/health
+    steps:
+      - name: 서버 레포를 배포 커밋으로 맞추기
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          git fetch origin develop
+          git checkout -B develop origin/develop
+          git reset --hard "$SHA"
+          echo "APP_COMMIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "배포 커밋: $(git rev-parse --short HEAD)"
+
+      - name: 백엔드 재빌드·재시작
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH/infra"
+          docker compose up -d --build backend
+
+      - name: 서버 응답 확인
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS "$HEALTH_URL"; then echo; echo "배포 성공"; exit 0; fi
+            echo "대기 중... ($i/12)"; sleep 5
+          done
+          echo "1분 동안 /health 응답 없음"
+          docker compose -f "$DEPLOY_PATH/infra/docker-compose.yaml" logs --tail 50 backend
+          exit 1
