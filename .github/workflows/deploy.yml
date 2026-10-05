@@ -38,13 +38,12 @@ jobs:
       - name: SSH 키 준비
         env:
           KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          PORT: ${{ secrets.DEPLOY_PORT }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "$PORT" "$HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
 
       - name: 서버에 배포
         env:
@@ -53,8 +52,7 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$PORT" "$USER@$HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' SHA='$SHA' bash -s" <<'REMOTE'
+          cat > remote.sh <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
           git fetch origin develop
@@ -65,6 +63,19 @@ jobs:
           cd infra
           docker compose up -d --build backend
           REMOTE
+
+          # 접속 실패(코드 255)만 다시 시도, 배포 명령 실패는 바로 실패 처리
+          for i in 1 2 3; do
+            set +e
+            ssh -i ~/.ssh/deploy_key -p "$PORT" -o ConnectTimeout=20 -o ServerAliveInterval=15 \
+              "$USER@$HOST" "DEPLOY_PATH='$DEPLOY_PATH' SHA='$SHA' bash -s" < remote.sh
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then exit 0; fi
+            if [ "$code" -ne 255 ]; then echo "배포 명령 실패 (코드 $code)"; exit "$code"; fi
+            echo "서버 접속 실패, 10초 뒤 다시 시도 ($i/3)"; sleep 10
+          done
+          echo "서버에 3번 모두 접속하지 못함"; exit 1
 
       - name: 서버 응답 확인
         run: |
