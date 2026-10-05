@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
+FootSource = Literal["ankle", "box"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 
 
@@ -32,6 +33,8 @@ class DetectionIn(BaseModel):
     cls: ObjectClass
     conf: float = Field(ge=0, le=1)
     bbox: tuple[float, float, float, float]
+    foot: tuple[float, float] | None = None
+    foot_src: FootSource | None = None
 
     @field_validator("bbox")
     @classmethod
@@ -56,6 +59,9 @@ class CameraFrameIn(BaseModel):
             raise ValueError("image_size must contain positive values")
         if any(d.bbox[2] > width or d.bbox[3] > height for d in self.detections):
             raise ValueError("bbox lies outside image_size")
+        if any(d.foot is not None and not (0 <= d.foot[0] < width and 0 <= d.foot[1] < height)
+               for d in self.detections):
+            raise ValueError("foot lies outside image_size")
         return self
 
 
@@ -87,6 +93,7 @@ class ObservationResult(BaseModel):
     bbox: tuple[float, float, float, float]
     image_size: tuple[int, int]
     foot_pixel: tuple[float, float]
+    foot_src: FootSource
 
 
 class DetectionResult(BaseModel):

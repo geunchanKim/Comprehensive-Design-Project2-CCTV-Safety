@@ -1,4 +1,5 @@
 import os
+from typing import get_args
 
 import cv2
 import numpy as np
@@ -12,17 +13,31 @@ try:
     from .geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
     from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
-                          GroundTruthIn, GroundTruthOut)
+                          GroundTruthIn, GroundTruthOut, ObjectClass)
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
     from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
-                         GroundTruthIn, GroundTruthOut)
+                         GroundTruthIn, GroundTruthOut, ObjectClass)
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
 MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "50"))
+BOX_FOOT_Z_MIN = float(os.getenv("BOX_FOOT_Z_MIN", "-0.2"))
+BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
+ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
+ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
+OBJECT_CLASSES = get_args(ObjectClass)
+
+
+def _height_bounds(*foot_sources: str) -> tuple[float, float]:
+    bounds = {
+        "box": (BOX_FOOT_Z_MIN, BOX_FOOT_Z_MAX),
+        "ankle": (ANKLE_FOOT_Z_MIN, ANKLE_FOOT_Z_MAX),
+    }
+    selected = [bounds[source] for source in foot_sources]
+    return min(bound[0] for bound in selected), max(bound[1] for bound in selected)
 
 
 def _calibration(camera: Camera) -> Calibration:
@@ -122,27 +137,41 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     for frame, calibration in zip(frames, calibrations):
         records[frame.camera_id], normalized[frame.camera_id] = [], []
         for item in frame.detections:
-            foot = foot_point(item.bbox)
+            foot = item.foot if item.foot is not None else foot_point(item.bbox)
+            foot_source = (item.foot_src or "box") if item.foot is not None else "box"
             record = Detection(bundle_id=bundle.id, session_id=body.session_id,
                                camera_id=frame.camera_id, frame_id=frame.frame_id,
                                captured_at_ms=frame.ts, track_id=item.track_id, cls=item.cls,
-                               confidence=round(item.conf, 3), bbox=list(item.bbox), foot_pixel=list(foot))
+                               confidence=round(item.conf, 3), bbox=list(item.bbox),
+                               foot_pixel=list(foot), foot_src=foot_source)
             db.add(record)
-            records[frame.camera_id].append((item, record, foot))
+            records[frame.camera_id].append((item, record, foot, foot_source))
             normalized[frame.camera_id].append(undistort(foot, calibration))
 
     matches, used = [], [set(), set()]
-    for object_class in ("person", "chair", "cart", "desk", "suitcase", "backpack"):
+    for object_class in OBJECT_CLASSES:
         indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class] for frame in frames]
         points = [[normalized[frame.camera_id][i] for i in indexes[n]] for n, frame in enumerate(frames)]
-        for local1, local2, error in match_class(points[0], points[1], essential, pixel_scale, MAX_EPIPOLAR_ERROR_PX):
+        candidate_worlds = {}
+
+        def valid_height(local1, local2):
             i, j = indexes[0][local1], indexes[1][local2]
-            item1, record1, foot1 = records[frames[0].camera_id][i]
-            item2, record2, foot2 = records[frames[1].camera_id][j]
+            source1 = records[frames[0].camera_id][i][3]
+            source2 = records[frames[1].camera_id][j][3]
             try:
-                world = triangulate(normalized[frames[0].camera_id][i], normalized[frames[1].camera_id][j], *calibrations)
-            except ValueError as exc:
-                raise HTTPException(422, str(exc)) from exc
+                world = triangulate(points[0][local1], points[1][local2], *calibrations)
+            except ValueError:
+                return False
+            candidate_worlds[(local1, local2)] = world
+            z_min, z_max = _height_bounds(source1, source2)
+            return z_min <= world[2] <= z_max
+
+        for local1, local2, error in match_class(points[0], points[1], essential, pixel_scale,
+                                                  MAX_EPIPOLAR_ERROR_PX, valid_height):
+            i, j = indexes[0][local1], indexes[1][local2]
+            item1, record1, foot1, source1 = records[frames[0].camera_id][i]
+            item2, record2, foot2, source2 = records[frames[1].camera_id][j]
+            world = candidate_worlds[(local1, local2)]
             object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class)
             for record in (record1, record2):
@@ -155,10 +184,12 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                             "observations": [
                                 {"camera_id": frames[0].camera_id, "frame_id": frames[0].frame_id, "ts": frames[0].ts,
                                  "track_id": item1.track_id, "cls": item1.cls, "conf": round(item1.conf, 3),
-                                 "bbox": item1.bbox, "image_size": frames[0].image_size, "foot_pixel": foot1},
+                                 "bbox": item1.bbox, "image_size": frames[0].image_size,
+                                 "foot_pixel": foot1, "foot_src": source1},
                                 {"camera_id": frames[1].camera_id, "frame_id": frames[1].frame_id, "ts": frames[1].ts,
                                  "track_id": item2.track_id, "cls": item2.cls, "conf": round(item2.conf, 3),
-                                 "bbox": item2.bbox, "image_size": frames[1].image_size, "foot_pixel": foot2},
+                                 "bbox": item2.bbox, "image_size": frames[1].image_size,
+                                 "foot_pixel": foot2, "foot_src": source2},
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
                             "epipolar_error_px": round(error, 3)})

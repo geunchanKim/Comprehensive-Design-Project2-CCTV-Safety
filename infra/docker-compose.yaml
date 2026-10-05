@@ -38,6 +38,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       APP_COMMIT_SHA: ${APP_COMMIT_SHA:-unknown}
       MAX_EPIPOLAR_ERROR_PX: ${MAX_EPIPOLAR_ERROR_PX:-50}
+      BOX_FOOT_Z_MIN: ${BOX_FOOT_Z_MIN:--0.2}
+      BOX_FOOT_Z_MAX: ${BOX_FOOT_Z_MAX:-0.2}
+      ANKLE_FOOT_Z_MIN: ${ANKLE_FOOT_Z_MIN:--0.1}
+      ANKLE_FOOT_Z_MAX: ${ANKLE_FOOT_Z_MAX:-0.4}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:

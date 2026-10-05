@@ -33,3 +33,17 @@ def test_epipolar_matching_rejects_wrong_row():
                           [np.array([-0.1, 0.0]), np.array([-0.1, 0.1])],
                           essential, pixel_scale=1000, max_error_px=5)
     assert matches == [(0, 0, 0.0)]
+
+
+def test_epipolar_matching_excludes_pair_rejected_by_height():
+    left, right = calibration([0, 0, 0]), calibration([-1, 0, 0])
+    essential = fundamental_matrix(left, right)
+    matches = match_class(
+        [np.array([0.0, 0.0])],
+        [np.array([-0.1, 0.0])],
+        essential,
+        pixel_scale=1000,
+        max_error_px=50,
+        pair_is_valid=lambda _row, _col: False,
+    )
+    assert matches == []

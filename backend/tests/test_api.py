@@ -1,4 +1,5 @@
 import os
+from math import pi
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_cctv.db")
 os.environ.setdefault("APP_COMMIT_SHA", "test-commit")
@@ -6,8 +7,11 @@ os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "50")
 
 from fastapi.testclient import TestClient
 
-from backend.database import Base, engine
+from sqlalchemy import select
+
+from backend.database import Base, SessionLocal, engine
 from backend.main import app
+from backend.models import Detection
 
 
 def setup_module():
@@ -27,7 +31,7 @@ def put_camera(camera_id, tvec, session_id=SESSION):
         "image_size": [1920, 1080],
         "K": K,
         "dist": [0, 0, 0, 0, 0],
-        "rvec": [0, 0, 0],
+        "rvec": [pi / 2, 0, 0],
         "tvec": tvec,
         "reproj_error_px": 0,
     })
@@ -67,7 +71,67 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     assert result["matches"][0]["object_id"] == 1
     assert result["matches"][0]["observations"][0]["conf"] == 0.988
     assert result["matches"][0]["observations"][0]["foot_pixel"] == [960.0, 540.0]
-    assert abs(result["matches"][0]["world"]["z"] - 10) < 0.01
+    assert result["matches"][0]["observations"][0]["foot_src"] == "box"
+    assert abs(result["matches"][0]["world"]["y"] - 10) < 0.01
+    assert abs(result["matches"][0]["world"]["z"]) < 0.01
+
+
+def test_uses_and_stores_explicit_ankle_foot():
+    session_id = "ankle-foot"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=20, session_id=session_id)
+    payload["frames"][0]["detections"][0].update(foot=[960, 510], foot_src="ankle")
+    payload["frames"][1]["detections"][0].update(foot=[860, 510], foot_src="ankle")
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    match = response.json()["matches"][0]
+    assert abs(match["world"]["z"] - 0.3) < 0.01
+    assert all(item["foot_src"] == "ankle" for item in match["observations"])
+    with SessionLocal() as db:
+        stored = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
+    assert {row.foot_src for row in stored} == {"ankle"}
+    assert {tuple(row.foot_pixel) for row in stored} == {(960, 510), (860, 510)}
+
+
+def test_height_filter_rejects_box_pair_above_range():
+    session_id = "box-too-high"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=21, session_id=session_id)
+    payload["frames"][0]["detections"][0].update(foot=[960, 510], foot_src="box")
+    payload["frames"][1]["detections"][0].update(foot=[860, 510], foot_src="box")
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["matches"] == []
+    assert response.json()["unmatched"] == {"cam1": [7], "cam2": [9]}
+
+
+def test_rejects_foot_outside_image():
+    payload = detection_payload(pair_id=22, session_id="foot-outside")
+    payload["frames"][0]["detections"][0]["foot"] = [1920, 540]
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_ignores_foot_source_when_foot_is_omitted():
+    session_id = "source-without-foot"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=23, session_id=session_id)
+    for frame in payload["frames"]:
+        frame["detections"][0]["foot_src"] = "ankle"
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    assert all(item["foot_src"] == "box" for item in response.json()["matches"][0]["observations"])
 
 
 def test_accepts_suitcase_and_backpack_classes():
