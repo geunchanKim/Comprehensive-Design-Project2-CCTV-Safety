@@ -62,7 +62,7 @@ def match(gts, dets, thr):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("folder", help="Unity 폴더 (cam1/, cam2/, frames.jsonl)")
-    parser.add_argument("--model", choices=["v2", "coco", "ensemble"], default="v2")
+    parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
     parser.add_argument("--imgsz", type=int, default=640)
