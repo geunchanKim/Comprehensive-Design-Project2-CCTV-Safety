@@ -1,12 +1,14 @@
+import os
+
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 try:
-    from .api import router
+    from .api import MAX_EPIPOLAR_ERROR_PX, router
     from .database import get_db
 except ImportError:  # Docker runs this directory as the import root.
-    from api import router
+    from api import MAX_EPIPOLAR_ERROR_PX, router
     from database import get_db
 
 app = FastAPI(title="CCTV Safety Monitor API")
@@ -16,7 +18,11 @@ app.include_router(router)
 @app.get("/health")
 def health_check():
     """서버 자체가 살아있는지 확인"""
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
+        "max_epipolar_error_px": MAX_EPIPOLAR_ERROR_PX,
+    }
 
 
 @app.get("/health/db")

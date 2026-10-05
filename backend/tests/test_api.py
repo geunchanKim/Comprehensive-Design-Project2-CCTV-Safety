@@ -1,6 +1,8 @@
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_cctv.db")
+os.environ.setdefault("APP_COMMIT_SHA", "test-commit")
+os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "30")
 
 from fastapi.testclient import TestClient
 
@@ -41,6 +43,16 @@ def detection_payload(pair_id=1, session_id=SESSION, ts2=1020):
          "detections": [{"track_id": 9, "cls": "person", "conf": 0.9,
                          "bbox": [850, 400, 870, 540]}]},
     ]}
+
+
+def test_health_exposes_deployment_settings():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "commit": "test-commit",
+        "max_epipolar_error_px": 30.0,
+    }
 
 
 def test_detection_bundle_returns_world_coordinate_and_contract_ids():
