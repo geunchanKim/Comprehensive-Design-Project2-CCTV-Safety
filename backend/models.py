@@ -131,6 +131,14 @@ class RiskEvent(Base):
     level: Mapped[str] = mapped_column(String(16))
 
 
+class SessionSettings(Base):
+    __tablename__ = "session_settings"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    settings: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class GroundTruth(Base):
     __tablename__ = "ground_truth"
     __table_args__ = (UniqueConstraint("session_id", "frame"),)

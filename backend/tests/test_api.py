@@ -251,6 +251,23 @@ def test_track_pair_hold_persists_across_frames(monkeypatch):
     assert states[0].last_pair_id == 41
 
 
+def test_session_rejects_changed_experiment_settings(monkeypatch):
+    session_id = "immutable-settings"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    first = client.post("/detections", json=detection_payload(pair_id=50, session_id=session_id))
+    assert first.status_code == 201, first.text
+    assert first.json()["settings"]["matching_method"] == "epipolar"
+
+    monkeypatch.setattr(api_module, "MATCHING_METHOD", "ground-plane")
+    payload = detection_payload(pair_id=51, session_id=session_id, ts2=2020)
+    payload["frames"][0]["ts"] = 2000
+    changed = client.post("/detections", json=payload)
+
+    assert changed.status_code == 409
+    assert "different experiment settings" in changed.json()["detail"]
+
+
 def test_rejects_duplicate_pair_in_same_session():
     assert client.post("/detections", json=detection_payload()).status_code == 409
 

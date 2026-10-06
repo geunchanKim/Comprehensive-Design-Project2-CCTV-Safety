@@ -16,6 +16,7 @@ try:
                            symmetric_epipolar_distance, triangulate, undistort)
     from .models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
                          ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
+    from .models import SessionSettings
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
     from .tracking import (KalmanState, PairHysteresis, initialize_kalman,
@@ -28,6 +29,7 @@ except ImportError:  # Docker runs this directory as the import root.
                           symmetric_epipolar_distance, triangulate, undistort)
     from models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
                         ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
+    from models import SessionSettings
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
     from tracking import (KalmanState, PairHysteresis, initialize_kalman,
@@ -97,6 +99,21 @@ def _filter_motion(db: Session, session_id: str, object_id: int, world, timestam
     return state.mean[:3], state.mean[3:]
 
 
+def _experiment_settings():
+    return {
+        "matching_method": MATCHING_METHOD,
+        "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
+        "bbox_position_method": BBOX_POSITION_METHOD,
+        "kalman_filter": ENABLE_KALMAN_FILTER,
+        "track_pair_hold": ENABLE_TRACK_PAIR_HOLD,
+        "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
+        "track_pair_improvement_ratio": TRACK_PAIR_IMPROVEMENT_RATIO,
+        "risk_analysis": ENABLE_RISK_ANALYSIS,
+        "warning_distance_m": WARNING_DISTANCE_M,
+        "danger_distance_m": DANGER_DISTANCE_M,
+    }
+
+
 @router.put("/cameras/{camera_id}/calibration", response_model=CameraCalibrationIn)
 def upsert_camera_calibration(camera_id: str, body: CameraCalibrationIn, db: Session = Depends(get_db)):
     rotation_matrix, _ = cv2.Rodrigues(np.asarray(body.rvec, dtype=float))
@@ -155,6 +172,12 @@ def _object_id(db: Session, session_id, camera1, track1, camera2, track2, cls: s
 @router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
 def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
+    settings = _experiment_settings()
+    stored_settings = db.get(SessionSettings, body.session_id)
+    if stored_settings is None:
+        db.add(SessionSettings(session_id=body.session_id, settings=settings))
+    elif stored_settings.settings != settings:
+        raise HTTPException(409, "session was already processed with different experiment settings")
     duplicate = db.scalar(select(FrameBundle.id).where(
         FrameBundle.session_id == body.session_id,
         FrameBundle.pair_id == body.pair_id,
@@ -425,7 +448,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
     return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
-            "sync_delta_ms": sync_delta, "matches": matches, "unmatched": unmatched, "risks": risks}
+            "sync_delta_ms": sync_delta, "matches": matches, "unmatched": unmatched,
+            "risks": risks, "settings": settings}
 
 
 @router.post("/ground-truth", response_model=GroundTruthOut, status_code=status.HTTP_201_CREATED)

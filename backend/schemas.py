@@ -127,6 +127,7 @@ class DetectionBundleOut(BaseModel):
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]
     risks: list[RiskResult] = Field(default_factory=list)
+    settings: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
 class GroundTruthObjectIn(BaseModel):
