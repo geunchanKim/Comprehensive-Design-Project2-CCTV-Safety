@@ -10,13 +10,15 @@ from sqlalchemy.orm import Session
 
 try:
     from .database import get_db
-    from .geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
+    from .geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
+                           in_front_of_both, match_class, position_on_plane, triangulate, undistort)
     from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
-    from geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
+    from geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
+                          in_front_of_both, match_class, position_on_plane, triangulate, undistort)
     from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
@@ -149,34 +151,86 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             normalized[frame.camera_id].append(undistort(foot, calibration))
 
     matches, used = [], [set(), set()]
-    for object_class in OBJECT_CLASSES:
-        indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class] for frame in frames]
-        points = [[normalized[frame.camera_id][i] for i in indexes[n]] for n, frame in enumerate(frames)]
-        candidate_worlds = {}
 
-        def valid_height(local1, local2):
-            i, j = indexes[0][local1], indexes[1][local2]
-            source1 = records[frames[0].camera_id][i][3]
-            source2 = records[frames[1].camera_id][j][3]
+    def match_stage(object_class, indexes, forced_source=None):
+        points = [[normalized[frame.camera_id][i] for i in indexes[n]] for n, frame in enumerate(frames)]
+        candidate_worlds, candidate_points, candidate_pixels = {}, {}, {}
+
+        def source(n, local):
+            if forced_source is not None:
+                return forced_source
+            return records[frames[n].camera_id][indexes[n][local]][3]
+
+        def points_for_pair(local1, local2):
+            key = (local1, local2)
+            if key in candidate_points:
+                return candidate_points[key]
+            pair = (points[0][local1], points[1][local2])
+            if source(0, local1) == source(1, local2) == "box":
+                i, j = indexes[0][local1], indexes[1][local2]
+                item1 = records[frames[0].camera_id][i][0]
+                item2 = records[frames[1].camera_id][j][0]
+                pixels = (foot_point(item1.bbox), foot_point(item2.bbox))
+                pair = tuple(undistort(pixel, calibration)
+                             for pixel, calibration in zip(pixels, calibrations))
+                try:
+                    rough_world = triangulate(*pair, *calibrations)
+                    depths = [float((c.R @ rough_world + c.t.reshape(3))[2]) for c in calibrations]
+                    pixels = (
+                        complete_box_foot(item1.bbox, frames[0].image_size[0], item2.bbox,
+                                          depths[0], depths[1]),
+                        complete_box_foot(item2.bbox, frames[1].image_size[0], item1.bbox,
+                                          depths[1], depths[0]),
+                    )
+                    pair = tuple(undistort(pixel, calibration)
+                                 for pixel, calibration in zip(pixels, calibrations))
+                except ValueError:
+                    pass
+                candidate_pixels[key] = pixels
+            else:
+                candidate_pixels[key] = (records[frames[0].camera_id][indexes[0][local1]][0].foot,
+                                         records[frames[1].camera_id][indexes[1][local2]][0].foot)
+            candidate_points[key] = pair
+            return pair
+
+        def valid_candidate(local1, local2):
+            point1, point2 = points_for_pair(local1, local2)
             try:
-                world = triangulate(points[0][local1], points[1][local2], *calibrations)
+                world = triangulate(point1, point2, *calibrations)
             except ValueError:
                 return False
+            if not in_front_of_both(world, *calibrations):
+                return False
             candidate_worlds[(local1, local2)] = world
-            z_min, z_max = _height_bounds(source1, source2)
+            z_min, z_max = _height_bounds(source(0, local1), source(1, local2))
             return z_min <= world[2] <= z_max
 
-        for local1, local2, error in match_class(points[0], points[1], essential, pixel_scale,
-                                                  MAX_EPIPOLAR_ERROR_PX, valid_height):
+        stage_matches = match_class(points[0], points[1], essential, pixel_scale,
+                                    MAX_EPIPOLAR_ERROR_PX, valid_candidate, points_for_pair)
+        for local1, local2, error in stage_matches:
             i, j = indexes[0][local1], indexes[1][local2]
-            item1, record1, foot1, source1 = records[frames[0].camera_id][i]
-            item2, record2, foot2, source2 = records[frames[1].camera_id][j]
-            world = candidate_worlds[(local1, local2)]
+            item1, record1, _, _ = records[frames[0].camera_id][i]
+            item2, record2, _, _ = records[frames[1].camera_id][j]
+            source1, source2 = source(0, local1), source(1, local2)
+            normalized_pair = points_for_pair(local1, local2)
+            foot1, foot2 = candidate_pixels[(local1, local2)]
+            plane_z = 0.1 if source1 == source2 == "ankle" else 0.0
+            try:
+                positions = [position_on_plane(point, calibration, plane_z)
+                             for point, calibration in zip(normalized_pair, calibrations)]
+            except ValueError as exc:
+                if "parallel" not in str(exc):
+                    continue
+                fallback = candidate_worlds[(local1, local2)].copy()
+                fallback[2] = plane_z
+                positions = [fallback, fallback]
+            world = np.mean(positions, axis=0)
             object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class)
-            for record in (record1, record2):
+            for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
                 record.object_id = object_id
                 record.world_x, record.world_y, record.world_z = map(float, world)
+                record.foot_pixel, record.foot_src = list(foot), foot_source
             used[0].add(i); used[1].add(j)
             matches.append({"object_id": object_id, "cls": object_class,
                             "camera_tracks": {frames[0].camera_id: item1.track_id, frames[1].camera_id: item2.track_id},
@@ -193,6 +247,18 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
                             "epipolar_error_px": round(error, 3)})
+
+    for object_class in OBJECT_CLASSES:
+        class_indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class]
+                         for frame in frames]
+        if object_class == "person":
+            ankle_indexes = [[i for i in side if records[frames[n].camera_id][i][3] == "ankle"]
+                              for n, side in enumerate(class_indexes)]
+            match_stage(object_class, ankle_indexes, "ankle")
+            remaining = [[i for i in side if i not in used[n]] for n, side in enumerate(class_indexes)]
+            match_stage(object_class, remaining, "box")
+        else:
+            match_stage(object_class, class_indexes)
     try:
         db.commit()
     except IntegrityError as exc:

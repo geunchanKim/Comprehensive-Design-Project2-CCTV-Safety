@@ -22,6 +22,19 @@ def foot_point(bbox) -> tuple[float, float]:
     return ((x1 + x2) / 2.0, float(y2))
 
 
+def complete_box_foot(bbox, image_width, other_bbox, depth, other_depth) -> tuple[float, float]:
+    """Restore the bottom centre of a horizontally clipped bounding box."""
+    x1, _, x2, y2 = map(float, bbox)
+    if depth <= 0 or other_depth <= 0:
+        raise ValueError("bbox depth must be positive")
+    estimated_width = (float(other_bbox[2]) - float(other_bbox[0])) * other_depth / depth
+    if x1 <= 0 < x2:
+        return (x2 - estimated_width / 2.0, y2)
+    if x1 < image_width <= x2:
+        return (x1 + estimated_width / 2.0, y2)
+    return foot_point(bbox)
+
+
 def undistort(point, calibration: Calibration) -> np.ndarray:
     points = np.asarray(point, dtype=np.float64).reshape(1, 1, 2)
     return cv2.undistortPoints(points, calibration.K, calibration.dist).reshape(2)
@@ -53,10 +66,36 @@ def triangulate(p1, p2, a: Calibration, b: Calibration) -> np.ndarray:
     return (homogeneous[:3, 0] / homogeneous[3, 0]).astype(float)
 
 
-def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0, pair_is_valid=None):
+def in_front_of_both(world, a: Calibration, b: Calibration) -> bool:
+    point = np.asarray(world, dtype=float).reshape(3)
+    return all(float((calibration.R @ point + calibration.t.reshape(3))[2]) > 0 for calibration in (a, b))
+
+
+def position_on_plane(point, calibration: Calibration, plane_z: float) -> np.ndarray:
+    """Intersect an undistorted normalized image ray with a world Z plane."""
+    camera_center = -calibration.R.T @ calibration.t.reshape(3)
+    world_direction = calibration.R.T @ np.array([point[0], point[1], 1.0], dtype=float)
+    if abs(world_direction[2]) < 1e-12:
+        raise ValueError("camera ray is parallel to the requested plane")
+    scale = (float(plane_z) - camera_center[2]) / world_direction[2]
+    if scale <= 0:
+        raise ValueError("plane intersection is behind the camera")
+    world = camera_center + scale * world_direction
+    world[2] = float(plane_z)
+    return world.astype(float)
+
+
+def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0,
+                pair_is_valid=None, pair_points=None):
     if not points1 or not points2:
         return []
-    costs = np.array([[symmetric_epipolar_distance(a, b, essential) * pixel_scale for b in points2] for a in points1])
+    costs = np.empty((len(points1), len(points2)), dtype=float)
+    for row, point1 in enumerate(points1):
+        for col, point2 in enumerate(points2):
+            candidate1, candidate2 = point1, point2
+            if pair_points is not None:
+                candidate1, candidate2 = pair_points(row, col)
+            costs[row, col] = symmetric_epipolar_distance(candidate1, candidate2, essential) * pixel_scale
     invalid_cost = max(float(np.max(costs)), max_error_px) + 1e9
     for row in range(len(points1)):
         for col in range(len(points2)):
