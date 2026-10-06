@@ -13,8 +13,8 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   - 탐지 0개면 detections: [] 로 보낸다
   - track_id가 아직 없는 탐지는 뺀다 (서버는 0 이상 정수만 받음)
   - bbox는 이미지 안으로 자르고, 폭·높이가 0인 박스는 뺀다
-  - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot box: 박스 아래 가운데, ankle: 두 발목 가운데)
-    foot도 이미지 안으로 자른다. 서버가 foot을 지원하기 전에는 서버가 무시한다
+  - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot ankle(기본): 두 발목 가운데, 발목이 안 보이면 박스 아래 가운데
+    / --foot box: 항상 박스 아래 가운데). foot도 이미지 안으로 자른다
   - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표에 그 밖의 클래스가 있으면 빼고 보낸다
   - 정답 좌표는 Unity (x, y, z) → 월드 (x, z, y) 로 바꿔서 보낸다
   - 캘리브레이션은 session_id별로 관리되므로, 탐지를 보내기 전에 이번 session_id로
@@ -137,7 +137,7 @@ def main():
                         help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
     parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
     parser.add_argument("--classes", default=None, help="보낼 클래스. 예: person,chair (기본: 모델별 기본값)")
-    parser.add_argument("--foot", choices=["box", "ankle"], default="box", help="발 위치: 박스 아래 / 두 발목 가운데")
+    parser.add_argument("--foot", choices=["box", "ankle"], default="ankle", help="발 위치: 두 발목 가운데(기본, 안 보이면 박스) / 박스 아래")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
     parser.add_argument("--imgsz", type=int, default=1280, help="모델 입력 크기 (1280 기본. 640이면 빠르지만 작거나 먼 물체를 놓침)")
