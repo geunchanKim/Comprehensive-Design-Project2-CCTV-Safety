@@ -56,6 +56,11 @@ def test_health_exposes_deployment_settings():
         "status": "ok",
         "commit": "test-commit",
         "max_epipolar_error_px": 50.0,
+        "box_foot_z_min": -0.35,
+        "box_foot_z_max": 0.2,
+        "ankle_foot_z_min": -0.1,
+        "ankle_foot_z_max": 0.4,
+        "bbox_position_method": "triangulate",
     }
 
 

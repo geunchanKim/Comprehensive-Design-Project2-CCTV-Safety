@@ -115,8 +115,13 @@ def test_in_front_of_both_cameras():
 
 
 def test_complete_box_foot_restores_clipped_centres_from_depth_ratio():
-    other_box = [100, 20, 140, 180]
+    other_box = [100, 20, 180, 180]
 
-    assert complete_box_foot([0, 20, 30, 180], 200, other_box, depth=10, other_depth=5) == (20, 180.0)
-    assert complete_box_foot([170, 20, 200, 180], 200, other_box, depth=10, other_depth=5) == (180, 180.0)
+    assert complete_box_foot([0, 20, 30, 180], 200, other_box, depth=10, other_depth=5) == (10, 180.0)
+    assert complete_box_foot([170, 20, 200, 180], 200, other_box, depth=10, other_depth=5) == (190, 180.0)
     assert complete_box_foot([50, 20, 90, 180], 200, other_box, depth=10, other_depth=5) == (70, 180.0)
+
+
+def test_complete_box_foot_keeps_visible_centre_when_estimated_width_is_smaller():
+    assert complete_box_foot([0, 20, 30, 180], 200, [100, 20, 120, 180],
+                             depth=10, other_depth=5) == (15, 180.0)
