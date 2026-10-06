@@ -2,10 +2,29 @@
   "name": "s2",
   "source": "runs/edge/unity-classroom-03-s2-run4",
   "gt": "runs/unity/unity-classroom-03-s2",
-  "note": "coco yolo11n, imgsz 1280, foot box, 10/5 실행",
+  "note": "coco yolo11n, imgsz 1280, foot box, backpack conf 0.15",
   "pairs": 300,
   "foot_src": {
     "box": 1766
   },
-  "created": "2026-10-06T11:22:30"
+  "created": "2026-10-06T11:22:30",
+  "edge": {
+    "model": "coco",
+    "imgsz": 1280,
+    "classes": [
+      "person",
+      "chair",
+      "suitcase",
+      "backpack"
+    ],
+    "conf": 0.4,
+    "class_conf": {
+      "person": 0.5,
+      "chair": 0.4,
+      "suitcase": 0.4,
+      "backpack": 0.15
+    },
+    "tracker": "bytetrack.yaml",
+    "foot": "box"
+  }
 }

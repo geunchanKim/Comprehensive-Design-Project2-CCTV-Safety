@@ -25,7 +25,7 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
     등록이 하나라도 실패하면 탐지를 보내지 않고 멈춘다
 
 결과 저장: runs/edge/<session_id>/
-  sent_detections.jsonl, sent_ground-truth.jsonl, sent_calibration.jsonl,
+  edge_config.json(탐지 설정), sent_detections.jsonl, sent_ground-truth.jsonl, sent_calibration.jsonl,
   failed.jsonl(상태 코드 + 응답), vis/
 
 실행 (ai/ 폴더에서)
@@ -173,6 +173,13 @@ def main():
     detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf),
                                classes=classes, foot=args.foot) for cam in CAMERAS} if send_det else {}
     mode = "dry-run" if args.dry_run else args.server
+    if send_det:     # 어떤 엣지 설정으로 탐지했는지 남긴다 (실험 pack·설계도에서 읽음)
+        d = detectors[CAMERAS[0]]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "edge_config.json").write_text(json.dumps({
+            "model": d.model_name, "imgsz": d.imgsz, "foot": d.foot, "classes": list(d.classes),
+            "conf": d.conf, "class_conf": d.class_conf, "tracker": d.tracker,
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode} | 모델 {args.model}, 발 위치 {args.foot}")
 
     # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록

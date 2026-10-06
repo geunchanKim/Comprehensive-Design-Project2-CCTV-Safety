@@ -8,7 +8,7 @@
   - 이미지가 없어도 돌아가므로 연구실 서버의 GitHub runner에서도 자동 실행할 수 있다
 
 pack 구조: ai/eval/packs/<이름>/
-  meta.json               어떤 데이터·엣지 설정으로 만들었는지
+  meta.json               어떤 데이터·엣지 설정("edge": 모델·입력 크기·발 위치·클래스)으로 만들었는지
   calibration.json        cam1, cam2 캘리브레이션 (session_id 없이)
   detections.jsonl.gz     /detections 로 보낼 묶음 (session_id 없이)
   ground_truth.jsonl.gz   /ground-truth 로 보낼 정답 (있을 때만, --send-gt 로 전송)
@@ -28,7 +28,8 @@ pack 구조: ai/eval/packs/<이름>/
 결과: runs/experiments/<label>/  (--out 으로 상위 폴더 변경)
   meta.json      서버 /health(커밋·설정), 사용한 pack, 실행 시각
   summary.csv    pack·클래스별 지표 한 줄씩
-  summary.md     표 (PR 댓글·GitHub 작업 요약에 그대로 붙일 수 있음), --compare 를 주면 전→후 비교
+  summary.md     설계도 + 표 (GitHub 작업 요약에 그대로 붙음), --compare 를 주면 전→후 비교
+  diagram.mmd    파이프라인 설계도 (Mermaid). 직전 실험과 달라진 단계는 노란색
   <pack>/        responses_detections.jsonl, position_errors.csv, failed.jsonl
 """
 
@@ -49,6 +50,7 @@ import requests
 AI_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AI_DIR / "eval"))
 from eval_position import evaluate, summarize  # noqa: E402
+import pipeline_diagram  # noqa: E402
 
 PACK_DIR = AI_DIR / "eval" / "packs"
 EXP_DIR = AI_DIR / "runs" / "experiments"
@@ -120,12 +122,19 @@ def make_pack(args, extra: list[str]):
         write_jsonl(pack / "ground_truth.jsonl.gz", gts)
     write_jsonl(pack / "frames.jsonl.gz", read_jsonl(gt_dir / "frames.jsonl"))
 
+    edge = {}
+    if (run_dir / "edge_config.json").exists():            # unity_reader 가 남긴 탐지 설정
+        edge = json.loads((run_dir / "edge_config.json").read_text(encoding="utf-8"))
+    for item in filter(None, (args.edge or "").split(",")):  # --edge 로 직접 적은 값이 우선
+        k, v = item.split("=", 1)
+        edge[k.strip()] = int(v) if v.strip().isdigit() else v.strip()
+
     foot_src = {}
     for b in dets:
         for f in b["frames"]:
             for d in f["detections"]:
                 foot_src[d.get("foot_src", "box")] = foot_src.get(d.get("foot_src", "box"), 0) + 1
-    meta = {"name": args.name, "source": str(run_dir), "gt": str(gt_dir), "note": note,
+    meta = {"name": args.name, "source": str(run_dir), "gt": str(gt_dir), "note": note, "edge": edge or None,
             "pairs": len(dets), "foot_src": foot_src, "created": datetime.now().isoformat(timespec="seconds")}
     (pack / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     size = sum(p.stat().st_size for p in pack.iterdir()) / 1e6
@@ -275,7 +284,14 @@ def run_experiment(args):
             "compare": str(compare) if compare else None, "created": datetime.now().isoformat(timespec="seconds"), "pack_runs": packs_meta}
     (exp / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     before = load_summary(compare) if compare else None
-    md = summary_markdown(rows, meta, before)
+    before_view = None
+    if compare and (compare / "meta.json").exists():
+        before_meta = json.loads((compare / "meta.json").read_text(encoding="utf-8"))
+        before_view = pipeline_diagram.describe(before_meta, list(before.values()))
+    now_view = pipeline_diagram.describe(meta, rows)
+    (exp / "diagram.mmd").write_text(pipeline_diagram.mermaid(now_view, before_view), encoding="utf-8")
+    md = (pipeline_diagram.markdown(now_view, before_view, health.get("commit", "?"), compare.name if compare else None)
+          + summary_markdown(rows, meta, before))
     (exp / "summary.md").write_text(md, encoding="utf-8")
     print("\n" + md)
     print(f"결과: {exp}")
@@ -293,6 +309,7 @@ def main():
     p.add_argument("--gt", default=None, help="Unity 정답 폴더 (엣지 결과 폴더로 만들 때 필요)")
     p.add_argument("--note", default="", help="엣지 설정 메모. 예: coco 1280, foot box")
     p.add_argument("--force", action="store_true", help="같은 이름 pack 덮어쓰기")
+    p.add_argument("--edge", default=None, help="엣지 설정 직접 지정. 예: model=coco,imgsz=1280,foot=box")
 
     r = sub.add_parser("run", help="pack 들을 서버에 보내고 평가")
     r.add_argument("--server", required=True, help="예: http://121.182.60.2:32130")

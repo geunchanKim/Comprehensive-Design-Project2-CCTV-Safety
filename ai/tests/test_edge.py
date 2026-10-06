@@ -107,3 +107,16 @@ def test_eval_position_compares_server_world_with_ground_truth(tmp_path):
     assert len(rows) == 1 and visible == {"person": 1}
     assert abs(rows[0]["floor_err_cm"] - 10.0) < 0.1
     assert abs(rows[0]["dx_cm"] - 10.0) < 0.1
+
+
+def test_pipeline_diagram_marks_changed_settings():
+    import pipeline_diagram as pd
+    rows = [{"pack": "s1", "cls": "person", "ok": 9, "chance": 10, "mean_cm": 6.0, "mismatch_rate": 0.0}]
+    meta = {"packs": ["s1"], "pack_runs": {"s1": {"edge": {"model": "coco", "imgsz": 1280, "foot": "ankle"}}},
+            "health": {"commit": "a", "max_epipolar_error_px": 50.0, "bbox_position_method": "triangulate"}}
+    before = pd.describe(meta, rows)
+    meta["health"]["bbox_position_method"] = "plane"
+    text = pd.mermaid(pd.describe(meta, rows), before)
+    assert "삼각측량 → <b>바닥 평면 교점</b>" in text
+    assert "class position changed" in text
+    assert "class" not in pd.mermaid(before, before).split("classDef")[1].split("\n", 1)[1]
