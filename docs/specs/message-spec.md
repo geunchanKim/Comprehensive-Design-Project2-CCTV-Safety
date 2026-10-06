@@ -142,7 +142,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 50px
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
-- 짝지은 쌍은 카메라 광선과 기준 평면의 교점을 각각 계산해 평균 (발목 Z=10cm, bbox Z=0cm)
+- 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 

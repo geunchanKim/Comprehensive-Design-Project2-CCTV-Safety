@@ -88,7 +88,7 @@ def test_uses_and_stores_explicit_ankle_foot():
 
     assert response.status_code == 201, response.text
     match = response.json()["matches"][0]
-    assert abs(match["world"]["z"] - 0.1) < 0.01
+    assert abs(match["world"]["z"] - 0.3) < 0.01
     assert all(item["foot_src"] == "ankle" for item in match["observations"])
     with SessionLocal() as db:
         stored = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
