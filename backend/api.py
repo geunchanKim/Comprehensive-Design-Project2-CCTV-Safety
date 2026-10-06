@@ -30,7 +30,11 @@ BOX_FOOT_Z_MIN = float(os.getenv("BOX_FOOT_Z_MIN", "-0.35"))
 BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
 ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
 ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
+BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
 OBJECT_CLASSES = get_args(ObjectClass)
+
+if BBOX_POSITION_METHOD not in {"triangulate", "plane"}:
+    raise ValueError("BBOX_POSITION_METHOD must be 'triangulate' or 'plane'")
 
 
 def _height_bounds(*foot_sources: str) -> tuple[float, float]:
@@ -214,17 +218,16 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             source1, source2 = source(0, local1), source(1, local2)
             normalized_pair = points_for_pair(local1, local2)
             foot1, foot2 = candidate_pixels[(local1, local2)]
-            plane_z = 0.1 if source1 == source2 == "ankle" else 0.0
-            try:
-                positions = [position_on_plane(point, calibration, plane_z)
-                             for point, calibration in zip(normalized_pair, calibrations)]
-            except ValueError as exc:
-                if "parallel" not in str(exc):
-                    continue
-                fallback = candidate_worlds[(local1, local2)].copy()
-                fallback[2] = plane_z
-                positions = [fallback, fallback]
-            world = np.mean(positions, axis=0)
+            world = candidate_worlds[(local1, local2)]
+            if source1 == source2 == "box" and BBOX_POSITION_METHOD == "plane":
+                try:
+                    positions = [position_on_plane(point, calibration, 0.0)
+                                 for point, calibration in zip(normalized_pair, calibrations)]
+                except ValueError as exc:
+                    if "parallel" not in str(exc):
+                        continue
+                    positions = [world, world]
+                world = np.mean(positions, axis=0)
             object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
