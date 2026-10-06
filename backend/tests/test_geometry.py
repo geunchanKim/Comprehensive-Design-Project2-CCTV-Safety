@@ -1,7 +1,8 @@
 import numpy as np
 
 import backend.geometry as geometry
-from backend.geometry import Calibration, foot_point, fundamental_matrix, match_class, triangulate, undistort
+from backend.geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
+                              in_front_of_both, match_class, position_on_plane, triangulate, undistort)
 
 
 def calibration(translation):
@@ -89,3 +90,38 @@ def test_height_check_skips_pair_over_epipolar_threshold(monkeypatch):
 
     assert matches == []
     assert checked_pairs == []
+
+
+def test_position_on_plane_intersects_world_height():
+    camera = Calibration(K=np.eye(3), dist=np.zeros(5), R=np.eye(3), t=np.array([0.0, 0.0, -2.0]))
+
+    world = position_on_plane(np.array([0.25, -0.5]), camera, plane_z=4.0)
+
+    assert np.allclose(world, [0.5, -1.0, 4.0])
+
+
+def test_position_on_plane_rejects_intersection_behind_camera():
+    camera = Calibration(K=np.eye(3), dist=np.zeros(5), R=np.eye(3), t=np.zeros(3))
+
+    with np.testing.assert_raises_regex(ValueError, "behind the camera"):
+        position_on_plane(np.array([0.0, 0.0]), camera, plane_z=-1.0)
+
+
+def test_in_front_of_both_cameras():
+    left, right = calibration([0, 0, 0]), calibration([-1, 0, 0])
+
+    assert in_front_of_both(np.array([0.0, 0.0, 3.0]), left, right)
+    assert not in_front_of_both(np.array([0.0, 0.0, -3.0]), left, right)
+
+
+def test_complete_box_foot_restores_clipped_centres_from_depth_ratio():
+    other_box = [100, 20, 180, 180]
+
+    assert complete_box_foot([0, 20, 30, 180], 200, other_box, depth=10, other_depth=5) == (10, 180.0)
+    assert complete_box_foot([170, 20, 200, 180], 200, other_box, depth=10, other_depth=5) == (190, 180.0)
+    assert complete_box_foot([50, 20, 90, 180], 200, other_box, depth=10, other_depth=5) == (70, 180.0)
+
+
+def test_complete_box_foot_keeps_visible_centre_when_estimated_width_is_smaller():
+    assert complete_box_foot([0, 20, 30, 180], 200, [100, 20, 120, 180],
+                             depth=10, other_depth=5) == (15, 180.0)

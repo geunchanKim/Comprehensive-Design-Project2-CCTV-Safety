@@ -56,6 +56,11 @@ def test_health_exposes_deployment_settings():
         "status": "ok",
         "commit": "test-commit",
         "max_epipolar_error_px": 50.0,
+        "box_foot_z_min": -0.35,
+        "box_foot_z_max": 0.2,
+        "ankle_foot_z_min": -0.1,
+        "ankle_foot_z_max": 0.4,
+        "bbox_position_method": "triangulate",
     }
 
 
@@ -96,13 +101,55 @@ def test_uses_and_stores_explicit_ankle_foot():
     assert {tuple(row.foot_pixel) for row in stored} == {(960, 510), (860, 510)}
 
 
+def test_falls_back_to_box_for_both_cameras_when_only_one_has_ankle():
+    session_id = "mixed-foot-fallback"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=24, session_id=session_id)
+    payload["frames"][0]["detections"][0].update(foot=[960, 510], foot_src="ankle")
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    observations = response.json()["matches"][0]["observations"]
+    assert [item["foot_src"] for item in observations] == ["box", "box"]
+    assert [item["foot_pixel"] for item in observations] == [[960.0, 540.0], [860.0, 540.0]]
+
+
+def test_matches_ankles_first_then_remaining_people_by_box():
+    session_id = "two-stage-person-matching"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=25, session_id=session_id)
+    payload["frames"][0]["detections"] = [
+        {"track_id": 11, "cls": "person", "conf": 0.9, "bbox": [950, 400, 970, 540],
+         "foot": [960, 510], "foot_src": "ankle"},
+        {"track_id": 12, "cls": "person", "conf": 0.9, "bbox": [750, 430, 770, 570]},
+    ]
+    payload["frames"][1]["detections"] = [
+        {"track_id": 21, "cls": "person", "conf": 0.9, "bbox": [850, 400, 870, 540],
+         "foot": [860, 510], "foot_src": "ankle"},
+        {"track_id": 22, "cls": "person", "conf": 0.9, "bbox": [650, 430, 670, 570]},
+    ]
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    matches = {match["camera_tracks"]["cam1"]: match for match in response.json()["matches"]}
+    assert set(matches) == {11, 12}
+    assert matches[11]["camera_tracks"]["cam2"] == 21
+    assert {item["foot_src"] for item in matches[11]["observations"]} == {"ankle"}
+    assert matches[12]["camera_tracks"]["cam2"] == 22
+    assert {item["foot_src"] for item in matches[12]["observations"]} == {"box"}
+
+
 def test_height_filter_rejects_box_pair_above_range():
     session_id = "box-too-high"
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
     payload = detection_payload(pair_id=21, session_id=session_id)
-    payload["frames"][0]["detections"][0].update(foot=[960, 510], foot_src="box")
-    payload["frames"][1]["detections"][0].update(foot=[860, 510], foot_src="box")
+    payload["frames"][0]["detections"][0]["bbox"] = [950, 400, 970, 510]
+    payload["frames"][1]["detections"][0]["bbox"] = [850, 400, 870, 510]
 
     response = client.post("/detections", json=payload)
 

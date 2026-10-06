@@ -66,11 +66,13 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 엣지 추론 자체가 실패한 프레임은 전송하지 않는다. 정상적으로 추론했으나 탐지가 없을 때만 `detections: []`를 전송한다. 따라서 별도의 `analysis_status` 필드는 사용하지 않는다.
 
-서버는 전달받은 `foot` 또는 bbox 하단 중앙을 발 위치로 삼아 카메라별 왜곡을 보정한다. 같은 클래스 후보를 삼각측량하고 높이 범위 밖 후보를 제외한 뒤, 에피폴라 오차를 비용으로 헝가리안 알고리즘을 적용해 1:1 연결한다. 기본 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
+서버는 사람을 두 단계로 연결한다. 먼저 양쪽 카메라에서 모두 발목 좌표가 있는 사람끼리 연결하고, 남은 사람은 양쪽 모두 bbox 하단 중앙으로 다시 계산해 연결한다. 화면 좌우 끝에서 잘린 bbox는 반대 카메라의 bbox 폭과 깊이 비율로 원래 중심을 복원한다. 그 밖의 클래스는 bbox 하단 중앙을 사용한다.
 
-높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.2`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다. 두 카메라의 `foot_src`가 다르면 두 범위의 합집합을 적용한다.
+각 단계는 에피폴라 오차, 삼각측량 높이, 두 카메라 앞쪽 여부를 헝가리안 알고리즘 실행 전에 검사한다. 기본 에피폴라 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
 
-응답의 `matches[].world`가 월드 좌표이며 `observations`에는 두 카메라의 원본 탐지 필드와 계산에 사용한 `foot_pixel`, `foot_src`가 들어간다. `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
+높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
+
+응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. Unity S1~S4 검증에서 발목 삼각측량이 고정 높이 평면보다 정확했으므로 발목 쌍은 항상 삼각측량을 사용한다. bbox 쌍은 `BBOX_POSITION_METHOD=triangulate|plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균한다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
 
 ```json
 {
