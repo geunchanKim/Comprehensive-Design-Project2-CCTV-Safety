@@ -2,11 +2,30 @@
   "name": "s1-ankle",
   "source": "/Users/chan/Comprehensive-Design-Project2-CCTV-Safety/ai/runs/edge/unity-classroom-03-s1-run6",
   "gt": "runs/unity/unity-classroom-03-s1",
-  "note": "unity_reader --dry-run",
+  "note": "coco yolo11n, imgsz 1280, foot ankle",
   "pairs": 300,
   "foot_src": {
     "ankle": 613,
     "box": 610
   },
-  "created": "2026-10-06T20:58:13"
+  "created": "2026-10-06T20:58:13",
+  "edge": {
+    "model": "coco",
+    "imgsz": 1280,
+    "classes": [
+      "person",
+      "chair",
+      "suitcase",
+      "backpack"
+    ],
+    "conf": 0.4,
+    "class_conf": {
+      "person": 0.5,
+      "chair": 0.4,
+      "suitcase": 0.4,
+      "backpack": 0.4
+    },
+    "tracker": "bytetrack.yaml",
+    "foot": "ankle"
+  }
 }
