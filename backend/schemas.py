@@ -110,6 +110,14 @@ class DetectionResult(BaseModel):
     ground_distance_m: float | None = None
 
 
+class RiskResult(BaseModel):
+    object1_id: int
+    object2_id: int
+    distance_m: float
+    ttc_s: float | None
+    level: Literal["safe", "warning", "danger"]
+
+
 class DetectionBundleOut(BaseModel):
     bundle_id: int
     session_id: str
@@ -118,6 +126,7 @@ class DetectionBundleOut(BaseModel):
     status: Literal["processed"] = "processed"
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]
+    risks: list[RiskResult] = Field(default_factory=list)
 
 
 class GroundTruthObjectIn(BaseModel):

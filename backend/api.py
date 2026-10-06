@@ -1,4 +1,5 @@
 import os
+from itertools import combinations
 from typing import get_args
 
 import cv2
@@ -14,22 +15,24 @@ try:
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
                            symmetric_epipolar_distance, triangulate, undistort)
     from .models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
-                         ObjectMotionState, TrackLink, TrackPairState)
+                         ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
     from .tracking import (KalmanState, PairHysteresis, initialize_kalman,
                            update_kalman, update_pair_hysteresis)
+    from .risk import calculate_pair_risk
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
                           symmetric_epipolar_distance, triangulate, undistort)
     from models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
-                        ObjectMotionState, TrackLink, TrackPairState)
+                        ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
     from tracking import (KalmanState, PairHysteresis, initialize_kalman,
                           update_kalman, update_pair_hysteresis)
+    from risk import calculate_pair_risk
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
@@ -45,6 +48,9 @@ ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "false").lower() in {"1
 ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "false").lower() in {"1", "true", "yes"}
 TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
 TRACK_PAIR_IMPROVEMENT_RATIO = float(os.getenv("TRACK_PAIR_IMPROVEMENT_RATIO", "0.9"))
+ENABLE_RISK_ANALYSIS = os.getenv("ENABLE_RISK_ANALYSIS", "false").lower() in {"1", "true", "yes"}
+WARNING_DISTANCE_M = float(os.getenv("WARNING_DISTANCE_M", "1.0"))
+DANGER_DISTANCE_M = float(os.getenv("DANGER_DISTANCE_M", "0.5"))
 OBJECT_CLASSES = get_args(ObjectClass)
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
@@ -394,6 +400,23 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             match_stage(object_class, remaining, "box")
         else:
             match_stage(object_class, class_indexes)
+    risks = []
+    if ENABLE_RISK_ANALYSIS:
+        for first, second in combinations(matches, 2):
+            position1 = [first["world"][axis] for axis in ("x", "y", "z")]
+            position2 = [second["world"][axis] for axis in ("x", "y", "z")]
+            velocity1 = ([first["velocity"][axis] for axis in ("x", "y", "z")]
+                         if first.get("velocity") else [0.0, 0.0, 0.0])
+            velocity2 = ([second["velocity"][axis] for axis in ("x", "y", "z")]
+                         if second.get("velocity") else [0.0, 0.0, 0.0])
+            result = calculate_pair_risk(position1, velocity1, position2, velocity2,
+                                         WARNING_DISTANCE_M, DANGER_DISTANCE_M)
+            object1_id, object2_id = sorted((first["object_id"], second["object_id"]))
+            risk = {"object1_id": object1_id, "object2_id": object2_id,
+                    "distance_m": result.distance_m, "ttc_s": result.ttc_s, "level": result.level}
+            risks.append(risk)
+            db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
+                             captured_at_ms=max(frame.ts for frame in frames), **risk))
     try:
         db.commit()
     except IntegrityError as exc:
@@ -402,7 +425,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
     return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
-            "sync_delta_ms": sync_delta, "matches": matches, "unmatched": unmatched}
+            "sync_delta_ms": sync_delta, "matches": matches, "unmatched": unmatched, "risks": risks}
 
 
 @router.post("/ground-truth", response_model=GroundTruthOut, status_code=status.HTTP_201_CREATED)
