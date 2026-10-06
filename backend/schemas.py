@@ -104,6 +104,8 @@ class DetectionResult(BaseModel):
     observations: list[ObservationResult]
     world: WorldPoint
     epipolar_error_px: float
+    matching_method: Literal["epipolar", "ground-plane"] = "epipolar"
+    ground_distance_m: float | None = None
 
 
 class DetectionBundleOut(BaseModel):

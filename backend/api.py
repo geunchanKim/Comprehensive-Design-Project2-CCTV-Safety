@@ -11,14 +11,16 @@ from sqlalchemy.orm import Session
 try:
     from .database import get_db
     from .geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
-                           in_front_of_both, match_class, position_on_plane, triangulate, undistort)
+                           in_front_of_both, match_by_cost, match_class, position_on_plane,
+                           symmetric_epipolar_distance, triangulate, undistort)
     from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
-                          in_front_of_both, match_class, position_on_plane, triangulate, undistort)
+                          in_front_of_both, match_by_cost, match_class, position_on_plane,
+                          symmetric_epipolar_distance, triangulate, undistort)
     from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
@@ -31,10 +33,14 @@ BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
 ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
 ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
 BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
+MATCHING_METHOD = os.getenv("MATCHING_METHOD", "epipolar")
+MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "1.0"))
 OBJECT_CLASSES = get_args(ObjectClass)
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane"}:
     raise ValueError("BBOX_POSITION_METHOD must be 'triangulate' or 'plane'")
+if MATCHING_METHOD not in {"epipolar", "ground-plane"}:
+    raise ValueError("MATCHING_METHOD must be 'epipolar' or 'ground-plane'")
 
 
 def _height_bounds(*foot_sources: str) -> tuple[float, float]:
@@ -158,7 +164,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
 
     def match_stage(object_class, indexes, forced_source=None):
         points = [[normalized[frame.camera_id][i] for i in indexes[n]] for n, frame in enumerate(frames)]
-        candidate_worlds, candidate_points, candidate_pixels = {}, {}, {}
+        candidate_worlds, candidate_points, candidate_pixels, ground_distances = {}, {}, {}, {}
 
         def source(n, local):
             if forced_source is not None:
@@ -209,15 +215,30 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             z_min, z_max = _height_bounds(source(0, local1), source(1, local2))
             return z_min <= world[2] <= z_max
 
-        stage_matches = match_class(points[0], points[1], essential, pixel_scale,
-                                    MAX_EPIPOLAR_ERROR_PX, valid_candidate, points_for_pair)
-        for local1, local2, error in stage_matches:
+        def ground_cost(local1, local2):
+            key = (local1, local2)
+            point1, point2 = points_for_pair(local1, local2)
+            plane_z = 0.1 if source(0, local1) == source(1, local2) == "ankle" else 0.0
+            positions = [position_on_plane(point, calibration, plane_z)
+                         for point, calibration in zip((point1, point2), calibrations)]
+            distance = float(np.linalg.norm(positions[0][:2] - positions[1][:2]))
+            ground_distances[key] = distance
+            return distance
+
+        if MATCHING_METHOD == "ground-plane":
+            stage_matches = match_by_cost(len(points[0]), len(points[1]), ground_cost,
+                                          MAX_GROUND_DISTANCE_M, valid_candidate)
+        else:
+            stage_matches = match_class(points[0], points[1], essential, pixel_scale,
+                                        MAX_EPIPOLAR_ERROR_PX, valid_candidate, points_for_pair)
+        for local1, local2, matching_cost in stage_matches:
             i, j = indexes[0][local1], indexes[1][local2]
             item1, record1, _, _ = records[frames[0].camera_id][i]
             item2, record2, _, _ = records[frames[1].camera_id][j]
             source1, source2 = source(0, local1), source(1, local2)
             normalized_pair = points_for_pair(local1, local2)
             foot1, foot2 = candidate_pixels[(local1, local2)]
+            epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             world = candidate_worlds[(local1, local2)]
             if source1 == source2 == "box" and BBOX_POSITION_METHOD == "plane":
                 try:
@@ -249,7 +270,10 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                                  "foot_pixel": foot2, "foot_src": source2},
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
-                            "epipolar_error_px": round(error, 3)})
+                            "epipolar_error_px": round(epipolar_error, 3),
+                            "matching_method": MATCHING_METHOD,
+                            "ground_distance_m": (round(matching_cost, 4)
+                                                  if MATCHING_METHOD == "ground-plane" else None)})
 
     for object_class in OBJECT_CLASSES:
         class_indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class]

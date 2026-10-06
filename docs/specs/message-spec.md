@@ -140,6 +140,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - 화면 좌우 끝에서 잘린 bbox는 반대 카메라 bbox 폭을 깊이 비율로 환산해 중심 복원
 - 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 높이(z) + 두 카메라 앞쪽 여부를 먼저 검사한 뒤 헝가리안 매칭
 - 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 50px
+- 개선 매칭: `MATCHING_METHOD=ground-plane`이면 평면 교점 사이 XY 거리를 비용으로 사용 (`MAX_GROUND_DISTANCE_M`, 기본 1m)
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
