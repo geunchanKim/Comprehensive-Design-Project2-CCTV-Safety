@@ -116,6 +116,21 @@ class TrackPairState(Base):
                                                  onupdate=func.now())
 
 
+class RiskEvent(Base):
+    __tablename__ = "risk_events"
+    __table_args__ = (UniqueConstraint("bundle_id", "object1_id", "object2_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bundle_id: Mapped[int] = mapped_column(ForeignKey("frame_bundles.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    object1_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    object2_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    distance_m: Mapped[float] = mapped_column(Float)
+    ttc_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    level: Mapped[str] = mapped_column(String(16))
+
+
 class GroundTruth(Base):
     __tablename__ = "ground_truth"
     __table_args__ = (UniqueConstraint("session_id", "frame"),)
