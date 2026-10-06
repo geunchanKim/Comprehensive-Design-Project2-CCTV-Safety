@@ -1,5 +1,5 @@
-# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드를 자동 배포한다.
-# 배포는 실습 서버에 설치한 self-hosted runner(cctv-server)가 직접 실행한다.
+# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드를 자동 배포하고, 배포된 서버로 실험을 자동 실행한다.
+# 배포·실험은 실습 서버에 설치한 self-hosted runner(cctv-server)가 직접 실행한다.
 # 보안: 이 워크플로는 PR에서 실행되지 않는다 (외부 코드가 서버에서 돌지 않도록).
 name: Deploy
 
@@ -54,12 +54,51 @@ jobs:
           cd "$DEPLOY_PATH/infra"
           docker compose up -d --build backend
 
-      - name: 서버 응답 확인
+      - name: 서버 응답과 배포 커밋 확인
         run: |
           for i in $(seq 1 12); do
-            if curl -fsS "$HEALTH_URL"; then echo; echo "배포 성공"; exit 0; fi
-            echo "대기 중... ($i/12)"; sleep 5
+            BODY=$(curl -fsS "$HEALTH_URL" || true)
+            if echo "$BODY" | grep -q "\"commit\":\"$APP_COMMIT_SHA\""; then
+              echo "$BODY"; echo "배포 성공 ($APP_COMMIT_SHA)"; exit 0
+            fi
+            echo "대기 중... ($i/12) 응답: ${BODY:-없음}"; sleep 5
           done
-          echo "1분 동안 /health 응답 없음"
+          echo "1분 동안 배포 커밋($APP_COMMIT_SHA)이 /health에 나오지 않음"
           docker compose -f "$DEPLOY_PATH/infra/docker-compose.yaml" logs --tail 50 backend
           exit 1
+
+  experiment:
+    needs: deploy                     # 배포가 끝난 서버로 실험
+    runs-on: [self-hosted, cctv-server]
+    timeout-minutes: 20
+    env:
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 실험 실행 (pack 재전송 + 1:1 평가 + 이전 실험과 비교)
+        run: |
+          set -euo pipefail
+          EXP_ROOT="$HOME/cctv-experiments"
+          LABEL="$(date +%Y%m%d-%H%M)-${SHA::7}"
+          mkdir -p "$EXP_ROOT"
+          echo "EXP_ROOT=$EXP_ROOT" >> "$GITHUB_ENV"
+          echo "LABEL=$LABEL" >> "$GITHUB_ENV"
+          # 서버의 파이썬 버전과 무관하게 돌도록 python 3.11 컨테이너에서 실행
+          docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/repo:ro" -v "$EXP_ROOT:/out" python:3.11-slim \
+            sh -c "pip install -q --no-cache-dir requests && \
+                   python /repo/ai/eval/run_experiment.py run --server http://127.0.0.1:32130 \
+                     --out /out --label $LABEL --compare latest"
+
+      - name: 결과표를 작업 요약에 붙이기
+        if: always()
+        run: cat "$EXP_ROOT/$LABEL/summary.md" >> "$GITHUB_STEP_SUMMARY" || echo "결과표 없음"
+
+      - name: 결과 파일 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment-${{ env.LABEL }}
+          path: ${{ env.EXP_ROOT }}/${{ env.LABEL }}
+          if-no-files-found: ignore
