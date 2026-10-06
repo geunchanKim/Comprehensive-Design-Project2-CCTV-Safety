@@ -1,0 +1,11 @@
+{
+  "name": "s3",
+  "source": "runs/edge/unity-classroom-03-s3-run4",
+  "gt": "runs/unity/unity-classroom-03-s3",
+  "note": "coco yolo11n, imgsz 1280, foot box, 10/5 실행",
+  "pairs": 270,
+  "foot_src": {
+    "box": 1062
+  },
+  "created": "2026-10-06T11:22:30"
+}
