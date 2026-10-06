@@ -13,19 +13,23 @@ try:
     from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
                            symmetric_epipolar_distance, triangulate, undistort)
-    from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, ObjectMotionState, TrackLink
+    from .models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
+                         ObjectMotionState, TrackLink, TrackPairState)
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
-    from .tracking import KalmanState, initialize_kalman, update_kalman
+    from .tracking import (KalmanState, PairHysteresis, initialize_kalman,
+                           update_kalman, update_pair_hysteresis)
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
                           symmetric_epipolar_distance, triangulate, undistort)
-    from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, ObjectMotionState, TrackLink
+    from models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
+                        ObjectMotionState, TrackLink, TrackPairState)
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
-    from tracking import KalmanState, initialize_kalman, update_kalman
+    from tracking import (KalmanState, PairHysteresis, initialize_kalman,
+                          update_kalman, update_pair_hysteresis)
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
@@ -38,6 +42,9 @@ BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
 MATCHING_METHOD = os.getenv("MATCHING_METHOD", "epipolar")
 MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "1.0"))
 ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "false").lower() in {"1", "true", "yes"}
+ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "false").lower() in {"1", "true", "yes"}
+TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
+TRACK_PAIR_IMPROVEMENT_RATIO = float(os.getenv("TRACK_PAIR_IMPROVEMENT_RATIO", "0.9"))
 OBJECT_CLASSES = get_args(ObjectClass)
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
@@ -251,9 +258,79 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
         if MATCHING_METHOD == "ground-plane":
             stage_matches = match_by_cost(len(points[0]), len(points[1]), ground_cost,
                                           MAX_GROUND_DISTANCE_M, valid_candidate)
+            max_matching_cost = MAX_GROUND_DISTANCE_M
+
+            def pair_cost(row, col):
+                return ground_cost(row, col)
         else:
             stage_matches = match_class(points[0], points[1], essential, pixel_scale,
                                         MAX_EPIPOLAR_ERROR_PX, valid_candidate, points_for_pair)
+            max_matching_cost = MAX_EPIPOLAR_ERROR_PX
+
+            def pair_cost(row, col):
+                return symmetric_epipolar_distance(*points_for_pair(row, col), essential) * pixel_scale
+
+        if ENABLE_TRACK_PAIR_HOLD:
+            stabilized, claimed_cols = [], set()
+            candidates = []
+            for local1, local2, cost in stage_matches:
+                i = indexes[0][local1]
+                track1 = records[frames[0].camera_id][i][0].track_id
+                state = db.scalar(select(TrackPairState).where(
+                    TrackPairState.session_id == body.session_id,
+                    TrackPairState.cls == object_class,
+                    TrackPairState.camera1_id == frames[0].camera_id,
+                    TrackPairState.camera1_track_id == track1,
+                ))
+                candidates.append((state is None, local1, local2, cost, state))
+            for _, local1, proposed_col, proposed_cost, state in sorted(candidates, key=lambda row: row[0]):
+                chosen_col, chosen_cost = proposed_col, proposed_cost
+                next_hysteresis = PairHysteresis()
+                if state is not None:
+                    incumbent_col = next((col for col, index in enumerate(indexes[1])
+                                          if records[frames[1].camera_id][index][0].track_id
+                                          == state.camera2_track_id), None)
+                    challenger_col = next((col for col, index in enumerate(indexes[1])
+                                           if records[frames[1].camera_id][index][0].track_id
+                                           == state.challenger_track_id), None)
+                    row_costs = []
+                    for col in range(len(indexes[1])):
+                        try:
+                            cost = pair_cost(local1, col)
+                            row_costs.append(cost if cost <= max_matching_cost and valid_candidate(local1, col)
+                                             else np.inf)
+                        except ValueError:
+                            row_costs.append(np.inf)
+                    locked_col, next_hysteresis = update_pair_hysteresis(
+                        row_costs, incumbent_col,
+                        PairHysteresis(challenger_col, state.challenger_streak),
+                        TRACK_PAIR_CONFIRM_FRAMES, TRACK_PAIR_IMPROVEMENT_RATIO,
+                    )
+                    if locked_col is not None:
+                        chosen_col, chosen_cost = locked_col, row_costs[locked_col]
+                if chosen_col in claimed_cols or not np.isfinite(chosen_cost):
+                    continue
+                claimed_cols.add(chosen_col)
+                stabilized.append((local1, chosen_col, float(chosen_cost)))
+                i, j = indexes[0][local1], indexes[1][chosen_col]
+                item1 = records[frames[0].camera_id][i][0]
+                item2 = records[frames[1].camera_id][j][0]
+                if state is None:
+                    state = TrackPairState(session_id=body.session_id, cls=object_class,
+                                           camera1_id=frames[0].camera_id,
+                                           camera1_track_id=item1.track_id,
+                                           camera2_id=frames[1].camera_id,
+                                           camera2_track_id=item2.track_id)
+                    db.add(state)
+                switched = state.camera2_track_id != item2.track_id
+                state.camera2_id = frames[1].camera_id
+                state.camera2_track_id = item2.track_id
+                state.challenger_track_id = (None if switched or next_hysteresis.challenger is None
+                                             else records[frames[1].camera_id]
+                                             [indexes[1][next_hysteresis.challenger]][0].track_id)
+                state.challenger_streak = (0 if switched else next_hysteresis.streak)
+                state.last_pair_id = body.pair_id
+            stage_matches = stabilized
         for local1, local2, matching_cost in stage_matches:
             i, j = indexes[0][local1], indexes[1][local2]
             item1, record1, _, _ = records[frames[0].camera_id][i]

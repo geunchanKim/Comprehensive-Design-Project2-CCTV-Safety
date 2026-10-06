@@ -12,7 +12,7 @@ from sqlalchemy import select
 import backend.api as api_module
 from backend.database import Base, SessionLocal, engine
 from backend.main import app
-from backend.models import Detection, ObjectMotionState
+from backend.models import Detection, ObjectMotionState, TrackPairState
 
 
 def setup_module():
@@ -227,6 +227,28 @@ def test_kalman_state_persists_position_and_velocity(monkeypatch):
         assert stored is not None
         assert stored.timestamp_ms == 2020
         assert abs(stored.mean[3]) > 0
+
+
+def test_track_pair_hold_persists_across_frames(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", True)
+    session_id = "track-pair-hold"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    first = client.post("/detections", json=detection_payload(pair_id=40, session_id=session_id))
+    assert first.status_code == 201, first.text
+
+    second_payload = detection_payload(pair_id=41, session_id=session_id, ts2=2020)
+    second_payload["frames"][0]["ts"] = 2000
+    second = client.post("/detections", json=second_payload)
+    assert second.status_code == 201, second.text
+
+    with SessionLocal() as db:
+        states = db.scalars(select(TrackPairState).where(TrackPairState.session_id == session_id)).all()
+    assert len(states) == 1
+    assert states[0].camera1_track_id == 7
+    assert states[0].camera2_track_id == 9
+    assert states[0].last_pair_id == 41
 
 
 def test_rejects_duplicate_pair_in_same_session():
