@@ -182,6 +182,6 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 실제 카메라 캘리브레이션 등록 | ✅ 백엔드 (ChArUco·ArUco) |
 | 사람 정답 bbox | ✅ Unity에서 메시 꼭짓점 기준으로 수정 |
 | 엣지 탐지 모델 | ✅ COCO 원본 (사람 64 → 97%, 의자 오차 85 → 4cm) |
-| 발 위치 `foot` | ⏳ 엣지 전송 구현, 서버 지원 요청 중 |
-| 에피폴라 기준 + 높이 검사 | ⏳ 50px + z 범위 검사 제안, 서버 반영 요청 중 |
+| 발 위치 `foot` | ✅ 엣지 전송 및 서버 저장·삼각측량 지원 |
+| 에피폴라 기준 + 높이 검사 | ✅ 50px + `foot_src`별 z 범위 검사 |
 | `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |

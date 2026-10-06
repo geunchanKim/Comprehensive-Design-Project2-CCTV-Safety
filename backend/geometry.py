@@ -53,9 +53,16 @@ def triangulate(p1, p2, a: Calibration, b: Calibration) -> np.ndarray:
     return (homogeneous[:3, 0] / homogeneous[3, 0]).astype(float)
 
 
-def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0):
+def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0, pair_is_valid=None):
     if not points1 or not points2:
         return []
     costs = np.array([[symmetric_epipolar_distance(a, b, essential) * pixel_scale for b in points2] for a in points1])
+    invalid_cost = max(float(np.max(costs)), max_error_px) + 1e9
+    for row in range(len(points1)):
+        for col in range(len(points2)):
+            if costs[row, col] > max_error_px:
+                costs[row, col] = invalid_cost
+            elif pair_is_valid is not None and not pair_is_valid(row, col):
+                costs[row, col] = invalid_cost
     rows, cols = linear_sum_assignment(costs)
     return [(int(r), int(c), float(costs[r, c])) for r, c in zip(rows, cols) if costs[r, c] <= max_error_px]

@@ -42,7 +42,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
       "ts": 1790866800000,
       "image_size": [1920, 1080],
       "detections": [
-        {"track_id": 7, "cls": "person", "conf": 0.988, "bbox": [950, 400, 970, 540]}
+        {"track_id": 7, "cls": "person", "conf": 0.988, "bbox": [950, 400, 970, 540],
+         "foot": [960, 532], "foot_src": "ankle"}
       ]
     },
     {
@@ -51,7 +52,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
       "ts": 1790866800020,
       "image_size": [1920, 1080],
       "detections": [
-        {"track_id": 9, "cls": "person", "conf": 0.941, "bbox": [850, 400, 870, 540]}
+        {"track_id": 9, "cls": "person", "conf": 0.941, "bbox": [850, 400, 870, 540],
+         "foot": [860, 531], "foot_src": "ankle"}
       ]
     }
   ]
@@ -60,11 +62,15 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 지원 클래스는 `person`, `chair`, `cart`, `desk`, `suitcase`, `backpack`이다. `bbox`는 좌상단 원점의 비정규화 픽셀 `[x1, y1, x2, y2]`다. `track_id`는 카메라 로컬 ID다.
 
+`foot`과 `foot_src`는 선택 필드다. `foot`은 이미지 범위 안의 `[x, y]` 픽셀 좌표이며, `foot_src`는 `ankle` 또는 `box`다. `foot`이 없으면 기존 방식대로 bbox 하단 중앙을 사용하고 `foot_src`는 `box`로 저장한다.
+
 엣지 추론 자체가 실패한 프레임은 전송하지 않는다. 정상적으로 추론했으나 탐지가 없을 때만 `detections: []`를 전송한다. 따라서 별도의 `analysis_status` 필드는 사용하지 않는다.
 
-서버는 bbox 하단 중앙을 발 위치로 삼아 카메라별 왜곡을 보정하고, 같은 클래스끼리 에피폴라 오차를 계산한 후 헝가리안 알고리즘으로 1:1 연결한다. 기본 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
+서버는 전달받은 `foot` 또는 bbox 하단 중앙을 발 위치로 삼아 카메라별 왜곡을 보정한다. 같은 클래스 후보를 삼각측량하고 높이 범위 밖 후보를 제외한 뒤, 에피폴라 오차를 비용으로 헝가리안 알고리즘을 적용해 1:1 연결한다. 기본 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
 
-응답의 `matches[].world`가 월드 좌표이며 `observations`에는 두 카메라의 원본 탐지 필드와 계산에 사용한 `foot_pixel`이 들어간다. `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
+높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.2`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다. 두 카메라의 `foot_src`가 다르면 두 범위의 합집합을 적용한다.
+
+응답의 `matches[].world`가 월드 좌표이며 `observations`에는 두 카메라의 원본 탐지 필드와 계산에 사용한 `foot_pixel`, `foot_src`가 들어간다. `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
 
 ```json
 {
