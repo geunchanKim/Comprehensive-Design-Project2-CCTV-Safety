@@ -13,17 +13,19 @@ try:
     from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
                            symmetric_epipolar_distance, triangulate, undistort)
-    from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
+    from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, ObjectMotionState, TrackLink
     from .schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
+    from .tracking import KalmanState, initialize_kalman, update_kalman
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
                           symmetric_epipolar_distance, triangulate, undistort)
-    from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
+    from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, ObjectMotionState, TrackLink
     from schemas import (CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
+    from tracking import KalmanState, initialize_kalman, update_kalman
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
@@ -35,6 +37,7 @@ ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
 BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
 MATCHING_METHOD = os.getenv("MATCHING_METHOD", "epipolar")
 MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "1.0"))
+ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "false").lower() in {"1", "true", "yes"}
 OBJECT_CLASSES = get_args(ObjectClass)
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
@@ -59,6 +62,26 @@ def _calibration(camera: Camera) -> Calibration:
         R=np.asarray(camera.rotation_matrix, dtype=float),
         t=np.asarray(camera.translation_vector, dtype=float),
     )
+
+
+def _filter_motion(db: Session, session_id: str, object_id: int, world, timestamp_ms: int):
+    raw = np.asarray(world, dtype=float)
+    if not ENABLE_KALMAN_FILTER:
+        return raw, None
+    stored = db.get(ObjectMotionState, object_id)
+    if stored is None:
+        state = initialize_kalman(raw, timestamp_ms)
+        stored = ObjectMotionState(object_id=object_id, session_id=session_id)
+        db.add(stored)
+    else:
+        state = KalmanState(mean=np.asarray(stored.mean, dtype=float),
+                            covariance=np.asarray(stored.covariance, dtype=float),
+                            timestamp_ms=stored.timestamp_ms)
+        state = update_kalman(state, raw, timestamp_ms)
+    stored.mean = state.mean.tolist()
+    stored.covariance = state.covariance.tolist()
+    stored.timestamp_ms = state.timestamp_ms
+    return state.mean[:3], state.mean[3:]
 
 
 @router.put("/cameras/{camera_id}/calibration", response_model=CameraCalibrationIn)
@@ -252,6 +275,9 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                          if BBOX_POSITION_METHOD == "weighted-plane" else np.mean(positions, axis=0))
             object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class)
+            raw_world = np.asarray(world, dtype=float)
+            timestamp_ms = max(frames[0].ts, frames[1].ts)
+            world, velocity = _filter_motion(db, body.session_id, object_id, raw_world, timestamp_ms)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
                 record.object_id = object_id
                 record.world_x, record.world_y, record.world_z = map(float, world)
@@ -271,6 +297,10 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                                  "foot_pixel": foot2, "foot_src": source2},
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
+                            "raw_world": ({"x": raw_world[0], "y": raw_world[1], "z": raw_world[2]}
+                                          if ENABLE_KALMAN_FILTER else None),
+                            "velocity": ({"x": velocity[0], "y": velocity[1], "z": velocity[2]}
+                                         if velocity is not None else None),
                             "epipolar_error_px": round(epipolar_error, 3),
                             "matching_method": MATCHING_METHOD,
                             "ground_distance_m": (round(matching_cost, 4)

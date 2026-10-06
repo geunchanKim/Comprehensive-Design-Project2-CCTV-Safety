@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from sqlalchemy import select
 
+import backend.api as api_module
 from backend.database import Base, SessionLocal, engine
 from backend.main import app
-from backend.models import Detection
+from backend.models import Detection, ObjectMotionState
 
 
 def setup_module():
@@ -198,6 +199,34 @@ def test_same_frame_and_tracks_are_allowed_in_another_session():
     response = client.post("/detections", json=detection_payload(session_id=other))
     assert response.status_code == 201, response.text
     assert response.json()["matches"][0]["object_id"] != 1
+
+
+def test_kalman_state_persists_position_and_velocity(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    session_id = "kalman-motion"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    first = client.post("/detections", json=detection_payload(pair_id=30, session_id=session_id))
+    assert first.status_code == 201, first.text
+    assert first.json()["matches"][0]["velocity"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+
+    payload = detection_payload(pair_id=31, session_id=session_id, ts2=2020)
+    payload["frames"][0]["ts"] = 2000
+    for frame in payload["frames"]:
+        frame["detections"][0]["bbox"][0] += 10
+        frame["detections"][0]["bbox"][2] += 10
+    second = client.post("/detections", json=payload)
+
+    assert second.status_code == 201, second.text
+    match = second.json()["matches"][0]
+    assert match["raw_world"] is not None
+    assert abs(match["velocity"]["x"]) > 0
+    with SessionLocal() as db:
+        stored = db.get(ObjectMotionState, match["object_id"])
+        assert stored is not None
+        assert stored.timestamp_ms == 2020
+        assert abs(stored.mean[3]) > 0
 
 
 def test_rejects_duplicate_pair_in_same_session():

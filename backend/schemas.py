@@ -103,6 +103,8 @@ class DetectionResult(BaseModel):
     foot_pixels: dict[str, tuple[float, float]]
     observations: list[ObservationResult]
     world: WorldPoint
+    raw_world: WorldPoint | None = None
+    velocity: WorldPoint | None = None
     epipolar_error_px: float
     matching_method: Literal["epipolar", "ground-plane"] = "epipolar"
     ground_distance_m: float | None = None
