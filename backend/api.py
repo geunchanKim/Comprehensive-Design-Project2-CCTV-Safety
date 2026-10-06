@@ -1,10 +1,14 @@
 import os
+import csv
+import io
+import json
 from itertools import combinations
 from typing import get_args
 
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -112,6 +116,42 @@ def _experiment_settings():
         "warning_distance_m": WARNING_DISTANCE_M,
         "danger_distance_m": DANGER_DISTANCE_M,
     }
+
+
+@router.get("/sessions/{session_id}/results.csv")
+def download_session_results(session_id: str, db: Session = Depends(get_db)):
+    stored_settings = db.get(SessionSettings, session_id)
+    if stored_settings is None:
+        raise HTTPException(404, "session results not found")
+    output = io.StringIO()
+    fields = ["record_type", "timestamp_ms", "object_id", "object2_id", "cls",
+              "x", "y", "z", "distance_m", "ttc_s", "level", "settings"]
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    settings_json = json.dumps(stored_settings.settings, sort_keys=True)
+    detections = db.scalars(select(Detection).where(
+        Detection.session_id == session_id,
+        Detection.object_id.is_not(None),
+    ).order_by(Detection.captured_at_ms, Detection.object_id)).all()
+    seen = set()
+    for item in detections:
+        key = (item.bundle_id, item.object_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        writer.writerow({"record_type": "position", "timestamp_ms": item.captured_at_ms,
+                         "object_id": item.object_id, "cls": item.cls,
+                         "x": item.world_x, "y": item.world_y, "z": item.world_z,
+                         "settings": settings_json})
+    events = db.scalars(select(RiskEvent).where(RiskEvent.session_id == session_id)
+                        .order_by(RiskEvent.captured_at_ms, RiskEvent.id)).all()
+    for event in events:
+        writer.writerow({"record_type": "risk", "timestamp_ms": event.captured_at_ms,
+                         "object_id": event.object1_id, "object2_id": event.object2_id,
+                         "distance_m": event.distance_m, "ttc_s": event.ttc_s,
+                         "level": event.level, "settings": settings_json})
+    return Response(output.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{session_id}-results.csv"'})
 
 
 @router.put("/cameras/{camera_id}/calibration", response_model=CameraCalibrationIn)

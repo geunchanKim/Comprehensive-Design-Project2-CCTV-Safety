@@ -77,6 +77,16 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     assert abs(result["matches"][0]["world"]["z"]) < 0.01
 
 
+def test_download_session_results_csv():
+    response = client.get(f"/sessions/{SESSION}/results.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "record_type,timestamp_ms" in response.text
+    assert "position" in response.text
+    assert '""matching_method"": ""epipolar""' in response.text
+
+
 def test_uses_and_stores_explicit_ankle_foot():
     session_id = "ankle-foot"
     put_camera("cam1", [0, 0, 0], session_id)
