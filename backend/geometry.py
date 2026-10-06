@@ -85,6 +85,22 @@ def position_on_plane(point, calibration: Calibration, plane_z: float) -> np.nda
     return world.astype(float)
 
 
+def combine_plane_positions(positions, calibrations) -> np.ndarray:
+    """Fuse plane intersections, down-weighting distant and grazing-angle rays."""
+    if len(positions) != len(calibrations) or not positions:
+        raise ValueError("positions and calibrations must have the same non-zero length")
+    weights = []
+    for position, calibration in zip(positions, calibrations):
+        camera_center = -calibration.R.T @ calibration.t.reshape(3)
+        ray = np.asarray(position, dtype=float) - camera_center
+        distance = float(np.linalg.norm(ray))
+        if distance < 1e-12:
+            raise ValueError("plane position coincides with camera center")
+        incidence = abs(float(ray[2])) / distance
+        weights.append(max(incidence * incidence / (distance * distance), 1e-12))
+    return np.average(np.asarray(positions, dtype=float), axis=0, weights=np.asarray(weights)).astype(float)
+
+
 def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0,
                 pair_is_valid=None, pair_points=None):
     if not points1 or not points2:

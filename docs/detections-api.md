@@ -74,7 +74,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
 
-응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. Unity S1~S4 검증에서 발목 삼각측량이 고정 높이 평면보다 정확했으므로 발목 쌍은 항상 삼각측량을 사용한다. bbox 쌍은 `BBOX_POSITION_METHOD=triangulate|plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균한다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
+응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. Unity S1~S4 검증에서 발목 삼각측량이 고정 높이 평면보다 정확했으므로 발목 쌍은 항상 삼각측량을 사용한다. bbox 쌍은 `BBOX_POSITION_METHOD=triangulate|plane|weighted-plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균하고, `weighted-plane`은 멀거나 바닥과 평행에 가까운 광선의 가중치를 낮춘다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
 
 ```json
 {

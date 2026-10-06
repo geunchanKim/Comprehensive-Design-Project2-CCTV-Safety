@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 try:
     from .database import get_db
-    from .geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
+    from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
                            symmetric_epipolar_distance, triangulate, undistort)
     from .models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
@@ -18,7 +18,7 @@ try:
                           GroundTruthIn, GroundTruthOut, ObjectClass)
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
-    from geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
+    from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
                           symmetric_epipolar_distance, triangulate, undistort)
     from models import Camera, Detection, FrameBundle, GlobalObject, GroundTruth, TrackLink
@@ -37,8 +37,8 @@ MATCHING_METHOD = os.getenv("MATCHING_METHOD", "epipolar")
 MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "1.0"))
 OBJECT_CLASSES = get_args(ObjectClass)
 
-if BBOX_POSITION_METHOD not in {"triangulate", "plane"}:
-    raise ValueError("BBOX_POSITION_METHOD must be 'triangulate' or 'plane'")
+if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
+    raise ValueError("BBOX_POSITION_METHOD must be 'triangulate', 'plane', or 'weighted-plane'")
 if MATCHING_METHOD not in {"epipolar", "ground-plane"}:
     raise ValueError("MATCHING_METHOD must be 'epipolar' or 'ground-plane'")
 
@@ -240,7 +240,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             foot1, foot2 = candidate_pixels[(local1, local2)]
             epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             world = candidate_worlds[(local1, local2)]
-            if source1 == source2 == "box" and BBOX_POSITION_METHOD == "plane":
+            if source1 == source2 == "box" and BBOX_POSITION_METHOD in {"plane", "weighted-plane"}:
                 try:
                     positions = [position_on_plane(point, calibration, 0.0)
                                  for point, calibration in zip(normalized_pair, calibrations)]
@@ -248,7 +248,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                     if "parallel" not in str(exc):
                         continue
                     positions = [world, world]
-                world = np.mean(positions, axis=0)
+                world = (combine_plane_positions(positions, calibrations)
+                         if BBOX_POSITION_METHOD == "weighted-plane" else np.mean(positions, axis=0))
             object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
