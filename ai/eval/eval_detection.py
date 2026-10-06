@@ -15,9 +15,9 @@ Unity 폴더의 이미지에 탐지기를 직접 돌리고, frames.jsonl의 정�
   파일: runs/eval/<장면>_<설정>.csv (프레임·카메라·정답 물체별 결과)
 
 실행 (ai/ 폴더에서)
-  python eval/eval_detection.py runs/unity/unity-classroom-03-s3                 # 지금 설정 (추적, conf 0.4, 640)
+  python eval/eval_detection.py runs/unity/unity-classroom-03-s3                 # 지금 설정 (추적, conf 0.4, 1280)
   python eval/eval_detection.py runs/unity/unity-classroom-03-s3 --no-track      # 모델만
-  python eval/eval_detection.py runs/unity/unity-classroom-03-s3 --imgsz 1280 --conf 0.25
+  python eval/eval_detection.py runs/unity/unity-classroom-03-s3 --imgsz 640 --conf 0.25
   python eval/eval_detection.py runs/unity/unity-classroom-03-s1 --max-frames 100  # 빠르게 일부만
 """
 
@@ -65,7 +65,7 @@ def main():
     parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
-    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--no-track", action="store_true", help="추적 끄고 모델 박스 전부 평가")
     parser.add_argument("--iou", type=float, default=0.5)
     parser.add_argument("--min-visible", type=float, default=0.5)

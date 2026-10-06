@@ -9,7 +9,7 @@
 
 보낼 클래스 (--classes person,chair)
   모델이 찾을 수 있는 클래스 중 실제로 내보낼 것만 고른다.
-  coco 기본값은 person, chair (suitcase, backpack은 서버가 지원한 뒤 켠다)
+  coco 기본값은 person, chair, suitcase, backpack
 
 클래스별 conf (--class-conf person=0.5,chair=0.4)
   클래스마다 다른 기준을 쓴다. 없는 클래스는 --conf 를 쓴다.
@@ -48,7 +48,7 @@ OUT_DIR = AI_DIR / "runs" / "edge"
 
 CLASSES = ("person", "chair", "cart", "desk")          # v2 모델 클래스
 COCO_CLASSES = ("person", "chair", "suitcase", "backpack")  # coco 모델에서 쓸 수 있는 클래스
-DEFAULT_CLASSES = {"coco": ("person", "chair"), "v2": CLASSES, "ensemble": CLASSES}
+DEFAULT_CLASSES = {"coco": COCO_CLASSES, "v2": CLASSES, "ensemble": CLASSES}
 DEFAULT_CLASS_CONF = {"coco": {"person": 0.5, "chair": 0.4, "suitcase": 0.4, "backpack": 0.4}}
 POSE_WEIGHTS = "yolo11n-pose.pt"                       # 없으면 자동 다운로드
 LEFT_ANKLE, RIGHT_ANKLE = 15, 16                       # COCO 키포인트 번호
@@ -127,7 +127,7 @@ class Detector:
     """frame(BGR 이미지) → [{track_id, cls, conf, bbox, foot, foot_src}] 리스트"""
 
     def __init__(self, model: str = "coco", conf: float = 0.4, device: str | None = None,
-                 tracker: str = "bytetrack.yaml", imgsz: int = 640, class_conf: dict | None = None,
+                 tracker: str = "bytetrack.yaml", imgsz: int = 1280, class_conf: dict | None = None,
                  classes: tuple | None = None, foot: str = "box", ankle_conf: float = 0.5):
         if foot not in ("box", "ankle"):
             raise ValueError(f"foot은 box 또는 ankle 이어야 해요: {foot}")
