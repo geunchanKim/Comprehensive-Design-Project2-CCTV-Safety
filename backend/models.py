@@ -98,6 +98,24 @@ class ObjectMotionState(Base):
                                                  onupdate=func.now())
 
 
+class TrackPairState(Base):
+    __tablename__ = "track_pair_states"
+    __table_args__ = (UniqueConstraint("session_id", "cls", "camera1_id", "camera1_track_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    cls: Mapped[str] = mapped_column(String(16))
+    camera1_id: Mapped[str] = mapped_column(String(64))
+    camera1_track_id: Mapped[int] = mapped_column(Integer)
+    camera2_id: Mapped[str] = mapped_column(String(64))
+    camera2_track_id: Mapped[int] = mapped_column(Integer)
+    challenger_track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    challenger_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_pair_id: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
 class GroundTruth(Base):
     __tablename__ = "ground_truth"
     __table_args__ = (UniqueConstraint("session_id", "frame"),)
