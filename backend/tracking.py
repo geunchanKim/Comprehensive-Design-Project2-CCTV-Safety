@@ -10,6 +10,37 @@ class KalmanState:
     timestamp_ms: int
 
 
+@dataclass
+class PairHysteresis:
+    challenger: int | None = None
+    streak: int = 0
+
+
+def update_pair_hysteresis(costs, incumbent: int | None, state: PairHysteresis,
+                           confirm_frames: int = 3, improvement_ratio: float = 0.9):
+    """Keep an incumbent column until a better challenger wins repeatedly.
+
+    Returns ``(locked_column, next_state)``. A ``None`` lock lets the global
+    assignment select a new counterpart.
+    """
+    values = np.asarray(costs, dtype=float)
+    if values.ndim != 1 or not len(values):
+        return None, PairHysteresis()
+    if confirm_frames < 1 or not 0 < improvement_ratio <= 1:
+        raise ValueError("invalid pair hysteresis settings")
+    if incumbent is None or incumbent < 0 or incumbent >= len(values) or not np.isfinite(values[incumbent]):
+        return None, PairHysteresis()
+
+    challenger = int(np.argmin(values))
+    if challenger == incumbent or values[challenger] > values[incumbent] * improvement_ratio:
+        return incumbent, PairHysteresis()
+    streak = state.streak + 1 if state.challenger == challenger else 1
+    next_state = PairHysteresis(challenger=challenger, streak=streak)
+    if streak >= confirm_frames:
+        return None, next_state
+    return incumbent, next_state
+
+
 def initialize_kalman(position, timestamp_ms: int) -> KalmanState:
     mean = np.zeros(6, dtype=float)
     mean[:3] = np.asarray(position, dtype=float)
