@@ -57,6 +57,20 @@ def test_health_exposes_deployment_settings():
         "status": "ok",
         "commit": "test-commit",
         "max_epipolar_error_px": 50.0,
+        "box_foot_z_min": -0.35,
+        "box_foot_z_max": 0.2,
+        "ankle_foot_z_min": -0.1,
+        "ankle_foot_z_max": 0.4,
+        "bbox_position_method": "triangulate",
+        "matching_method": "epipolar",
+        "max_ground_distance_m": 1.0,
+        "kalman_filter": False,
+        "track_pair_hold": False,
+        "track_pair_confirm_frames": 3,
+        "track_pair_improvement_ratio": 0.9,
+        "risk_analysis": False,
+        "warning_distance_m": 1.0,
+        "danger_distance_m": 0.5,
     }
 
 
