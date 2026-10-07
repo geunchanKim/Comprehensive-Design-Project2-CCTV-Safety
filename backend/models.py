@@ -86,6 +86,59 @@ class TrackLink(Base):
     cls: Mapped[str] = mapped_column(String(16))
 
 
+class ObjectMotionState(Base):
+    __tablename__ = "object_motion_states"
+
+    object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    mean: Mapped[list] = mapped_column(JSON)
+    covariance: Mapped[list] = mapped_column(JSON)
+    timestamp_ms: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class TrackPairState(Base):
+    __tablename__ = "track_pair_states"
+    __table_args__ = (UniqueConstraint("session_id", "cls", "camera1_id", "camera1_track_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    cls: Mapped[str] = mapped_column(String(16))
+    camera1_id: Mapped[str] = mapped_column(String(64))
+    camera1_track_id: Mapped[int] = mapped_column(Integer)
+    camera2_id: Mapped[str] = mapped_column(String(64))
+    camera2_track_id: Mapped[int] = mapped_column(Integer)
+    challenger_track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    challenger_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_pair_id: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class RiskEvent(Base):
+    __tablename__ = "risk_events"
+    __table_args__ = (UniqueConstraint("bundle_id", "object1_id", "object2_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bundle_id: Mapped[int] = mapped_column(ForeignKey("frame_bundles.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    object1_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    object2_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    distance_m: Mapped[float] = mapped_column(Float)
+    ttc_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    level: Mapped[str] = mapped_column(String(16))
+
+
+class SessionSettings(Base):
+    __tablename__ = "session_settings"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    settings: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class GroundTruth(Base):
     __tablename__ = "ground_truth"
     __table_args__ = (UniqueConstraint("session_id", "frame"),)

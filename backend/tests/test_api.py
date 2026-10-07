@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from sqlalchemy import select
 
+import backend.api as api_module
 from backend.database import Base, SessionLocal, engine
 from backend.main import app
-from backend.models import Detection
+from backend.models import Detection, ObjectMotionState, TrackPairState
 
 
 def setup_module():
@@ -61,6 +62,15 @@ def test_health_exposes_deployment_settings():
         "ankle_foot_z_min": -0.1,
         "ankle_foot_z_max": 0.4,
         "bbox_position_method": "triangulate",
+        "matching_method": "epipolar",
+        "max_ground_distance_m": 1.0,
+        "kalman_filter": False,
+        "track_pair_hold": False,
+        "track_pair_confirm_frames": 3,
+        "track_pair_improvement_ratio": 0.9,
+        "risk_analysis": False,
+        "warning_distance_m": 1.0,
+        "danger_distance_m": 0.5,
     }
 
 
@@ -79,6 +89,16 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     assert result["matches"][0]["observations"][0]["foot_src"] == "box"
     assert abs(result["matches"][0]["world"]["y"] - 10) < 0.01
     assert abs(result["matches"][0]["world"]["z"]) < 0.01
+
+
+def test_download_session_results_csv():
+    response = client.get(f"/sessions/{SESSION}/results.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "record_type,timestamp_ms" in response.text
+    assert "position" in response.text
+    assert '""matching_method"": ""epipolar""' in response.text
 
 
 def test_uses_and_stores_explicit_ankle_foot():
@@ -203,6 +223,73 @@ def test_same_frame_and_tracks_are_allowed_in_another_session():
     response = client.post("/detections", json=detection_payload(session_id=other))
     assert response.status_code == 201, response.text
     assert response.json()["matches"][0]["object_id"] != 1
+
+
+def test_kalman_state_persists_position_and_velocity(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    session_id = "kalman-motion"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    first = client.post("/detections", json=detection_payload(pair_id=30, session_id=session_id))
+    assert first.status_code == 201, first.text
+    assert first.json()["matches"][0]["velocity"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+
+    payload = detection_payload(pair_id=31, session_id=session_id, ts2=2020)
+    payload["frames"][0]["ts"] = 2000
+    for frame in payload["frames"]:
+        frame["detections"][0]["bbox"][0] += 10
+        frame["detections"][0]["bbox"][2] += 10
+    second = client.post("/detections", json=payload)
+
+    assert second.status_code == 201, second.text
+    match = second.json()["matches"][0]
+    assert match["raw_world"] is not None
+    assert abs(match["velocity"]["x"]) > 0
+    with SessionLocal() as db:
+        stored = db.get(ObjectMotionState, match["object_id"])
+        assert stored is not None
+        assert stored.timestamp_ms == 2020
+        assert abs(stored.mean[3]) > 0
+
+
+def test_track_pair_hold_persists_across_frames(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", True)
+    session_id = "track-pair-hold"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    first = client.post("/detections", json=detection_payload(pair_id=40, session_id=session_id))
+    assert first.status_code == 201, first.text
+
+    second_payload = detection_payload(pair_id=41, session_id=session_id, ts2=2020)
+    second_payload["frames"][0]["ts"] = 2000
+    second = client.post("/detections", json=second_payload)
+    assert second.status_code == 201, second.text
+
+    with SessionLocal() as db:
+        states = db.scalars(select(TrackPairState).where(TrackPairState.session_id == session_id)).all()
+    assert len(states) == 1
+    assert states[0].camera1_track_id == 7
+    assert states[0].camera2_track_id == 9
+    assert states[0].last_pair_id == 41
+
+
+def test_session_rejects_changed_experiment_settings(monkeypatch):
+    session_id = "immutable-settings"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    first = client.post("/detections", json=detection_payload(pair_id=50, session_id=session_id))
+    assert first.status_code == 201, first.text
+    assert first.json()["settings"]["matching_method"] == "epipolar"
+
+    monkeypatch.setattr(api_module, "MATCHING_METHOD", "ground-plane")
+    payload = detection_payload(pair_id=51, session_id=session_id, ts2=2020)
+    payload["frames"][0]["ts"] = 2000
+    changed = client.post("/detections", json=payload)
+
+    assert changed.status_code == 409
+    assert "different experiment settings" in changed.json()["detail"]
 
 
 def test_rejects_duplicate_pair_in_same_session():

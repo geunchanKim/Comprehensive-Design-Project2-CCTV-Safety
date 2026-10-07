@@ -87,6 +87,22 @@ def position_on_plane(point, calibration: Calibration, plane_z: float) -> np.nda
     return world.astype(float)
 
 
+def combine_plane_positions(positions, calibrations) -> np.ndarray:
+    """Fuse plane intersections, down-weighting distant and grazing-angle rays."""
+    if len(positions) != len(calibrations) or not positions:
+        raise ValueError("positions and calibrations must have the same non-zero length")
+    weights = []
+    for position, calibration in zip(positions, calibrations):
+        camera_center = -calibration.R.T @ calibration.t.reshape(3)
+        ray = np.asarray(position, dtype=float) - camera_center
+        distance = float(np.linalg.norm(ray))
+        if distance < 1e-12:
+            raise ValueError("plane position coincides with camera center")
+        incidence = abs(float(ray[2])) / distance
+        weights.append(max(incidence * incidence / (distance * distance), 1e-12))
+    return np.average(np.asarray(positions, dtype=float), axis=0, weights=np.asarray(weights)).astype(float)
+
+
 def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0,
                 pair_is_valid=None, pair_points=None):
     if not points1 or not points2:
@@ -98,12 +114,32 @@ def match_class(points1, points2, essential, pixel_scale, max_error_px=5.0,
             if pair_points is not None:
                 candidate1, candidate2 = pair_points(row, col)
             costs[row, col] = symmetric_epipolar_distance(candidate1, candidate2, essential) * pixel_scale
-    invalid_cost = max(float(np.max(costs)), max_error_px) + 1e9
-    for row in range(len(points1)):
-        for col in range(len(points2)):
-            if costs[row, col] > max_error_px:
+    return assign_cost_matrix(costs, max_error_px, pair_is_valid)
+
+
+def match_by_cost(row_count, col_count, pair_cost, max_cost, pair_is_valid=None):
+    if not row_count or not col_count:
+        return []
+    costs = np.empty((row_count, col_count), dtype=float)
+    for row in range(row_count):
+        for col in range(col_count):
+            try:
+                costs[row, col] = float(pair_cost(row, col))
+            except ValueError:
+                costs[row, col] = np.inf
+    return assign_cost_matrix(costs, max_cost, pair_is_valid)
+
+
+def assign_cost_matrix(costs, max_cost, pair_is_valid=None):
+    finite = costs[np.isfinite(costs)]
+    largest = float(np.max(finite)) if finite.size else float(max_cost)
+    invalid_cost = max(largest, float(max_cost)) + 1e9
+    costs = np.where(np.isfinite(costs), costs, invalid_cost)
+    for row in range(costs.shape[0]):
+        for col in range(costs.shape[1]):
+            if costs[row, col] > max_cost:
                 costs[row, col] = invalid_cost
             elif pair_is_valid is not None and not pair_is_valid(row, col):
                 costs[row, col] = invalid_cost
     rows, cols = linear_sum_assignment(costs)
-    return [(int(r), int(c), float(costs[r, c])) for r, c in zip(rows, cols) if costs[r, c] <= max_error_px]
+    return [(int(r), int(c), float(costs[r, c])) for r, c in zip(rows, cols) if costs[r, c] <= max_cost]

@@ -103,7 +103,19 @@ class DetectionResult(BaseModel):
     foot_pixels: dict[str, tuple[float, float]]
     observations: list[ObservationResult]
     world: WorldPoint
+    raw_world: WorldPoint | None = None
+    velocity: WorldPoint | None = None
     epipolar_error_px: float
+    matching_method: Literal["epipolar", "ground-plane"] = "epipolar"
+    ground_distance_m: float | None = None
+
+
+class RiskResult(BaseModel):
+    object1_id: int
+    object2_id: int
+    distance_m: float
+    ttc_s: float | None
+    level: Literal["safe", "warning", "danger"]
 
 
 class DetectionBundleOut(BaseModel):
@@ -114,6 +126,8 @@ class DetectionBundleOut(BaseModel):
     status: Literal["processed"] = "processed"
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]
+    risks: list[RiskResult] = Field(default_factory=list)
+    settings: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
 class GroundTruthObjectIn(BaseModel):
