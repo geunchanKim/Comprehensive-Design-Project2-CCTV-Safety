@@ -9,15 +9,15 @@
 
 보낼 클래스 (--classes person,chair)
   모델이 찾을 수 있는 클래스 중 실제로 내보낼 것만 고른다.
-  coco 기본값은 person, chair (suitcase, backpack은 서버가 지원한 뒤 켠다)
+  coco 기본값은 person, chair, suitcase, backpack
 
 클래스별 conf (--class-conf person=0.5,chair=0.4)
   클래스마다 다른 기준을 쓴다. 없는 클래스는 --conf 를 쓴다.
   coco 기본값: person 0.5, chair 0.4 (Unity 측정에서 탐지율·오탐 균형이 가장 좋았던 값)
 
 발 위치 (--foot box|ankle)
-  box   (기본) 박스 아래 가운데 ((x1+x2)/2, y2)
-  ankle 사람은 포즈 모델(yolo11n-pose)로 찾은 두 발목의 가운데. 발목이 안 보이면 box로 대신함
+  ankle (기본) 사람은 포즈 모델(yolo11n-pose)로 찾은 두 발목의 가운데. 발목이 안 보이면 box로 대신함
+  box   박스 아래 가운데 ((x1+x2)/2, y2)
         사람이 아닌 물체는 항상 box
         Unity S1~S3 측정: 위치 오차 15.8cm(box) → 5.8cm(ankle)
 
@@ -48,7 +48,7 @@ OUT_DIR = AI_DIR / "runs" / "edge"
 
 CLASSES = ("person", "chair", "cart", "desk")          # v2 모델 클래스
 COCO_CLASSES = ("person", "chair", "suitcase", "backpack")  # coco 모델에서 쓸 수 있는 클래스
-DEFAULT_CLASSES = {"coco": ("person", "chair"), "v2": CLASSES, "ensemble": CLASSES}
+DEFAULT_CLASSES = {"coco": COCO_CLASSES, "v2": CLASSES, "ensemble": CLASSES}
 DEFAULT_CLASS_CONF = {"coco": {"person": 0.5, "chair": 0.4, "suitcase": 0.4, "backpack": 0.4}}
 POSE_WEIGHTS = "yolo11n-pose.pt"                       # 없으면 자동 다운로드
 LEFT_ANKLE, RIGHT_ANKLE = 15, 16                       # COCO 키포인트 번호
@@ -127,8 +127,8 @@ class Detector:
     """frame(BGR 이미지) → [{track_id, cls, conf, bbox, foot, foot_src}] 리스트"""
 
     def __init__(self, model: str = "coco", conf: float = 0.4, device: str | None = None,
-                 tracker: str = "bytetrack.yaml", imgsz: int = 640, class_conf: dict | None = None,
-                 classes: tuple | None = None, foot: str = "box", ankle_conf: float = 0.5):
+                 tracker: str = "bytetrack.yaml", imgsz: int = 1280, class_conf: dict | None = None,
+                 classes: tuple | None = None, foot: str = "ankle", ankle_conf: float = 0.5):
         if foot not in ("box", "ankle"):
             raise ValueError(f"foot은 box 또는 ankle 이어야 해요: {foot}")
         self.conf = conf
@@ -246,7 +246,7 @@ def main():
     parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
     parser.add_argument("--classes", default=None, help="보낼 클래스. 예: person,chair (기본: 모델별 기본값)")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4")
-    parser.add_argument("--foot", choices=["box", "ankle"], default="box", help="발 위치: 박스 아래 / 두 발목 가운데")
+    parser.add_argument("--foot", choices=["box", "ankle"], default="ankle", help="발 위치: 두 발목 가운데(기본, 안 보이면 박스) / 박스 아래")
     parser.add_argument("--session", default="local-test", help="session_id")
     parser.add_argument("--camera", default="cam1", help="camera_id")
     parser.add_argument("--conf", type=float, default=0.4)

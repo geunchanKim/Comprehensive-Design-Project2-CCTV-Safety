@@ -13,9 +13,9 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   - 탐지 0개면 detections: [] 로 보낸다
   - track_id가 아직 없는 탐지는 뺀다 (서버는 0 이상 정수만 받음)
   - bbox는 이미지 안으로 자르고, 폭·높이가 0인 박스는 뺀다
-  - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot box: 박스 아래 가운데, ankle: 두 발목 가운데)
-    foot도 이미지 안으로 자른다. 서버가 foot을 지원하기 전에는 서버가 무시한다
-  - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표의 다른 클래스(예: backpack)는 빼고 보낸다
+  - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot ankle(기본): 두 발목 가운데, 발목이 안 보이면 박스 아래 가운데
+    / --foot box: 항상 박스 아래 가운데). foot도 이미지 안으로 자른다
+  - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표에 그 밖의 클래스가 있으면 빼고 보낸다
   - 정답 좌표는 Unity (x, y, z) → 월드 (x, z, y) 로 바꿔서 보낸다
   - 캘리브레이션은 session_id별로 관리되므로, 탐지를 보내기 전에 이번 session_id로
     cam1·cam2 캘리브레이션을 먼저 등록한다 (PUT /cameras/{camera_id}/calibration)
@@ -25,7 +25,7 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
     등록이 하나라도 실패하면 탐지를 보내지 않고 멈춘다
 
 결과 저장: runs/edge/<session_id>/
-  sent_detections.jsonl, sent_ground-truth.jsonl, sent_calibration.jsonl,
+  edge_config.json(탐지 설정), sent_detections.jsonl, sent_ground-truth.jsonl, sent_calibration.jsonl,
   failed.jsonl(상태 코드 + 응답), vis/
 
 실행 (ai/ 폴더에서)
@@ -48,8 +48,8 @@ from unity_calibration import load_calibrations
 
 CAMERAS = ("cam1", "cam2")
 OUT_ROOT = AI_DIR / "runs" / "edge"
-# 서버(ObjectClass)가 받는 클래스. 서버가 suitcase, backpack을 추가하면 여기에도 추가한다
-SERVER_CLASSES = {"person", "chair", "cart", "desk"}
+# 서버(ObjectClass)가 받는 클래스. 서버에 클래스가 추가되면 여기에도 추가한다
+SERVER_CLASSES = {"person", "chair", "cart", "desk", "suitcase", "backpack"}
 
 
 def unity_to_world(p):
@@ -137,10 +137,10 @@ def main():
                         help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
     parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
     parser.add_argument("--classes", default=None, help="보낼 클래스. 예: person,chair (기본: 모델별 기본값)")
-    parser.add_argument("--foot", choices=["box", "ankle"], default="box", help="발 위치: 박스 아래 / 두 발목 가운데")
+    parser.add_argument("--foot", choices=["box", "ankle"], default="ankle", help="발 위치: 두 발목 가운데(기본, 안 보이면 박스) / 박스 아래")
     parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
     parser.add_argument("--conf", type=float, default=0.4)
-    parser.add_argument("--imgsz", type=int, default=640, help="모델 입력 크기 (640 기본, 1280이면 작은 물체에 유리하지만 느림)")
+    parser.add_argument("--imgsz", type=int, default=1280, help="모델 입력 크기 (1280 기본. 640이면 빠르지만 작거나 먼 물체를 놓침)")
     parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
     parser.add_argument("--save-every", type=int, default=0, help="N프레임마다 박스 그린 이미지 저장 (0 = 안 함)")
     args = parser.parse_args()
@@ -173,6 +173,13 @@ def main():
     detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf),
                                classes=classes, foot=args.foot) for cam in CAMERAS} if send_det else {}
     mode = "dry-run" if args.dry_run else args.server
+    if send_det:     # 어떤 엣지 설정으로 탐지했는지 남긴다 (실험 pack·설계도에서 읽음)
+        d = detectors[CAMERAS[0]]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "edge_config.json").write_text(json.dumps({
+            "model": d.model_name, "imgsz": d.imgsz, "foot": d.foot, "classes": list(d.classes),
+            "conf": d.conf, "class_conf": d.class_conf, "tracker": d.tracker,
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode} | 모델 {args.model}, 발 위치 {args.foot}")
 
     # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록

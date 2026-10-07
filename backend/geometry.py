@@ -28,6 +28,8 @@ def complete_box_foot(bbox, image_width, other_bbox, depth, other_depth) -> tupl
     if depth <= 0 or other_depth <= 0:
         raise ValueError("bbox depth must be positive")
     estimated_width = (float(other_bbox[2]) - float(other_bbox[0])) * other_depth / depth
+    if estimated_width <= x2 - x1:
+        return foot_point(bbox)
     if x1 <= 0 < x2:
         return (x2 - estimated_width / 2.0, y2)
     if x1 < image_width <= x2:
