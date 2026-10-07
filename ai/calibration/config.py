@@ -10,7 +10,7 @@ CHARUCO_BOARD_DIR = BOARDS_DIR / "charuco"
 ARUCO_MARKER_DIR = BOARDS_DIR / "aruco"
 
 CAPTURES_DIR = BASE_DIR / "captures"
-OUTPUT_DIR = BASE_DIR / "output"
+RESULTS_DIR = BASE_DIR / "results"
 
 
 # ─────────────────────────────────────────────

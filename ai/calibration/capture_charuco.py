@@ -1,4 +1,6 @@
 import argparse
+import getpass
+import os
 import time
 
 import cv2
@@ -36,13 +38,28 @@ def create_detector():
 def main() -> None:
     parser = argparse.ArgumentParser(description="ChArUco 이미지 촬영")
     parser.add_argument("--camera-id", required=True)
+    parser.add_argument(
+        "--camera-ip",
+        help="Tapo 등 RTSP 카메라 IP 주소 (예: 192.168.0.25)",
+    )
     args = parser.parse_args()
     captures_dir = CAPTURES_DIR / args.camera_id
     captures_dir.mkdir(parents=True, exist_ok=True)
 
     detector = create_detector()
 
-    camera = cv2.VideoCapture(CAMERA_INDEX)
+    camera_source = None
+    if args.camera_ip:
+        username = input("카메라 계정 사용자 이름: ").strip()
+        password = getpass.getpass("카메라 계정 비밀번호: ")
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+        camera_source = (
+            f"rtsp://{username}:{password}@"
+            f"{args.camera_ip}:554/stream1"
+        )
+        camera = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
+    else:
+        camera = cv2.VideoCapture(CAMERA_INDEX)
 
     if not camera.isOpened():
         raise RuntimeError("카메라를 열 수 없습니다.")
@@ -67,38 +84,67 @@ def main() -> None:
         success, frame = camera.read()
 
         if not success:
-            print("카메라 프레임을 읽지 못했습니다.")
-            break
+            if camera_source is None:
+                print("카메라 프레임을 읽지 못했습니다.")
+                break
+
+            print("RTSP 프레임이 끊겼습니다. 다시 연결합니다...")
+            camera.release()
+            time.sleep(1)
+            camera = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
+            continue
 
         preview = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        (
-            charuco_corners,
-            charuco_ids,
-            marker_corners,
-            marker_ids,
-        ) = detector.detectBoard(gray)
-
-        corner_count = (
-            0
-            if charuco_ids is None
-            else len(charuco_ids)
-        )
-
-        if marker_ids is not None:
-            cv2.aruco.drawDetectedMarkers(
-                preview,
-                marker_corners,
-                marker_ids,
-            )
-
-        if charuco_ids is not None:
-            cv2.aruco.drawDetectedCornersCharuco(
-                preview,
+        try:
+            (
                 charuco_corners,
                 charuco_ids,
-            )
+                marker_corners,
+                marker_ids,
+            ) = detector.detectBoard(gray)
+        except cv2.error:
+            charuco_corners = None
+            charuco_ids = None
+            marker_corners = None
+            marker_ids = None
+
+        valid_charuco = (
+            charuco_corners is not None
+            and charuco_ids is not None
+            and len(charuco_corners) == len(charuco_ids)
+            and len(charuco_ids) > 0
+        )
+        corner_count = len(charuco_ids) if valid_charuco else 0
+
+        valid_markers = (
+            marker_corners is not None
+            and marker_ids is not None
+            and len(marker_corners) == len(marker_ids)
+            and len(marker_ids) > 0
+        )
+
+        if valid_markers:
+            try:
+                cv2.aruco.drawDetectedMarkers(
+                    preview,
+                    marker_corners,
+                    marker_ids,
+                )
+            except cv2.error:
+                pass
+
+        if valid_charuco:
+            try:
+                cv2.aruco.drawDetectedCornersCharuco(
+                    preview,
+                    charuco_corners,
+                    charuco_ids,
+                )
+            except cv2.error:
+                valid_charuco = False
+                corner_count = 0
 
         cv2.putText(
             preview,
