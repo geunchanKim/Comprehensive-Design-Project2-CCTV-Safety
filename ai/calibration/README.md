@@ -26,7 +26,7 @@ python capture_charuco.py --camera-id cam2
 python calibrate_camera.py --camera-id cam2 --images captures/cam2
 ```
 
-결과는 각각 `output/cam1_intrinsics.json`, `output/cam2_intrinsics.json`에 저장된다.
+결과는 각각 `results/cam1_intrinsics.json`, `results/cam2_intrinsics.json`에 저장된다.
 
 ## 3. 공통 월드 좌표계의 rvec, tvec 계산
 
@@ -37,8 +37,8 @@ ID 0 마커를 두 카메라가 모두 볼 수 있는 바닥에 고정한다. �
 ```powershell
 python capture_images.py --camera-id cam1 --marker-id 0
 python capture_images.py --camera-id cam2 --marker-id 0
-python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics output/cam1_intrinsics.json --images captures/aruco/cam1
-python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics output/cam2_intrinsics.json --images captures/aruco/cam2
+python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics results/cam1_intrinsics.json --images captures/aruco/cam1
+python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics results/cam2_intrinsics.json --images captures/aruco/cam2
 ```
 
 생성된 JSON은 백엔드가 요구하는 `session_id`, `method`, `image_size`, `K`, `dist`,
@@ -48,8 +48,8 @@ python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --in
 백엔드가 실행 중이면 생성과 등록을 한 번에 할 수 있다.
 
 ```powershell
-python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics output/cam1_intrinsics.json --images captures/aruco/cam1 --backend-url http://localhost:8000
-python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics output/cam2_intrinsics.json --images captures/aruco/cam2 --backend-url http://localhost:8000
+python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics results/cam1_intrinsics.json --images captures/aruco/cam1 --backend-url http://localhost:8000
+python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics results/cam2_intrinsics.json --images captures/aruco/cam2 --backend-url http://localhost:8000
 ```
 
 두 카메라의 JSON은 반드시 같은 위치와 방향으로 고정된 기준 마커에서 계산해야 한다.

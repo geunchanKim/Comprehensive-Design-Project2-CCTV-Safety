@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
-from config import ARUCO_DICTIONARY_ID, ARUCO_MARKER_LENGTH_M, OUTPUT_DIR
+from config import ARUCO_DICTIONARY_ID, ARUCO_MARKER_LENGTH_M, RESULTS_DIR
 
 
 def marker_object_points() -> np.ndarray:
@@ -99,7 +99,7 @@ def main() -> None:
         "tvec": tvec.tolist(),
         "reproj_error_px": error,
     }
-    output = args.output or OUTPUT_DIR / f"{args.camera_id}.json"
+    output = args.output or RESULTS_DIR / f"{args.camera_id}.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"백엔드 호환 캘리브레이션 저장: {output}")

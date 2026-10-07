@@ -27,7 +27,6 @@ yarn-error.log*
 data/raw/
 ai/datasets/
 ai/runs/
-ai/calibration/captures/
 ai/calibration/output/
 *.pt
 *.pth
