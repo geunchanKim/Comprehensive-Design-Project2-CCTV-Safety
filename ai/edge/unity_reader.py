@@ -1,0 +1,238 @@
+"""
+Unity 폴더 읽기 → 탐지 → 서버 전송
+
+Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
+  1) 두 카메라 이미지를 카메라별로 탐지·추적 → POST /detections (묶음)
+  2) frames.jsonl의 정답 좌표 → POST /ground-truth
+로 보낸다. BE 공지(10/2)의 규칙을 따른다.
+
+규칙
+  - session_id = 폴더 이름 + "-runN" (실행마다 N 자동 증가, --run 으로 직접 지정 가능)
+  - pair_id = frame_id = Unity frame, ts = frames.jsonl 의 ts
+  - 추론 실패(이미지 없음·손상, 모델 오류) 묶음은 보내지 않는다
+  - 탐지 0개면 detections: [] 로 보낸다
+  - track_id가 아직 없는 탐지는 뺀다 (서버는 0 이상 정수만 받음)
+  - bbox는 이미지 안으로 자르고, 폭·높이가 0인 박스는 뺀다
+  - 탐지마다 foot(발 위치 점)을 같이 보낸다 (--foot ankle(기본): 두 발목 가운데, 발목이 안 보이면 박스 아래 가운데
+    / --foot box: 항상 박스 아래 가운데). foot도 이미지 안으로 자른다
+  - 서버가 받는 클래스(SERVER_CLASSES)만 보낸다. 정답 좌표에 그 밖의 클래스가 있으면 빼고 보낸다
+  - 정답 좌표는 Unity (x, y, z) → 월드 (x, z, y) 로 바꿔서 보낸다
+  - 캘리브레이션은 session_id별로 관리되므로, 탐지를 보내기 전에 이번 session_id로
+    cam1·cam2 캘리브레이션을 먼저 등록한다 (PUT /cameras/{camera_id}/calibration)
+      --calib auto  (기본) 폴더의 cameras.json 으로 계산해서 등록 (unity_calibration.py)
+      --calib 파일   calibration.json 파일 값으로 등록
+      --calib none  등록 안 함 (실제 카메라처럼 백엔드가 직접 등록한 경우)
+    등록이 하나라도 실패하면 탐지를 보내지 않고 멈춘다
+
+결과 저장: runs/edge/<session_id>/
+  edge_config.json(탐지 설정), sent_detections.jsonl, sent_ground-truth.jsonl, sent_calibration.jsonl,
+  failed.jsonl(상태 코드 + 응답), vis/
+
+실행 (ai/ 폴더에서)
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --dry-run
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130
+  python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130 --only gt
+"""
+
+import argparse
+import json
+import re
+import time
+from pathlib import Path
+
+import cv2
+
+from detector import AI_DIR, Detector, draw, parse_class_conf, parse_classes
+from server_client import ServerClient
+from unity_calibration import load_calibrations
+
+CAMERAS = ("cam1", "cam2")
+OUT_ROOT = AI_DIR / "runs" / "edge"
+# 서버(ObjectClass)가 받는 클래스. 서버에 클래스가 추가되면 여기에도 추가한다
+SERVER_CLASSES = {"person", "chair", "cart", "desk", "suitcase", "backpack"}
+
+
+def unity_to_world(p):
+    """Unity (x, y=위, z) → 월드 (X=x, Y=z, Z=위)"""
+    x, y, z = p
+    return [float(x), float(z), float(y)]
+
+
+def next_session_id(base: str, run: int | None) -> str:
+    """실행마다 -run1, -run2 ... (이 노트북의 runs/edge 기록 기준)"""
+    if run is None:
+        used = [int(m.group(1)) for d in OUT_ROOT.glob(f"{base}-run*")
+                if (m := re.fullmatch(re.escape(base) + r"-run(\d+)", d.name))]
+        run = max(used, default=0) + 1
+    return f"{base}-run{run}"
+
+
+def clean_detections(dets: list[dict], width: int, height: int) -> tuple[list[dict], int]:
+    """서버 검증에 걸리는 탐지를 정리한다. (정리된 목록, 뺀 개수)"""
+    kept, removed = [], 0
+    for d in dets:
+        if d["track_id"] is None or d["track_id"] < 0:
+            removed += 1
+            continue
+        x1, y1, x2, y2 = d["bbox"]
+        x1, x2 = max(0.0, min(x1, float(width))), max(0.0, min(x2, float(width)))
+        y1, y2 = max(0.0, min(y1, float(height))), max(0.0, min(y2, float(height)))
+        if x2 - x1 < 1 or y2 - y1 < 1:
+            removed += 1
+            continue
+        item = {**d, "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]}
+        if d.get("foot"):
+            fx, fy = d["foot"]
+            item["foot"] = [round(max(0.0, min(fx, float(width))), 1), round(max(0.0, min(fy, float(height))), 1)]
+        kept.append(item)
+    return kept, removed
+
+
+def build_ground_truth(session_id: str, row: dict) -> dict:
+    objects = []
+    for o in row.get("objects", []):
+        if o["cls"] not in SERVER_CLASSES:          # 서버가 모르는 클래스를 보내면 묶음 전체가 422
+            continue
+        item = {"object_id": o["object_id"], "cls": o["cls"], "world": unity_to_world(o["world"])}
+        if o.get("bbox"):
+            item["bbox"] = o["bbox"]
+        objects.append(item)
+    return {"session_id": session_id, "frame": row["frame"], "ts": row["ts"], "objects": objects}
+
+
+def calibration_payloads(folder: Path, calib: str, session_id: str) -> dict:
+    """--calib 값에 따라 {camera_id: 등록할 값} 을 만든다. session_id는 이번 run 것으로 덮어쓴다."""
+    if calib == "auto":
+        if not (folder / "cameras.json").exists():
+            raise SystemExit(f"cameras.json 이 없어요: {folder} (실제 카메라면 --calib none 또는 --calib 파일)")
+        return load_calibrations(folder, session_id)
+    data = json.loads(Path(calib).read_text(encoding="utf-8"))
+    return {cam: {**v, "session_id": session_id} for cam, v in data.items()}
+
+
+def register_calibrations(client: ServerClient, payloads: dict) -> bool:
+    """cam1, cam2 캘리브레이션을 이번 session_id로 등록. 하나라도 실패하면 False"""
+    ok = True
+    for cam in CAMERAS:
+        if cam not in payloads:
+            print(f"[캘리브레이션] {cam} 값이 없어요")
+            ok = False
+            continue
+        body = {k: v for k, v in payloads[cam].items() if k != "camera_id"}
+        if client.put_now(f"/cameras/{cam}/calibration", body):
+            print(f"[캘리브레이션] {cam} 등록 ({body['method']}, {body['session_id']})")
+        else:
+            ok = False
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("folder", help="Unity 출력 폴더 (cam1/, cam2/, frames.jsonl)")
+    parser.add_argument("--server", default=None, help="예: http://121.182.60.2:32130")
+    parser.add_argument("--dry-run", action="store_true", help="서버로 보내지 않고 파일로만 저장")
+    parser.add_argument("--only", choices=["all", "detections", "gt"], default="all", help="보낼 종류")
+    parser.add_argument("--run", type=int, default=None, help="run 번호 직접 지정 (기본: 자동 증가)")
+    parser.add_argument("--calib", default="auto",
+                        help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
+    parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
+    parser.add_argument("--classes", default=None, help="보낼 클래스. 예: person,chair (기본: 모델별 기본값)")
+    parser.add_argument("--foot", choices=["box", "ankle"], default="ankle", help="발 위치: 두 발목 가운데(기본, 안 보이면 박스) / 박스 아래")
+    parser.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4 (coco 기본값 있음)")
+    parser.add_argument("--conf", type=float, default=0.4)
+    parser.add_argument("--imgsz", type=int, default=1280, help="모델 입력 크기 (1280 기본. 640이면 빠르지만 작거나 먼 물체를 놓침)")
+    parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
+    parser.add_argument("--save-every", type=int, default=0, help="N프레임마다 박스 그린 이미지 저장 (0 = 안 함)")
+    args = parser.parse_args()
+
+    folder = Path(args.folder)
+    frames_path = folder / "frames.jsonl"
+    if not frames_path.exists():
+        raise SystemExit(f"frames.jsonl 이 없어요: {frames_path}")
+    rows = [json.loads(line) for line in frames_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if args.max_frames:
+        rows = rows[:args.max_frames]
+
+    session_id = next_session_id(folder.name, args.run)
+    out_dir = OUT_ROOT / session_id
+    vis_dir = out_dir / "vis" if args.save_every else None
+    if vis_dir:
+        vis_dir.mkdir(parents=True, exist_ok=True)
+
+    client = ServerClient(args.server, out_dir, dry_run=args.dry_run)
+    if not client.check_server():
+        raise SystemExit(f"서버 {args.server}/health 응답 없음")
+
+    send_det = args.only in ("all", "detections")
+    send_gt = args.only in ("all", "gt")
+
+    classes = parse_classes(args.classes)
+    unsupported = set(classes or ()) - SERVER_CLASSES
+    if unsupported:
+        raise SystemExit(f"서버가 아직 받지 않는 클래스예요: {unsupported}. 서버 지원 후 SERVER_CLASSES에 추가하세요")
+    detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf),
+                               classes=classes, foot=args.foot) for cam in CAMERAS} if send_det else {}
+    mode = "dry-run" if args.dry_run else args.server
+    if send_det:     # 어떤 엣지 설정으로 탐지했는지 남긴다 (실험 pack·설계도에서 읽음)
+        d = detectors[CAMERAS[0]]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "edge_config.json").write_text(json.dumps({
+            "model": d.model_name, "imgsz": d.imgsz, "foot": d.foot, "classes": list(d.classes),
+            "conf": d.conf, "class_conf": d.class_conf, "tracker": d.tracker,
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode} | 모델 {args.model}, 발 위치 {args.foot}")
+
+    # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록
+    if send_det and args.calib != "none":
+        if not register_calibrations(client, calibration_payloads(folder, args.calib, session_id)):
+            raise SystemExit(f"캘리브레이션 등록 실패 → 탐지를 보내지 않고 멈춥니다. 자세한 내용: {client.failed_path}")
+
+    stats = {"pairs": 0, "skipped": 0, "removed": 0, "empty": 0, "gt": 0}
+    t0 = time.perf_counter()
+    for row in rows:
+        frame, ts = int(row["frame"]), int(row["ts"])
+
+        if send_gt:
+            client.send(build_ground_truth(session_id, row), path="/ground-truth")
+            stats["gt"] += 1
+
+        if not send_det:
+            continue
+        # 두 카메라 이미지 읽기: 하나라도 없거나 깨지면 이 묶음은 추론 실패 → 보내지 않음
+        images = {cam: cv2.imread(str(folder / cam / f"{frame:06d}.jpg")) for cam in CAMERAS}
+        if any(img is None for img in images.values()):
+            stats["skipped"] += 1
+            print(f"  [건너뜀] frame {frame}: 이미지 없음 또는 손상")
+            continue
+        try:
+            frames = []
+            for cam in CAMERAS:
+                img = images[cam]
+                h, w = img.shape[:2]
+                dets, removed = clean_detections(detectors[cam](img), w, h)
+                stats["removed"] += removed
+                frames.append({"camera_id": cam, "frame_id": frame, "ts": ts,
+                               "image_size": [w, h], "detections": dets})
+                if vis_dir and frame % args.save_every == 0:
+                    cv2.imwrite(str(vis_dir / f"{frame:06d}_{cam}.jpg"), draw(img.copy(), dets))
+        except Exception as e:  # 모델 오류도 추론 실패로 보고 보내지 않음
+            stats["skipped"] += 1
+            print(f"  [건너뜀] frame {frame}: 추론 오류 {e}")
+            continue
+
+        if not any(f["detections"] for f in frames):
+            stats["empty"] += 1
+        client.send({"session_id": session_id, "pair_id": frame, "frames": frames}, path="/detections")
+        stats["pairs"] += 1
+        if stats["pairs"] % 50 == 0:
+            print(f"  {stats['pairs']}묶음 처리 ({stats['pairs'] / (time.perf_counter() - t0):.1f} 묶음/초)")
+
+    client.close()
+    print(f"\n완료 | 탐지 묶음 {stats['pairs']} (탐지 0개 {stats['empty']}) | 건너뜀 {stats['skipped']} | "
+          f"뺀 탐지 {stats['removed']} | 정답 {stats['gt']}")
+    print(client.summary())
+    print(f"결과: {out_dir}")
+
+
+if __name__ == "__main__":
+    main()
