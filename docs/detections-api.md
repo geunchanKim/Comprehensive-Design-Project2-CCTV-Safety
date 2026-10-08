@@ -6,7 +6,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 `session_id`는 한 번의 실험 실행을 식별한다. 같은 Unity 데이터를 다시 실행해 결과를 비교할 때는 `unity-classroom-01-run2`처럼 새로운 `session_id`를 사용한다. 카메라 캘리브레이션, 전역 객체 ID, detection bundle, ground truth가 모두 세션 단위로 저장되므로 새 세션에서는 캘리브레이션도 다시 등록해야 한다.
 
-한 세션에서 `pair_id`는 프레임 묶음마다 고유해야 한다. 이미 저장된 `(session_id, pair_id)`를 다시 전송하면 HTTP 409를 반환한다.
+한 세션에서 `pair_id`는 캘리브레이션 프로필마다 고유해야 한다. 이미 저장된 `(session_id, pair_id, calibration_profile)`을 다시 전송하면 HTTP 409를 반환한다.
 
 ## 1. 카메라 캘리브레이션 등록
 
@@ -15,6 +15,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 ```json
 {
   "session_id": "unity-classroom-01-run1",
+  "calibration_profile": "basic",
   "method": "unity-gt",
   "image_size": [1920, 1080],
   "K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]],
@@ -25,7 +26,9 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 }
 ```
 
-`method`는 `unity-gt` 또는 `charuco-aruco`를 사용한다. 동일한 `(session_id, camera_id)`로 다시 요청하면 해당 캘리브레이션을 갱신한다.
+`calibration_profile`은 `basic` 또는 `precise`이며 생략하면 `basic`이다. `basic`은 저장된 왜곡 계수와 관계없이 왜곡 보정을 적용하지 않고, `precise`는 ChArUco 내부 보정값을 적용한다. 동일한 `(session_id, camera_id, calibration_profile)`로 다시 요청하면 해당 캘리브레이션을 갱신한다.
+
+`POST /cameras/{camera_id}/calibration/solve-pnp`는 화면 전체에 분산된 `grid_points` 6개 이상과 계산에 쓰지 않은 `validation_points`를 받는다. 격자점이 한 직선이면 HTTP 422를 반환하며, 계산 후 재투영 RMSE(px), 검증 위치 RMSE·최대 오차(cm), 검증점 수를 `precise` 프로필에 저장한다. 각 검증점은 자신의 `world.z` 높이 평면에서 오차를 계산하므로 원거리·다른 높이 점도 넣을 수 있다.
 
 ## 2. 프레임 묶음 전송
 
@@ -34,6 +37,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 ```json
 {
   "session_id": "unity-classroom-01-run1",
+  "calibration_profile": "basic",
   "pair_id": 42,
   "frames": [
     {
@@ -76,7 +80,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 `ENABLE_TRACK_PAIR_HOLD=true`로 설정하면 기존 카메라 간 트랙 쌍을 우선 유지한다. 새 상대의 비용이 기존 상대의 `TRACK_PAIR_IMPROVEMENT_RATIO` 배 이하인 상태가 `TRACK_PAIR_CONFIRM_FRAMES`번 연속되어야 교체를 허용한다. 기본값은 각각 `0.9`, `3`이며 기능 자체의 기본값은 `false`다. 현재 상대와 도전자 연속 횟수는 `track_pair_states`에 저장된다.
 
-세션이 처음 처리될 때 모든 실험 설정을 `session_settings`에 저장한다. 같은 세션 ID로 다른 설정을 사용하면 HTTP 409를 반환한다. `GET /sessions/{session_id}/results.csv`는 객체별 위치와 저장된 거리·TTC·위험 등급을 세션 설정과 함께 내려준다.
+세션이 처음 처리될 때 모든 실험 설정을 프로필별 `session_settings`에 저장한다. 같은 세션·프로필로 다른 설정을 사용하면 HTTP 409를 반환한다. `POST /sessions/{session_id}/recompute?profile=precise`는 저장된 bbox와 발 위치를 대상 프로필 보정값으로 다시 계산하므로 엣지가 탐지를 재전송할 필요가 없다. 대상 프로필의 기존 결과는 교체된다. `GET /sessions/{session_id}/results.csv?profile=precise`는 해당 프로필의 객체별 위치와 저장된 거리·TTC·위험 등급을 내려준다.
 
 높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
 
@@ -87,6 +91,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
   "bundle_id": 1,
   "session_id": "unity-classroom-01-run1",
   "pair_id": 42,
+  "calibration_profile": "basic",
   "sync_delta_ms": 20,
   "status": "processed",
   "matches": [],

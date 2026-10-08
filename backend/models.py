@@ -14,6 +14,8 @@ class Camera(Base):
 
     session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True, default="basic",
+                                                     server_default="basic")
     method: Mapped[str] = mapped_column(String(32))
     image_width: Mapped[int] = mapped_column(Integer)
     image_height: Mapped[int] = mapped_column(Integer)
@@ -23,16 +25,20 @@ class Camera(Base):
     rotation_matrix: Mapped[list] = mapped_column(JSON)
     translation_vector: Mapped[list] = mapped_column(JSON)
     reprojection_error_px: Mapped[float] = mapped_column(Float)
+    validation_rmse_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    validation_max_error_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    validation_point_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class FrameBundle(Base):
     __tablename__ = "frame_bundles"
-    __table_args__ = (UniqueConstraint("session_id", "pair_id"),)
+    __table_args__ = (UniqueConstraint("session_id", "pair_id", "calibration_profile"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
     pair_id: Mapped[int] = mapped_column(BigInteger)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
     sync_delta_ms: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     detections: Mapped[list["Detection"]] = relationship(cascade="all, delete-orphan")
@@ -41,14 +47,16 @@ class FrameBundle(Base):
 class Detection(Base):
     __tablename__ = "detections"
     __table_args__ = (
-        UniqueConstraint("session_id", "camera_id", "frame_id", "track_id"),
-        ForeignKeyConstraint(["session_id", "camera_id"], ["cameras.session_id", "cameras.id"]),
+        UniqueConstraint("session_id", "camera_id", "frame_id", "track_id", "calibration_profile"),
+        ForeignKeyConstraint(["session_id", "camera_id", "calibration_profile"],
+                             ["cameras.session_id", "cameras.id", "cameras.calibration_profile"]),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     bundle_id: Mapped[int] = mapped_column(ForeignKey("frame_bundles.id"), index=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
     camera_id: Mapped[str] = mapped_column(String(64), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
     frame_id: Mapped[int] = mapped_column(Integer, index=True)
     captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
     track_id: Mapped[int] = mapped_column(Integer)
@@ -135,6 +143,8 @@ class SessionSettings(Base):
     __tablename__ = "session_settings"
 
     session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True, default="basic",
+                                                     server_default="basic")
     settings: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

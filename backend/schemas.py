@@ -5,10 +5,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
 FootSource = Literal["ankle", "box"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
+CalibrationProfile = Literal["basic", "precise"]
 
 
 class CameraCalibrationIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    calibration_profile: CalibrationProfile = "basic"
     method: CalibrationMethod
     image_size: tuple[int, int]
     K: list[list[float]]
@@ -16,6 +18,9 @@ class CameraCalibrationIn(BaseModel):
     rvec: tuple[float, float, float]
     tvec: tuple[float, float, float]
     reproj_error_px: float = Field(ge=0)
+    validation_rmse_cm: float | None = Field(default=None, ge=0)
+    validation_max_error_cm: float | None = Field(default=None, ge=0)
+    validation_point_count: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_calibration(self):
@@ -25,6 +30,36 @@ class CameraCalibrationIn(BaseModel):
             raise ValueError("K must be a 3x3 matrix")
         if len(self.dist) != 5:
             raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        return self
+
+
+class CalibrationPoint(BaseModel):
+    image: tuple[float, float]
+    world: tuple[float, float, float]
+
+
+class PnPCalibrationIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    image_size: tuple[int, int]
+    K: list[list[float]]
+    dist: list[float]
+    grid_points: list[CalibrationPoint] = Field(min_length=6)
+    validation_points: list[CalibrationPoint] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def validate_input(self):
+        if any(value <= 0 for value in self.image_size):
+            raise ValueError("image_size must contain positive values")
+        if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
+            raise ValueError("K must be a 3x3 matrix")
+        if len(self.dist) != 5:
+            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        training = {(point.image, point.world) for point in self.grid_points}
+        if any((point.image, point.world) in training for point in self.validation_points):
+            raise ValueError("validation points must be held out from PnP grid points")
+        grid_heights = {point.world[2] for point in self.grid_points}
+        if all(point.world[2] in grid_heights for point in self.validation_points):
+            raise ValueError("validation points must include at least one different-height point")
         return self
 
 
@@ -67,6 +102,7 @@ class CameraFrameIn(BaseModel):
 
 class DetectionBundleIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    calibration_profile: CalibrationProfile = "basic"
     pair_id: int = Field(ge=0)
     frames: list[CameraFrameIn] = Field(min_length=2, max_length=2)
 
@@ -122,6 +158,7 @@ class DetectionBundleOut(BaseModel):
     bundle_id: int
     session_id: str
     pair_id: int
+    calibration_profile: CalibrationProfile
     sync_delta_ms: int
     status: Literal["processed"] = "processed"
     matches: list[DetectionResult]
