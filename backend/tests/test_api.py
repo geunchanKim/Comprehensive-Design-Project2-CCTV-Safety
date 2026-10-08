@@ -63,7 +63,7 @@ def test_health_exposes_deployment_settings():
         "ankle_foot_z_max": 0.4,
         "bbox_position_method": "triangulate",
         "matching_method": "epipolar",
-        "max_ground_distance_m": 1.0,
+        "max_ground_distance_m": 2.0,
         "kalman_filter": False,
         "track_pair_hold": False,
         "track_pair_confirm_frames": 3,

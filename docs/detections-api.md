@@ -74,7 +74,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 각 단계는 에피폴라 오차, 삼각측량 높이, 두 카메라 앞쪽 여부를 헝가리안 알고리즘 실행 전에 검사한다. 기본 에피폴라 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
 
-개선 알고리즘은 `MATCHING_METHOD=ground-plane`으로 켠다. 이 모드에서는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. 발목은 `Z=0.1m`, bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=1.0`이다. 기본 `MATCHING_METHOD=epipolar`은 기존 방법 비교를 위해 유지한다. 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
+개선 알고리즘은 `MATCHING_METHOD=ground-plane`으로 켠다. 이 모드에서는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. 발목은 `Z=0.1m`, bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=2.0`이다. S4 자동 실험에서 1.0m는 놓침이 증가했지만 2.0m는 정상 추적 95.4%, 놓침 4.6%, ID 변경 1회로 기존 에피폴라 방식(93.6%, 6.4%, 7회)보다 개선됐다. Docker 촬영 서버는 ground-plane 2.0m를 기본으로 사용하며, 애플리케이션을 직접 실행할 때 `MATCHING_METHOD`를 생략하면 비교 조건인 `epipolar`를 유지한다. 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
 
 `ENABLE_KALMAN_FILTER=true`로 설정하면 객체별 `[x, y, z, vx, vy, vz]` 상태를 DB에 저장하고 다음 프레임에서 이어서 보정한다. 이때 `world`는 보정 위치, `raw_world`는 보정 전 위치, `velocity`는 초당 월드 좌표 속도다. 기본값은 `false`로 기존 방법의 출력에 영향을 주지 않는다.
 
