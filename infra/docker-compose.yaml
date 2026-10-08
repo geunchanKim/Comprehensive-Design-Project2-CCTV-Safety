@@ -43,6 +43,8 @@ services:
       ANKLE_FOOT_Z_MIN: ${ANKLE_FOOT_Z_MIN:--0.1}
       ANKLE_FOOT_Z_MAX: ${ANKLE_FOOT_Z_MAX:-0.4}
       BBOX_POSITION_METHOD: ${BBOX_POSITION_METHOD:-triangulate}
+      MATCHING_METHOD: ${MATCHING_METHOD:-ground-plane}
+      MAX_GROUND_DISTANCE_M: ${MAX_GROUND_DISTANCE_M:-2.0}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:

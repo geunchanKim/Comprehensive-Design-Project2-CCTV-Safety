@@ -1,0 +1,14 @@
+{
+  "unit": "meter",
+  "world_origin_note": "ID 0 center is recommended as (0,0,0); X/Y axes must be identical for both cameras",
+  "points": [
+    {"marker_id": 0, "role": "pnp", "world": [0.0, 0.0, 0.0]},
+    {"marker_id": 1, "role": "pnp", "world": [null, null, 0.0]},
+    {"marker_id": 2, "role": "pnp", "world": [null, null, 0.0]},
+    {"marker_id": 3, "role": "pnp", "world": [null, null, 0.0]},
+    {"marker_id": 4, "role": "pnp", "world": [null, null, 0.0]},
+    {"marker_id": 5, "role": "pnp", "world": [null, null, 0.0]},
+    {"marker_id": 6, "role": "validation", "world": [null, null, 0.0]},
+    {"marker_id": 7, "role": "validation", "world": [null, null, null]}
+  ]
+}
