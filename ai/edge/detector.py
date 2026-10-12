@@ -15,13 +15,15 @@
   클래스마다 다른 기준을 쓴다. 없는 클래스는 --conf 를 쓴다.
   coco 기본값: person 0.5, chair 0.4 (Unity 측정에서 탐지율·오탐 균형이 가장 좋았던 값)
 
-발 위치 (--foot box|ankle)
+발 위치 (--foot box|ankle) — 계산은 feet.py
   ankle (기본) 사람은 포즈 모델(yolo11n-pose)로 찾은 두 발목의 가운데. 발목이 안 보이면 box로 대신함
+        보이는 발목은 좌우를 따로 ankles: {left, right} 로도 붙인다 (서버의 같은 쪽 발목 대응용)
   box   박스 아래 가운데 ((x1+x2)/2, y2)
         사람이 아닌 물체는 항상 box
         Unity S1~S3 측정: 위치 오차 15.8cm(box) → 5.8cm(ankle)
 
-탐지 결과 형식 {track_id, cls, conf, bbox:[x1,y1,x2,y2], foot:[x,y], foot_src:"box"|"ankle"} (픽셀)
+탐지 결과 형식 {track_id, cls, conf, bbox:[x1,y1,x2,y2], foot:[x,y], foot_src:"box"|"ankle",
+              ankles:{left:[x,y,conf]|null, right:[x,y,conf]|null} (사람, 발목이 보일 때만)} (픽셀)
 
 실행 (ai/ 폴더에서)
   python edge/detector.py --source 0 --show                     # 웹캠
@@ -38,6 +40,8 @@ import cv2
 import torch
 from ultralytics import YOLO
 
+from feet import attach_feet, box_foot  # noqa: F401  (발 위치 계산은 feet.py)
+
 AI_DIR = Path(__file__).resolve().parent.parent           # ai/
 WEIGHTS = {
     "v2": AI_DIR / "runs" / "train_v2" / "weights" / "best.pt",
@@ -51,7 +55,6 @@ COCO_CLASSES = ("person", "chair", "suitcase", "backpack")  # coco 모델에서 
 DEFAULT_CLASSES = {"coco": COCO_CLASSES, "v2": CLASSES, "ensemble": CLASSES}
 DEFAULT_CLASS_CONF = {"coco": {"person": 0.5, "chair": 0.4, "suitcase": 0.4, "backpack": 0.4}}
 POSE_WEIGHTS = "yolo11n-pose.pt"                       # 없으면 자동 다운로드
-LEFT_ANKLE, RIGHT_ANKLE = 15, 16                       # COCO 키포인트 번호
 
 
 def parse_class_conf(text: str | None) -> dict:
@@ -66,37 +69,6 @@ def parse_classes(text: str | None) -> tuple | None:
     return tuple(c.strip() for c in text.split(",") if c.strip()) if text else None
 
 
-def box_foot(bbox) -> list:
-    """박스 아래 가운데"""
-    x1, _, x2, y2 = bbox
-    return [round((x1 + x2) / 2, 1), round(y2, 1)]
-
-
-def iou(a, b) -> float:
-    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
-    inter = ix * iy
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union > 0 else 0.0
-
-
-def attach_feet(detections: list[dict], people: list[tuple], ankle_conf: float = 0.5, min_iou: float = 0.5):
-    """탐지마다 foot, foot_src를 붙인다.
-    people: 포즈 모델 결과 [(박스, [(x, y, conf) × 17]), ...]
-    사람 탐지는 박스가 가장 많이 겹치는 포즈 결과(IoU ≥ min_iou)를 찾아,
-    두 발목 신뢰도가 모두 ankle_conf 이상이면 두 발목 가운데, 아니면 박스 아래 가운데."""
-    for d in detections:
-        d["foot"], d["foot_src"] = box_foot(d["bbox"]), "box"
-        if d["cls"] != "person" or not people:
-            continue
-        score, best = max(((iou(d["bbox"], box), kps) for box, kps in people), key=lambda t: t[0])
-        if score < min_iou:
-            continue
-        left, right = best[LEFT_ANKLE], best[RIGHT_ANKLE]
-        if left[2] >= ankle_conf and right[2] >= ankle_conf:
-            d["foot"] = [round((left[0] + right[0]) / 2, 1), round((left[1] + right[1]) / 2, 1)]
-            d["foot_src"] = "ankle"
-    return detections
 # ensemble 모드에서 두 모델이 각자 추적기를 가지므로 track_id가 겹치지 않게 v1 쪽에 더해주는 값
 TRACK_ID_OFFSET = 10000
 COLORS = {"person": (0, 200, 0), "chair": (220, 0, 220), "cart": (0, 165, 255), "desk": (255, 120, 0),
@@ -228,6 +200,13 @@ def draw(frame, detections: list[dict]):
         cv2.circle(frame, (fx, fy), 5, color, -1)
         if d.get("foot_src") == "ankle":
             cv2.circle(frame, (fx, fy), 8, (255, 255, 255), 2)
+        # 좌우 발목 (사람 기준 왼쪽 L, 오른쪽 R)
+        for side, mark in (("left", "L"), ("right", "R")):
+            point = (d.get("ankles") or {}).get(side)
+            if point:
+                ax, ay = int(point[0]), int(point[1])
+                cv2.circle(frame, (ax, ay), 3, (255, 255, 255), -1)
+                cv2.putText(frame, mark, (ax + 4, ay - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     return frame
 
 

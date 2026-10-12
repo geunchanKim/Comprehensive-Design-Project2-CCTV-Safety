@@ -68,6 +68,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 `foot`과 `foot_src`는 선택 필드다. `foot`은 이미지 범위 안의 `[x, y]` 픽셀 좌표이며, `foot_src`는 `ankle` 또는 `box`다. `foot`이 없으면 기존 방식대로 bbox 하단 중앙을 사용하고 `foot_src`는 `box`로 저장한다.
 
+사람 탐지는 선택적으로 `"ankles": {"left": [x, y, confidence], "right": [x, y, confidence]}`를 보낼 수 있다. 한쪽은 `null`일 수 있다. `ENABLE_ANKLE_PAIRING=true`(기본값)이면 서버가 정방향(L-L/R-R)과 교차 방향(L-R/R-L)의 에피폴라 오차를 비교한다. 양 카메라에서 양쪽 발목이 보이면 가운데점(`mid`), 한 쌍만 대응되면 양쪽 confidence가 `MIN_ANKLE_CONFIDENCE`(기본 0.6) 이상일 때 해당 `left` 또는 `right`, 그 외에는 기존 `foot`을 사용한다. 실제 선택은 각 `observations[].position_method`에서 확인할 수 있다.
+
 엣지 추론 자체가 실패한 프레임은 전송하지 않는다. 정상적으로 추론했으나 탐지가 없을 때만 `detections: []`를 전송한다. 따라서 별도의 `analysis_status` 필드는 사용하지 않는다.
 
 서버는 사람을 두 단계로 연결한다. 먼저 양쪽 카메라에서 모두 발목 좌표가 있는 사람끼리 연결하고, 남은 사람은 양쪽 모두 bbox 하단 중앙으로 다시 계산해 연결한다. 화면 좌우 끝에서 잘린 bbox는 반대 카메라의 bbox 폭과 깊이 비율로 원래 중심을 복원한다. 그 밖의 클래스는 bbox 하단 중앙을 사용한다.

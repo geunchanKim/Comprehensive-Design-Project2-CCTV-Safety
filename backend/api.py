@@ -57,6 +57,8 @@ ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "false").lower() in
 TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
 TRACK_PAIR_IMPROVEMENT_RATIO = float(os.getenv("TRACK_PAIR_IMPROVEMENT_RATIO", "0.9"))
 ENABLE_RISK_ANALYSIS = os.getenv("ENABLE_RISK_ANALYSIS", "false").lower() in {"1", "true", "yes"}
+ENABLE_ANKLE_PAIRING = os.getenv("ENABLE_ANKLE_PAIRING", "true").lower() in {"1", "true", "yes"}
+MIN_ANKLE_CONFIDENCE = float(os.getenv("MIN_ANKLE_CONFIDENCE", "0.6"))
 WARNING_DISTANCE_M = float(os.getenv("WARNING_DISTANCE_M", "1.0"))
 DANGER_DISTANCE_M = float(os.getenv("DANGER_DISTANCE_M", "0.5"))
 OBJECT_CLASSES = get_args(ObjectClass)
@@ -119,6 +121,8 @@ def _experiment_settings():
         "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
         "track_pair_improvement_ratio": TRACK_PAIR_IMPROVEMENT_RATIO,
         "risk_analysis": ENABLE_RISK_ANALYSIS,
+        "ankle_pairing": ENABLE_ANKLE_PAIRING,
+        "min_ankle_confidence": MIN_ANKLE_CONFIDENCE,
         "warning_distance_m": WARNING_DISTANCE_M,
         "danger_distance_m": DANGER_DISTANCE_M,
     }
@@ -332,7 +336,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                frame_id=frame.frame_id,
                                captured_at_ms=frame.ts, track_id=item.track_id, cls=item.cls,
                                confidence=round(item.conf, 3), bbox=list(item.bbox),
-                               foot_pixel=list(foot), foot_src=foot_source)
+                               foot_pixel=list(foot), foot_src=foot_source,
+                               ankles=(item.ankles.model_dump(mode="json") if item.ankles else None))
             db.add(record)
             records[frame.camera_id].append((item, record, foot, foot_source))
             normalized[frame.camera_id].append(undistort(foot, calibration))
@@ -494,6 +499,57 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             foot1, foot2 = candidate_pixels[(local1, local2)]
             epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             world = candidate_worlds[(local1, local2)]
+            position_method = "foot"
+            if (algorithm == "improved" and ENABLE_ANKLE_PAIRING
+                    and object_class == "person" and item1.ankles and item2.ankles):
+                ankle1 = {side: getattr(item1.ankles, side) for side in ("left", "right")
+                          if getattr(item1.ankles, side) is not None}
+                ankle2 = {side: getattr(item2.ankles, side) for side in ("left", "right")
+                          if getattr(item2.ankles, side) is not None}
+                if len(ankle1) == len(ankle2) == 2:
+                    # The midpoint is label-invariant.  Still evaluate both assignments so
+                    # partial observations use the same correspondence rule.
+                    direct = sum(symmetric_epipolar_distance(
+                        undistort(ankle1[side].root[:2], calibrations[0]),
+                        undistort(ankle2[side].root[:2], calibrations[1]), essential)
+                                 for side in ("left", "right"))
+                    swapped = sum(symmetric_epipolar_distance(
+                        undistort(ankle1[side].root[:2], calibrations[0]),
+                        undistort(ankle2["right" if side == "left" else "left"].root[:2], calibrations[1]),
+                        essential) for side in ("left", "right"))
+                    camera2_order = (("left", "right") if direct <= swapped else ("right", "left"))
+                    foot1 = tuple(np.mean([ankle1["left"].root[:2], ankle1["right"].root[:2]], axis=0))
+                    foot2 = tuple(np.mean([ankle2[side].root[:2] for side in camera2_order], axis=0))
+                    normalized_pair = tuple(undistort(pixel, calibration)
+                                            for pixel, calibration in zip((foot1, foot2), calibrations))
+                    try:
+                        world = triangulate(*normalized_pair, *calibrations)
+                        position_method = "mid"
+                        source1 = source2 = "ankle"
+                    except ValueError:
+                        pass
+                else:
+                    choices = []
+                    for side1, point1 in ankle1.items():
+                        for side2, point2 in ankle2.items():
+                            normalized_ankles = (undistort(point1.root[:2], calibrations[0]),
+                                                 undistort(point2.root[:2], calibrations[1]))
+                            error = symmetric_epipolar_distance(*normalized_ankles, essential)
+                            choices.append((error, side1, point1, point2, normalized_ankles))
+                    if choices:
+                        _, side, point1, point2, ankle_pair = min(choices, key=lambda choice: choice[0])
+                        if point1.root[2] >= MIN_ANKLE_CONFIDENCE and point2.root[2] >= MIN_ANKLE_CONFIDENCE:
+                            try:
+                                ankle_world = triangulate(*ankle_pair, *calibrations)
+                                if ANKLE_FOOT_Z_MIN <= ankle_world[2] <= ANKLE_FOOT_Z_MAX:
+                                    world = ankle_world
+                                    foot1, foot2 = point1.root[:2], point2.root[:2]
+                                    normalized_pair = ankle_pair
+                                    position_method = side
+                                    source1 = source2 = "ankle"
+                            except ValueError:
+                                pass
+                epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             if source1 == source2 == "box" and BBOX_POSITION_METHOD in {"plane", "weighted-plane"}:
                 try:
                     positions = [position_on_plane(point, calibration, 0.0)
@@ -523,11 +579,13 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                 {"camera_id": frames[0].camera_id, "frame_id": frames[0].frame_id, "ts": frames[0].ts,
                                  "track_id": item1.track_id, "cls": item1.cls, "conf": round(item1.conf, 3),
                                  "bbox": item1.bbox, "image_size": frames[0].image_size,
-                                 "foot_pixel": foot1, "foot_src": source1},
+                                 "foot_pixel": foot1, "foot_src": source1,
+                                 "position_method": position_method},
                                 {"camera_id": frames[1].camera_id, "frame_id": frames[1].frame_id, "ts": frames[1].ts,
                                  "track_id": item2.track_id, "cls": item2.cls, "conf": round(item2.conf, 3),
                                  "bbox": item2.bbox, "image_size": frames[1].image_size,
-                                 "foot_pixel": foot2, "foot_src": source2},
+                                 "foot_pixel": foot2, "foot_src": source2,
+                                 "position_method": position_method},
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
                             "raw_world": ({"x": raw_world[0], "y": raw_world[1], "z": raw_world[2]}

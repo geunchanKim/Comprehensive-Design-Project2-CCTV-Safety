@@ -69,6 +69,7 @@ class Detection(Base):
     bbox: Mapped[list] = mapped_column(JSON)
     foot_pixel: Mapped[list] = mapped_column(JSON)
     foot_src: Mapped[str] = mapped_column(String(16), default="box", server_default="box")
+    ankles: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     world_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     world_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     world_z: Mapped[float | None] = mapped_column(Float, nullable=True)
