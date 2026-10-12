@@ -108,6 +108,8 @@ class CameraFrameIn(BaseModel):
     camera_id: str = Field(min_length=1, max_length=64)
     frame_id: int = Field(ge=0)
     ts: int = Field(ge=0, description="Epoch milliseconds")
+    pts_ms: float | None = Field(default=None, ge=0, description="Camera/video presentation timestamp")
+    recv_ms: int | None = Field(default=None, ge=0, description="Edge receive time in epoch milliseconds")
     image_size: tuple[int, int]
     detections: list[DetectionIn]
 
@@ -134,6 +136,7 @@ class DetectionBundleIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     calibration_profile: CalibrationProfile = "basic"
     pair_id: int = Field(ge=0)
+    max_sync_delta_ms: int | None = Field(default=None, ge=0, le=10_000)
     frames: list[CameraFrameIn] = Field(min_length=2, max_length=2)
 
     @model_validator(mode="after")
@@ -191,6 +194,10 @@ class DetectionBundleOut(BaseModel):
     pair_id: int
     calibration_profile: CalibrationProfile
     sync_delta_ms: int
+    pts_delta_ms: float | None = None
+    recv_delta_ms: int | None = None
+    sync_time_basis: Literal["recv_ms", "ts"] = "ts"
+    max_sync_delta_ms: int
     status: Literal["processed"] = "processed"
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]

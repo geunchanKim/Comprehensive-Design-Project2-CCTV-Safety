@@ -6,12 +6,12 @@ from sqlalchemy import text
 
 try:
     from .api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
-                      BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX,
+                      BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, MAX_SYNC_DELTA_MS,
                       _experiment_settings, router)
     from .database import get_db
 except ImportError:  # Docker runs this directory as the import root.
     from api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
-                     BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX,
+                     BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, MAX_SYNC_DELTA_MS,
                      _experiment_settings, router)
     from database import get_db
 
@@ -26,6 +26,7 @@ def health_check():
         "status": "ok",
         "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
         "max_epipolar_error_px": MAX_EPIPOLAR_ERROR_PX,
+        "default_max_sync_delta_ms": MAX_SYNC_DELTA_MS,
         "box_foot_z_min": BOX_FOOT_Z_MIN,
         "box_foot_z_max": BOX_FOOT_Z_MAX,
         "ankle_foot_z_min": ANKLE_FOOT_Z_MIN,

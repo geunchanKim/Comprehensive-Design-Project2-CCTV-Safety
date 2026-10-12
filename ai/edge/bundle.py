@@ -12,7 +12,8 @@ session_id 규칙: {site}-{MMDD}-{scenario}-t{take}[-v{n}]
 
 POST /detections 묶음
   {session_id, calibration_profile: "basic", pair_id,
-   frames: [{camera_id, frame_id, ts, image_size, detections: [...]}, × 2]}
+   max_sync_delta_ms,
+   frames: [{camera_id, frame_id, ts, pts_ms, recv_ms, image_size, detections: [...]}, × 2]}
   detections: {track_id, cls, conf, bbox, foot, foot_src, ankles?}
   - ankles: 사람의 좌우 발목 {left: [x, y, conf] | null, right: [x, y, conf] | null} (feet.py)
   - calibration_profile은 항상 basic. precise는 서버 recompute로만 만든다
@@ -80,13 +81,21 @@ def _inside(point, width: int, height: int) -> list:
     return [round(max(0.0, min(point[0], width - 0.1)), 1), round(max(0.0, min(point[1], height - 0.1)), 1)]
 
 
-def build_frame(camera_id: str, frame_id: int, ts: int, image_size, detections: list[dict]) -> dict:
-    return {"camera_id": camera_id, "frame_id": int(frame_id), "ts": int(ts),
-            "image_size": [int(image_size[0]), int(image_size[1])], "detections": detections}
+def build_frame(camera_id: str, frame_id: int, ts: int, image_size, detections: list[dict],
+                pts_ms: float | None = None, recv_ms: int | None = None) -> dict:
+    frame = {"camera_id": camera_id, "frame_id": int(frame_id), "ts": int(ts),
+             "image_size": [int(image_size[0]), int(image_size[1])], "detections": detections}
+    if pts_ms is not None:
+        frame["pts_ms"] = round(float(pts_ms), 3)
+    if recv_ms is not None:
+        frame["recv_ms"] = int(recv_ms)
+    return frame
 
 
-def build_bundle(session_id: str, pair_id: int, frames: list[dict]) -> dict:
-    return {"session_id": session_id, "calibration_profile": PROFILE, "pair_id": int(pair_id), "frames": frames}
+def build_bundle(session_id: str, pair_id: int, frames: list[dict],
+                 max_sync_delta_ms: int = MAX_SYNC_DELTA_MS) -> dict:
+    return {"session_id": session_id, "calibration_profile": PROFILE, "pair_id": int(pair_id),
+            "max_sync_delta_ms": int(max_sync_delta_ms), "frames": frames}
 
 
 def edge_config(detector) -> dict:

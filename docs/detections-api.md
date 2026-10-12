@@ -32,7 +32,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 ## 2. 프레임 묶음 전송
 
-`POST /detections`는 최상위에 `session_id`, `pair_id`와 서로 다른 카메라의 프레임을 정확히 2개 받는다. `ts`는 epoch millisecond이며 두 프레임의 차이가 50ms를 초과하면 HTTP 422를 반환한다. 임계값은 `MAX_SYNC_DELTA_MS` 환경변수로 바꿀 수 있다.
+`POST /detections`는 최상위에 `session_id`, `pair_id`, 선택적인 `max_sync_delta_ms`와 서로 다른 카메라의 프레임을 정확히 2개 받는다. 각 프레임은 호환용 `ts`와 선택적인 카메라 PTS `pts_ms`, 엣지 수신 epoch 시각 `recv_ms`를 받는다. 양쪽 `recv_ms`가 있으면 그 차이로 동기화를 검사하고, 없으면 `ts` 차이를 사용한다. `max_sync_delta_ms`는 처음 요청할 때 세션의 실험 설정으로 고정되며 생략 시 서버 `MAX_SYNC_DELTA_MS`(기본 50ms)를 사용한다. 응답은 `pts_delta_ms`, `recv_delta_ms`, `sync_time_basis`, `max_sync_delta_ms`를 함께 제공한다.
 
 ```json
 {
@@ -68,7 +68,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 `foot`과 `foot_src`는 선택 필드다. `foot`은 이미지 범위 안의 `[x, y]` 픽셀 좌표이며, `foot_src`는 `ankle` 또는 `box`다. `foot`이 없으면 기존 방식대로 bbox 하단 중앙을 사용하고 `foot_src`는 `box`로 저장한다.
 
-사람 탐지는 선택적으로 `"ankles": {"left": [x, y, confidence], "right": [x, y, confidence]}`를 보낼 수 있다. 한쪽은 `null`일 수 있다. `ENABLE_ANKLE_PAIRING=true`(기본값)이면 서버가 정방향(L-L/R-R)과 교차 방향(L-R/R-L)의 에피폴라 오차를 비교한다. 양 카메라에서 양쪽 발목이 보이면 가운데점(`mid`), 한 쌍만 대응되면 양쪽 confidence가 `MIN_ANKLE_CONFIDENCE`(기본 0.6) 이상일 때 해당 `left` 또는 `right`, 그 외에는 기존 `foot`을 사용한다. 실제 선택은 각 `observations[].position_method`에서 확인할 수 있다.
+사람 탐지는 선택적으로 `"ankles": {"left": [x, y, confidence], "right": [x, y, confidence]}`를 보낼 수 있다. 한쪽은 `null`일 수 있다. `ENABLE_ANKLE_PAIRING=true`(기본값)이면 서버가 왼발목끼리와 오른발목끼리를 각각 삼각측량한다. 두 쪽 모두 유효하면 두 3D 좌표의 평균(`mid`), 한쪽만 유효하면 해당 `left` 또는 `right`를 사용한다. 양 카메라 confidence가 `MIN_ANKLE_CONFIDENCE`(기본 0.6) 미만이거나 같은 쪽 대응이 없으면 기존 `foot`으로 fallback한다. 실제 선택은 각 `observations[].position_method`에서 확인할 수 있다.
 
 엣지 추론 자체가 실패한 프레임은 전송하지 않는다. 정상적으로 추론했으나 탐지가 없을 때만 `detections: []`를 전송한다. 따라서 별도의 `analysis_status` 필드는 사용하지 않는다.
 
@@ -99,7 +99,7 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 
 높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
 
-응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. Unity S1~S4 검증에서 발목 삼각측량이 고정 높이 평면보다 정확했으므로 발목 쌍은 항상 삼각측량을 사용한다. bbox 쌍은 `BBOX_POSITION_METHOD=triangulate|plane|weighted-plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균하고, `weighted-plane`은 멀거나 바닥과 평행에 가까운 광선의 가중치를 낮춘다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
+응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. 발목 쌍과 사람 bbox는 항상 삼각측량을 사용한다. `chair`, `suitcase`의 bbox만 `BBOX_POSITION_METHOD=triangulate|plane|weighted-plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균하고, `weighted-plane`은 멀거나 바닥과 평행에 가까운 광선의 가중치를 낮춘다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
 
 ```json
 {

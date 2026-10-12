@@ -198,7 +198,9 @@ def main():
                 dets, removed = clean_detections(detectors[cam](img), w, h)
                 stats["removed"] += removed
                 cam_ts = int(round(row[cam]["recv_ms"] - cam_offset[cam])) if cam in row else ts
-                frames.append(build_frame(cam, frame, cam_ts, (w, h), dets))
+                timing = row.get(cam, {})
+                frames.append(build_frame(cam, frame, cam_ts, (w, h), dets,
+                                          pts_ms=timing.get("pts_ms"), recv_ms=timing.get("recv_ms")))
                 if vis_dir and frame % args.save_every == 0:
                     cv2.imwrite(str(vis_dir / f"{frame:06d}_{cam}.jpg"), draw(img.copy(), dets))
         except Exception as e:  # 모델 오류도 추론 실패로 보고 보내지 않음

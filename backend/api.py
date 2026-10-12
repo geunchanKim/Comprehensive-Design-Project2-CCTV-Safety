@@ -80,6 +80,11 @@ def _should_complete_box_foot(object_class: str, source1: str, source2: str) -> 
     return object_class in BOX_FOOT_COMPLETION_CLASSES and source1 == source2 == "box"
 
 
+def _should_use_box_plane(object_class: str, source1: str, source2: str) -> bool:
+    return (object_class in BOX_FOOT_COMPLETION_CLASSES and source1 == source2 == "box"
+            and BBOX_POSITION_METHOD in {"plane", "weighted-plane"})
+
+
 def _calibration(camera: Camera) -> Calibration:
     return Calibration(
         K=np.asarray(camera.intrinsic_matrix, dtype=float),
@@ -321,8 +326,10 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
     used_object_ids: set[int] = set()
     profile = body.calibration_profile
+    max_sync_delta_ms = body.max_sync_delta_ms if body.max_sync_delta_ms is not None else MAX_SYNC_DELTA_MS
     settings = {**_experiment_settings(algorithm),
-                "calibration_profile": profile, "algorithm": algorithm}
+                "calibration_profile": profile, "algorithm": algorithm,
+                "max_sync_delta_ms": max_sync_delta_ms}
     matching_method = settings["matching_method"]
     stored_settings = db.get(SessionSettings, (body.session_id, profile, algorithm))
     if stored_settings is None:
@@ -338,9 +345,15 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
     ))
     if duplicate is not None:
         raise HTTPException(409, "this session/pair detection bundle was already stored")
-    sync_delta = abs(frames[0].ts - frames[1].ts)
-    if sync_delta > MAX_SYNC_DELTA_MS:
-        raise HTTPException(422, f"frame timestamps differ by {sync_delta}ms (maximum {MAX_SYNC_DELTA_MS}ms)")
+    pts_delta = (abs(frames[0].pts_ms - frames[1].pts_ms)
+                 if all(frame.pts_ms is not None for frame in frames) else None)
+    recv_delta = (abs(frames[0].recv_ms - frames[1].recv_ms)
+                  if all(frame.recv_ms is not None for frame in frames) else None)
+    sync_time_basis = "recv_ms" if recv_delta is not None else "ts"
+    sync_delta = recv_delta if recv_delta is not None else abs(frames[0].ts - frames[1].ts)
+    if sync_delta > max_sync_delta_ms:
+        raise HTTPException(422, f"frame {sync_time_basis} differ by {sync_delta}ms "
+                                 f"(session maximum {max_sync_delta_ms}ms)")
 
     cameras = [db.get(Camera, (body.session_id, frame.camera_id, profile)) for frame in frames]
     missing = [frame.camera_id for frame, camera in zip(frames, cameras) if camera is None]
@@ -546,51 +559,37 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                           if getattr(item1.ankles, side) is not None}
                 ankle2 = {side: getattr(item2.ankles, side) for side in ("left", "right")
                           if getattr(item2.ankles, side) is not None}
-                if len(ankle1) == len(ankle2) == 2:
-                    # The midpoint is label-invariant.  Still evaluate both assignments so
-                    # partial observations use the same correspondence rule.
-                    direct = sum(symmetric_epipolar_distance(
-                        undistort(ankle1[side].root[:2], calibrations[0]),
-                        undistort(ankle2[side].root[:2], calibrations[1]), essential)
-                                 for side in ("left", "right"))
-                    swapped = sum(symmetric_epipolar_distance(
-                        undistort(ankle1[side].root[:2], calibrations[0]),
-                        undistort(ankle2["right" if side == "left" else "left"].root[:2], calibrations[1]),
-                        essential) for side in ("left", "right"))
-                    camera2_order = (("left", "right") if direct <= swapped else ("right", "left"))
-                    foot1 = tuple(np.mean([ankle1["left"].root[:2], ankle1["right"].root[:2]], axis=0))
-                    foot2 = tuple(np.mean([ankle2[side].root[:2] for side in camera2_order], axis=0))
-                    normalized_pair = tuple(undistort(pixel, calibration)
-                                            for pixel, calibration in zip((foot1, foot2), calibrations))
+                ankle_worlds = []
+                accepted_sides = []
+                normalized_by_side = {}
+                for side in ("left", "right"):
+                    if side not in ankle1 or side not in ankle2:
+                        continue
+                    point1, point2 = ankle1[side], ankle2[side]
+                    if min(point1.root[2], point2.root[2]) < MIN_ANKLE_CONFIDENCE:
+                        continue
+                    ankle_pair = (undistort(point1.root[:2], calibrations[0]),
+                                  undistort(point2.root[:2], calibrations[1]))
                     try:
-                        world = triangulate(*normalized_pair, *calibrations)
-                        position_method = "mid"
-                        source1 = source2 = "ankle"
+                        ankle_world = triangulate(*ankle_pair, *calibrations)
+                        if ANKLE_FOOT_Z_MIN <= ankle_world[2] <= ANKLE_FOOT_Z_MAX:
+                            ankle_worlds.append(ankle_world)
+                            accepted_sides.append(side)
+                            normalized_by_side[side] = ankle_pair
                     except ValueError:
                         pass
-                else:
-                    choices = []
-                    for side1, point1 in ankle1.items():
-                        for side2, point2 in ankle2.items():
-                            normalized_ankles = (undistort(point1.root[:2], calibrations[0]),
-                                                 undistort(point2.root[:2], calibrations[1]))
-                            error = symmetric_epipolar_distance(*normalized_ankles, essential)
-                            choices.append((error, side1, point1, point2, normalized_ankles))
-                    if choices:
-                        _, side, point1, point2, ankle_pair = min(choices, key=lambda choice: choice[0])
-                        if point1.root[2] >= MIN_ANKLE_CONFIDENCE and point2.root[2] >= MIN_ANKLE_CONFIDENCE:
-                            try:
-                                ankle_world = triangulate(*ankle_pair, *calibrations)
-                                if ANKLE_FOOT_Z_MIN <= ankle_world[2] <= ANKLE_FOOT_Z_MAX:
-                                    world = ankle_world
-                                    foot1, foot2 = point1.root[:2], point2.root[:2]
-                                    normalized_pair = ankle_pair
-                                    position_method = side
-                                    source1 = source2 = "ankle"
-                            except ValueError:
-                                pass
-                epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
-            if source1 == source2 == "box" and BBOX_POSITION_METHOD in {"plane", "weighted-plane"}:
+                if accepted_sides:
+                    world = np.mean(ankle_worlds, axis=0)
+                    foot1 = tuple(np.mean([ankle1[side].root[:2] for side in accepted_sides], axis=0))
+                    foot2 = tuple(np.mean([ankle2[side].root[:2] for side in accepted_sides], axis=0))
+                    normalized_pair = tuple(undistort(pixel, calibration)
+                                            for pixel, calibration in zip((foot1, foot2), calibrations))
+                    position_method = "mid" if len(accepted_sides) == 2 else accepted_sides[0]
+                    source1 = source2 = "ankle"
+                    epipolar_error = float(np.mean([
+                        symmetric_epipolar_distance(*normalized_by_side[side], essential)
+                        for side in accepted_sides])) * pixel_scale
+            if _should_use_box_plane(object_class, source1, source2):
                 try:
                     positions = [position_on_plane(point, calibration, 0.0)
                                  for point, calibration in zip(normalized_pair, calibrations)]
@@ -606,7 +605,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                    visible_tracks, used_object_ids)
             used_object_ids.add(object_id)
             raw_world = np.asarray(world, dtype=float)
-            timestamp_ms = max(frames[0].ts, frames[1].ts)
+            timestamp_ms = max((frame.recv_ms if frame.recv_ms is not None else frame.ts)
+                               for frame in frames)
             world, velocity = _filter_motion(db, body.session_id, profile, algorithm,
                                              object_id, raw_world, timestamp_ms)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
@@ -678,6 +678,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                  for n, frame in enumerate(frames)}
     return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
             "calibration_profile": profile, "sync_delta_ms": sync_delta,
+            "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
+            "sync_time_basis": sync_time_basis, "max_sync_delta_ms": max_sync_delta_ms,
             "matches": matches, "unmatched": unmatched,
             "risks": risks, "settings": settings}
 
@@ -707,8 +709,12 @@ def recompute_session(session_id: str, profile: CalibrationProfile,
         frames = bundle.source_frames
         if not frames:
             raise HTTPException(409, "stored bundle has no source frames; upload it again after migration")
+        source_settings = db.get(SessionSettings, (session_id, source_profile, source_algorithm))
+        max_sync_delta_ms = ((source_settings.settings or {}).get("max_sync_delta_ms", MAX_SYNC_DELTA_MS)
+                             if source_settings else MAX_SYNC_DELTA_MS)
         payloads.append(DetectionBundleIn(session_id=session_id, pair_id=bundle.pair_id,
-                                          calibration_profile=profile, frames=frames))
+                                          calibration_profile=profile, frames=frames,
+                                          max_sync_delta_ms=max_sync_delta_ms))
 
     camera_ids = {frame.camera_id for payload in payloads for frame in payload.frames}
     missing_targets = [camera_id for camera_id in sorted(camera_ids)

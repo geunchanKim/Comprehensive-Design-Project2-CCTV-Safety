@@ -30,7 +30,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 | 같은 지도 | 정답 좌표(③)와 캘리브레이션 rvec·tvec(①)은 **같은 월드 좌표계**를 쓴다 |
 | 이미지 좌표 | 픽셀, 원점 = 좌상단, x는 오른쪽, y는 아래쪽 |
 | bbox | `[x1, y1, x2, y2]` 픽셀 절대좌표 (정규화 안 함) |
-| 시간 `ts` | epoch ms. Unity는 시뮬레이션 시각(시작 + frame × 100ms), 실제 카메라는 엣지 수신 시각 |
+| 시간 | `ts`: 호환용 epoch ms, `pts_ms`: 카메라/영상 PTS, `recv_ms`: 엣지 수신 epoch ms |
 | 클래스 | 서버 지원: `person`, `chair`, `cart`, `desk`, `suitcase`(카트 대신), `backpack`(통로 적치물) |
 | camera_id | `cam1`, `cam2` |
 | session_id | 폴더 이름 + `-runN`. 실행할 때마다 N이 1씩 늘어난다. 예: `unity-classroom-01-run3` |
@@ -94,10 +94,13 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 |---|---|---|
 | `session_id` | string | |
 | `pair_id` | int | 묶음 번호 = Unity `frame` |
+| `max_sync_delta_ms` | int | (선택) 세션에 고정할 허용 시간차. 기본 50ms |
 | `frames` | array | 카메라별 결과, 정확히 2개 (cam1, cam2) |
 | `frames[].camera_id` | string | `cam1`, `cam2` |
 | `frames[].frame_id` | int | Unity `frame` |
-| `frames[].ts` | int | `frames.jsonl`의 ts. 두 카메라 차이 50ms 이하 |
+| `frames[].ts` | int | 호환용 epoch ms |
+| `frames[].pts_ms` | float | (선택) 카메라 또는 영상의 presentation timestamp |
+| `frames[].recv_ms` | int | (선택) 엣지가 프레임을 받은 epoch ms. 있으면 동기화 검사 기준 |
 | `frames[].image_size` | [int, int] | `[width, height]` |
 | `frames[].detections` | array | 탐지 결과, 없으면 빈 배열 `[]` |
 | `detections[].track_id` | int | **카메라별** 추적 번호, 0 이상 (cam1의 1과 cam2의 1은 다른 물체) |
@@ -153,7 +156,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
-- 개선 알고리즘에서 `ENABLE_ANKLE_PAIRING=true`이면 좌우 이름표의 정방향·교차 방향 에피폴라 오차를 비교한다. 양쪽 발목은 가운데점, 한쪽 대응은 양 카메라 confidence 0.6 이상이고 삼각측량 높이가 -0.1~0.4m일 때만 사용하며 나머지는 `foot`으로 fallback한다. baseline은 이 설정과 관계없이 기존 `foot` 방식을 유지한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
+- 개선 알고리즘에서 `ENABLE_ANKLE_PAIRING=true`이면 왼발목끼리와 오른발목끼리를 각각 삼각측량한다. 둘 다 유효하면 두 3D 좌표를 평균하고, 한쪽만 유효하면 그쪽 좌표를 사용한다. confidence 0.6 미만, 높이 -0.1~0.4m 밖, 같은 쪽 대응 없음은 `foot`으로 fallback한다. baseline은 이 설정과 관계없이 기존 `foot` 방식을 유지한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 
@@ -197,4 +200,4 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 발 위치 `foot` | ✅ 엣지 전송 및 서버 저장·삼각측량 지원 |
 | 에피폴라 기준 + 높이 검사 | ✅ 50px + `foot_src`별 z 범위 검사 |
 | `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |
-| 좌우 발목 `ankles` | 🔶 엣지 전송 ✅ / 서버 같은 쪽 발목 대응은 해민 REQ |
+| 좌우 발목 `ankles` | ✅ 엣지 전송·서버 같은 쪽 발목별 삼각측량 |

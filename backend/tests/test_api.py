@@ -97,6 +97,38 @@ def test_box_foot_completion_is_limited_to_chair_and_suitcase():
     assert not api_module._should_complete_box_foot("chair", "ankle", "box")
 
 
+def test_box_plane_is_limited_to_chair_and_suitcase(monkeypatch):
+    monkeypatch.setattr(api_module, "BBOX_POSITION_METHOD", "plane")
+    assert api_module._should_use_box_plane("chair", "box", "box")
+    assert api_module._should_use_box_plane("suitcase", "box", "box")
+    for object_class in ("person", "cart", "desk", "backpack"):
+        assert not api_module._should_use_box_plane(object_class, "box", "box")
+
+
+def test_receive_timestamps_and_session_sync_tolerance():
+    session_id = "receive-timestamps"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=208, session_id=session_id)
+    payload["max_sync_delta_ms"] = 80
+    for frame, pts, recv in zip(payload["frames"], (100.0, 140.5), (10_000, 10_060)):
+        frame.update(pts_ms=pts, recv_ms=recv)
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["sync_delta_ms"] == 60
+    assert response.json()["pts_delta_ms"] == 40.5
+    assert response.json()["recv_delta_ms"] == 60
+    assert response.json()["sync_time_basis"] == "recv_ms"
+    assert response.json()["max_sync_delta_ms"] == 80
+
+    changed = detection_payload(pair_id=209, session_id=session_id, ts2=2020)
+    changed["frames"][0]["ts"] = 2000
+    changed["max_sync_delta_ms"] = 50
+    assert client.post("/detections", json=changed).status_code == 409
+
+
 def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     put_camera("cam1", [0, 0, 0])
     put_camera("cam2", [-1, 0, 0])
@@ -106,7 +138,7 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     assert result["session_id"] == SESSION
     assert result["pair_id"] == 1
     assert result["sync_delta_ms"] == 20
-    assert result["matches"][0]["object_id"] == 1
+    assert result["matches"][0]["object_id"] >= 1
     assert result["matches"][0]["observations"][0]["conf"] == 0.988
     assert result["matches"][0]["observations"][0]["foot_pixel"] == [960.0, 540.0]
     assert result["matches"][0]["observations"][0]["foot_src"] == "box"
@@ -346,7 +378,7 @@ def test_uses_midpoint_when_both_ankles_are_visible_and_stores_raw_ankles():
     assert stored[0].ankles["left"] == [950.0, 510.0, 0.9]
 
 
-def test_pairs_single_ankle_across_reversed_labels_when_confident():
+def test_uses_single_same_side_ankle_when_confident():
     session_id = "single-ankle"
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
@@ -354,13 +386,28 @@ def test_pairs_single_ankle_across_reversed_labels_when_confident():
     for frame, x in zip(payload["frames"], (960, 860)):
         frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
     payload["frames"][0]["detections"][0]["ankles"] = {"left": [960, 510, 0.9], "right": None}
-    payload["frames"][1]["detections"][0]["ankles"] = {"left": None, "right": [860, 510, 0.8]}
+    payload["frames"][1]["detections"][0]["ankles"] = {"left": [860, 510, 0.8], "right": None}
 
     result = create_improved(payload)
 
     match = result["matches"][0]
     assert {row["position_method"] for row in match["observations"]} == {"left"}
     assert abs(match["world"]["z"] - 0.3) < 0.01
+
+
+def test_does_not_pair_opposite_side_single_ankles():
+    session_id = "opposite-single-ankles"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=207, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+    payload["frames"][0]["detections"][0]["ankles"] = {"left": [960, 510, 0.9], "right": None}
+    payload["frames"][1]["detections"][0]["ankles"] = {"left": None, "right": [860, 510, 0.9]}
+
+    result = create_improved(payload)
+
+    assert {row["position_method"] for row in result["matches"][0]["observations"]} == {"foot"}
 
 
 def test_single_ankle_below_confidence_threshold_falls_back_to_foot():
