@@ -7,6 +7,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - eval_position: 서버 응답과 정답 비교 계산
   - bundle: session_id 규칙, 서버로 보내는 탐지 묶음 형식
   - realtime: 두 카메라 프레임을 가장 가까운 것끼리 짝짓는지
+  - feet: 발 위치(foot)와 좌우 발목(ankles)
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -26,6 +27,7 @@ import pytest  # noqa: E402
 from bundle import build_bundle, build_frame, check_session_id, clean_detections  # noqa: E402
 from camera_source import Frame  # noqa: E402
 from eval_position import evaluate  # noqa: E402
+from feet import LEFT_ANKLE, RIGHT_ANKLE, attach_feet  # noqa: E402
 from realtime import Recorder  # noqa: E402
 from server_client import ServerClient  # noqa: E402
 from unity_calibration import load_calibrations, project, projection, unity_to_world  # noqa: E402
@@ -172,3 +174,35 @@ def test_recorder_pairs_nearest_frames(tmp_path):
     assert len(pairs) >= 29
     assert max(abs(dt) for _, _, dt in pairs) <= 17          # 30fps 간격(33ms)의 절반 이하
     assert all(f1 in (2 * f2, 2 * f2 + 1) for f1, f2, _ in pairs)
+
+
+def _pose(box, left, right):
+    """포즈 결과 하나: 17개 키포인트 중 발목만 값을 넣는다. left/right = (x, y, conf)"""
+    kps = [(0.0, 0.0, 0.0)] * 17
+    kps[LEFT_ANKLE], kps[RIGHT_ANKLE] = left, right
+    return (box, kps)
+
+
+def test_attach_feet_sends_left_and_right_ankles():
+    box = [100.0, 100.0, 200.0, 400.0]
+    both, one, none = (
+        attach_feet([{"cls": "person", "bbox": box}], [_pose(box, left, right)])[0]
+        for left, right in (((130, 390, 0.9), (170, 395, 0.8)),     # 두 발목 보임
+                            ((130, 390, 0.9), (170, 395, 0.2)),     # 오른발목 가려짐
+                            ((130, 390, 0.1), (170, 395, 0.2))))    # 둘 다 안 보임
+    assert both["foot_src"] == "ankle" and both["foot"] == [150.0, 392.5]
+    assert both["ankles"] == {"left": [130, 390, 0.9], "right": [170, 395, 0.8]}
+    assert one["foot_src"] == "box" and one["ankles"] == {"left": [130, 390, 0.9], "right": None}
+    assert none["foot_src"] == "box" and "ankles" not in none
+    chair = attach_feet([{"cls": "chair", "bbox": box}], [_pose(box, (1, 1, 0.9), (2, 2, 0.9))])[0]
+    assert "ankles" not in chair                              # 사람이 아니면 발목 없음
+    far = attach_feet([{"cls": "person", "bbox": box}], [_pose([500, 500, 600, 800], (1, 1, 0.9), (2, 2, 0.9))])[0]
+    assert "ankles" not in far                                # 겹치는 포즈가 없으면 발목 없음
+
+
+def test_bundle_keeps_ankles_inside_image():
+    d = {"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [10, 10, 100, 1080], "foot": [50, 1080],
+         "foot_src": "ankle", "ankles": {"left": [40, 1085, 0.9], "right": None}}
+    kept, _ = clean_detections([d], 1920, 1080)
+    assert kept[0]["ankles"]["left"][1] < 1080 and kept[0]["ankles"]["left"][2] == 0.9
+    assert kept[0]["ankles"]["right"] is None

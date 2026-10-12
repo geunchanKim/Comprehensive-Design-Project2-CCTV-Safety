@@ -13,6 +13,8 @@ session_id 규칙: {site}-{MMDD}-{scenario}-t{take}[-v{n}]
 POST /detections 묶음
   {session_id, calibration_profile: "basic", pair_id,
    frames: [{camera_id, frame_id, ts, image_size, detections: [...]}, × 2]}
+  detections: {track_id, cls, conf, bbox, foot, foot_src, ankles?}
+  - ankles: 사람의 좌우 발목 {left: [x, y, conf] | null, right: [x, y, conf] | null} (feet.py)
   - calibration_profile은 항상 basic. precise는 서버 recompute로만 만든다
   - ts는 카메라마다 노트북이 받은 시각(epoch ms). 두 카메라 차이는 50ms 이내만 보낸다
 """
@@ -64,11 +66,18 @@ def clean_detections(dets: list[dict], width: int, height: int) -> tuple[list[di
             continue
         item = {**d, "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]}
         if d.get("foot"):
-            fx, fy = d["foot"]
             # 서버는 0 <= foot < 크기 를 요구한다 (끝 픽셀 포함 안 됨)
-            item["foot"] = [round(max(0.0, min(fx, width - 0.1)), 1), round(max(0.0, min(fy, height - 0.1)), 1)]
+            item["foot"] = _inside(d["foot"], width, height)
+        if d.get("ankles"):
+            item["ankles"] = {side: (_inside(p, width, height) + [p[2]] if p else None)
+                              for side, p in ((s, d["ankles"].get(s)) for s in ("left", "right"))}
         kept.append(item)
     return kept, removed
+
+
+def _inside(point, width: int, height: int) -> list:
+    """[x, y, ...] → 이미지 안으로 자른 [x, y]"""
+    return [round(max(0.0, min(point[0], width - 0.1)), 1), round(max(0.0, min(point[1], height - 0.1)), 1)]
 
 
 def build_frame(camera_id: str, frame_id: int, ts: int, image_size, detections: list[dict]) -> dict:

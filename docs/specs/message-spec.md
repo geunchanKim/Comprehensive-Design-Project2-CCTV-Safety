@@ -1,6 +1,6 @@
 # 엣지·Unity·서버 메시지 양식
 
-> 작성: 2026-10-02 · 수정: 2026-10-05 (foot 필드, 높이 검사 제안, 클래스 추가 예정)
+> 작성: 2026-10-02 · 수정: 2026-10-05 (foot 필드, 높이 검사 제안, 클래스 추가 예정) · 2026-10-12 (좌우 발목 ankles)
 > 트랙 A(엣지) 기준. 바뀌면 이 문서부터 고친다.
 
 ## 1. 전체 흐름
@@ -106,6 +106,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | `detections[].bbox` | [float ×4] | `[x1, y1, x2, y2]`, 이미지 안, 폭·높이 > 0 |
 | `detections[].foot` | [float ×2] | (선택) 좌표 계산에 쓸 발 위치 `[x, y]` 픽셀, 이미지 안 |
 | `detections[].foot_src` | string | (선택) `ankle`: 두 발목 가운데 / `box`: 박스 아래 가운데 |
+| `detections[].ankles` | object | (선택, 사람) 좌우 발목 `{"left": [x, y, conf] \| null, "right": [x, y, conf] \| null}` 픽셀, 이미지 안 |
 
 `foot` 정의 (엣지 `--foot ankle`)
 - 사람: 포즈 모델(yolo11n-pose)의 두 발목(COCO 키포인트 15, 16) 신뢰도가 모두 0.5 이상이면 두 발목 가운데
@@ -113,10 +114,17 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - 두 발목 가운데는 바닥에서 약 15cm 위 (Unity 측정 7~25cm)
 - Unity S1~S3 정답 비교: 위치 오차 평균 15.8cm(박스) → 5.8cm(발목)
 
+`ankles` 정의 (엣지 `--foot ankle`, 멘토 피드백 1: 같은 쪽 발목끼리 대응)
+- 왼쪽·오른쪽은 **사람 기준** (COCO 키포인트 15 = 왼발목, 16 = 오른발목). 화면 왼쪽·오른쪽이 아니다
+- 신뢰도 0.5 미만인 쪽은 `null`. 한쪽만 보이면 그쪽만 값이 있다
+- 사람 박스와 겹치는 포즈 결과가 없거나 두 발목이 다 안 보이면 `ankles`를 보내지 않는다
+- `foot`은 그대로 보낸다. 서버가 `ankles`를 아직 안 쓰면 기존 계산이 그대로 돈다
+- 서버 할 일(해민 REQ): 왼발목끼리, 오른발목끼리 따로 삼각측량 → 가운데를 위치로. 한쪽만 짝지어지면 그쪽만 사용
+
 엣지 전송 규칙
 - 추론 실패(이미지 누락·손상, 모델 오류) 묶음은 보내지 않는다
 - track_id가 아직 없는 탐지(처음 잡힌 순간)는 뺀다
-- bbox, foot은 이미지 범위로 자르고, 1px 미만 박스는 뺀다
+- bbox, foot, ankles는 이미지 범위로 자르고, 1px 미만 박스는 뺀다
 - 서버가 받는 클래스만 보낸다 (모르는 클래스가 하나라도 있으면 묶음 전체가 422)
 - 같은 `(session_id, pair_id)`를 다시 보내면 409
 
@@ -127,7 +135,8 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
   "frames": [
     {"camera_id": "cam1", "frame_id": 3, "ts": 1790900000300, "image_size": [1920, 1080],
      "detections": [{"track_id": 1, "cls": "person", "conf": 0.93, "bbox": [807.0, 47.0, 1026.0, 688.0],
-                     "foot": [921.5, 676.0], "foot_src": "ankle"}]},
+                     "foot": [921.5, 676.0], "foot_src": "ankle",
+                     "ankles": {"left": [905.0, 674.0, 0.91], "right": [938.0, 678.0, 0.87]}}]},
     {"camera_id": "cam2", "frame_id": 3, "ts": 1790900000300, "image_size": [1920, 1080],
      "detections": [{"track_id": 1, "cls": "person", "conf": 0.57, "bbox": [372.0, 10.0, 452.0, 331.0],
                      "foot": [412.0, 331.0], "foot_src": "box"}]}
@@ -186,3 +195,4 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 발 위치 `foot` | ✅ 엣지 전송 및 서버 저장·삼각측량 지원 |
 | 에피폴라 기준 + 높이 검사 | ✅ 50px + `foot_src`별 z 범위 검사 |
 | `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |
+| 좌우 발목 `ankles` | 🔶 엣지 전송 ✅ / 서버 같은 쪽 발목 대응은 해민 REQ |
