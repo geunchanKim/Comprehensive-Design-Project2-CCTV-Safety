@@ -69,6 +69,8 @@ def test_health_exposes_deployment_settings():
         "track_pair_confirm_frames": 3,
         "track_pair_improvement_ratio": 0.9,
         "risk_analysis": False,
+        "ankle_pairing": True,
+        "min_ankle_confidence": 0.6,
         "warning_distance_m": 1.0,
         "danger_distance_m": 0.5,
     }
@@ -234,6 +236,75 @@ def test_uses_and_stores_explicit_ankle_foot():
         stored = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
     assert {row.foot_src for row in stored} == {"ankle"}
     assert {tuple(row.foot_pixel) for row in stored} == {(960, 510), (860, 510)}
+
+
+def test_uses_midpoint_when_both_ankles_are_visible_and_stores_raw_ankles():
+    session_id = "both-ankles"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=201, session_id=session_id)
+    payload["frames"][0]["detections"][0]["ankles"] = {
+        "left": [950, 510, 0.9], "right": [970, 530, 0.8]}
+    # Edge labels are intentionally reversed in camera 2.
+    payload["frames"][1]["detections"][0]["ankles"] = {
+        "left": [870, 530, 0.8], "right": [850, 510, 0.9]}
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    match = response.json()["matches"][0]
+    assert match["foot_pixels"] == {"cam1": [960.0, 520.0], "cam2": [860.0, 520.0]}
+    assert {row["position_method"] for row in match["observations"]} == {"mid"}
+    with SessionLocal() as db:
+        stored = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
+    assert stored[0].ankles["left"] == [950.0, 510.0, 0.9]
+
+
+def test_pairs_single_ankle_across_reversed_labels_when_confident():
+    session_id = "single-ankle"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=202, session_id=session_id)
+    payload["frames"][0]["detections"][0]["ankles"] = {"left": [960, 510, 0.9], "right": None}
+    payload["frames"][1]["detections"][0]["ankles"] = {"left": None, "right": [860, 510, 0.8]}
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    match = response.json()["matches"][0]
+    assert {row["position_method"] for row in match["observations"]} == {"left"}
+    assert abs(match["world"]["z"] - 0.3) < 0.01
+
+
+def test_single_ankle_below_confidence_threshold_falls_back_to_foot():
+    session_id = "low-confidence-ankle"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=203, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0]["ankles"] = {"left": [x, 510, 0.55], "right": None}
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    match = response.json()["matches"][0]
+    assert {row["position_method"] for row in match["observations"]} == {"foot"}
+    assert match["foot_pixels"] == {"cam1": [960.0, 540.0], "cam2": [860.0, 540.0]}
+
+
+def test_ankle_pairing_can_be_disabled(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_ANKLE_PAIRING", False)
+    session_id = "disabled-ankle-pairing"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=204, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0]["ankles"] = {"left": [x, 510, 0.9], "right": None}
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    assert {row["position_method"] for row in response.json()["matches"][0]["observations"]} == {"foot"}
 
 
 def test_falls_back_to_box_for_both_cameras_when_only_one_has_ankle():

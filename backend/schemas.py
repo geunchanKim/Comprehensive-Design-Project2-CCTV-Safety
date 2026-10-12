@@ -1,12 +1,34 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
 
 ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
 FootSource = Literal["ankle", "box"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 CalibrationProfile = Literal["basic", "precise"]
 Algorithm = Literal["baseline", "improved"]
+PositionMethod = Literal["mid", "left", "right", "foot"]
+
+
+class AnklePoint(RootModel[tuple[float, float, float]]):
+
+    @field_validator("root")
+    @classmethod
+    def valid_point(cls, value):
+        if not 0 <= value[2] <= 1:
+            raise ValueError("ankle confidence must be between 0 and 1")
+        return value
+
+
+class AnklesIn(BaseModel):
+    left: AnklePoint | None = None
+    right: AnklePoint | None = None
+
+    @model_validator(mode="after")
+    def at_least_one_ankle(self):
+        if self.left is None and self.right is None:
+            raise ValueError("ankles must contain left or right")
+        return self
 
 
 class CameraCalibrationIn(BaseModel):
@@ -71,6 +93,7 @@ class DetectionIn(BaseModel):
     bbox: tuple[float, float, float, float]
     foot: tuple[float, float] | None = None
     foot_src: FootSource | None = None
+    ankles: AnklesIn | None = None
 
     @field_validator("bbox")
     @classmethod
@@ -98,6 +121,12 @@ class CameraFrameIn(BaseModel):
         if any(d.foot is not None and not (0 <= d.foot[0] < width and 0 <= d.foot[1] < height)
                for d in self.detections):
             raise ValueError("foot lies outside image_size")
+        for detection in self.detections:
+            if detection.ankles is None:
+                continue
+            for ankle in (detection.ankles.left, detection.ankles.right):
+                if ankle is not None and not (0 <= ankle.root[0] < width and 0 <= ankle.root[1] < height):
+                    raise ValueError("ankle lies outside image_size")
         return self
 
 
@@ -131,6 +160,7 @@ class ObservationResult(BaseModel):
     image_size: tuple[int, int]
     foot_pixel: tuple[float, float]
     foot_src: FootSource
+    position_method: PositionMethod
 
 
 class DetectionResult(BaseModel):

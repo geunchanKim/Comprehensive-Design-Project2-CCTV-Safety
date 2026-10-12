@@ -106,6 +106,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | `detections[].bbox` | [float ×4] | `[x1, y1, x2, y2]`, 이미지 안, 폭·높이 > 0 |
 | `detections[].foot` | [float ×2] | (선택) 좌표 계산에 쓸 발 위치 `[x, y]` 픽셀, 이미지 안 |
 | `detections[].foot_src` | string | (선택) `ankle`: 두 발목 가운데 / `box`: 박스 아래 가운데 |
+| `detections[].ankles` | object | (선택) 사람 기준 좌·우 발목. `left`, `right`는 각각 `[x, y, confidence]` 또는 `null` |
 
 `foot` 정의 (엣지 `--foot ankle`)
 - 사람: 포즈 모델(yolo11n-pose)의 두 발목(COCO 키포인트 15, 16) 신뢰도가 모두 0.5 이상이면 두 발목 가운데
@@ -144,6 +145,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
+- `ENABLE_ANKLE_PAIRING=true`이면 좌우 이름표의 정방향·교차 방향 에피폴라 오차를 비교한다. 양쪽 발목은 가운데점, 한쪽 대응은 양 카메라 confidence 0.6 이상일 때만 사용하고 나머지는 `foot`으로 fallback한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 
