@@ -8,6 +8,7 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
 
 규칙
   - session_id = 폴더 이름 + "-runN" (실행마다 N 자동 증가, --run 으로 직접 지정 가능)
+    실측 녹화는 --session 으로 정해 둔 이름을 쓴다 (규칙·목록은 bundle.py)
   - pair_id = frame_id = Unity frame, ts = frames.jsonl 의 ts
   - 추론 실패(이미지 없음·손상, 모델 오류) 묶음은 보내지 않는다
   - 탐지 0개면 detections: [] 로 보낸다
@@ -42,14 +43,13 @@ from pathlib import Path
 
 import cv2
 
+from bundle import SERVER_CLASSES, build_bundle, build_frame, check_session_id, clean_detections, edge_config
 from detector import AI_DIR, Detector, draw, parse_class_conf, parse_classes
 from server_client import ServerClient
 from unity_calibration import load_calibrations
 
 CAMERAS = ("cam1", "cam2")
 OUT_ROOT = AI_DIR / "runs" / "edge"
-# 서버(ObjectClass)가 받는 클래스. 서버에 클래스가 추가되면 여기에도 추가한다
-SERVER_CLASSES = {"person", "chair", "cart", "desk", "suitcase", "backpack"}
 
 
 def unity_to_world(p):
@@ -65,27 +65,6 @@ def next_session_id(base: str, run: int | None) -> str:
                 if (m := re.fullmatch(re.escape(base) + r"-run(\d+)", d.name))]
         run = max(used, default=0) + 1
     return f"{base}-run{run}"
-
-
-def clean_detections(dets: list[dict], width: int, height: int) -> tuple[list[dict], int]:
-    """서버 검증에 걸리는 탐지를 정리한다. (정리된 목록, 뺀 개수)"""
-    kept, removed = [], 0
-    for d in dets:
-        if d["track_id"] is None or d["track_id"] < 0:
-            removed += 1
-            continue
-        x1, y1, x2, y2 = d["bbox"]
-        x1, x2 = max(0.0, min(x1, float(width))), max(0.0, min(x2, float(width)))
-        y1, y2 = max(0.0, min(y1, float(height))), max(0.0, min(y2, float(height)))
-        if x2 - x1 < 1 or y2 - y1 < 1:
-            removed += 1
-            continue
-        item = {**d, "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]}
-        if d.get("foot"):
-            fx, fy = d["foot"]
-            item["foot"] = [round(max(0.0, min(fx, float(width))), 1), round(max(0.0, min(fy, float(height))), 1)]
-        kept.append(item)
-    return kept, removed
 
 
 def build_ground_truth(session_id: str, row: dict) -> dict:
@@ -133,6 +112,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="서버로 보내지 않고 파일로만 저장")
     parser.add_argument("--only", choices=["all", "detections", "gt"], default="all", help="보낼 종류")
     parser.add_argument("--run", type=int, default=None, help="run 번호 직접 지정 (기본: 자동 증가)")
+    parser.add_argument("--session", default=None,
+                        help="session_id 직접 지정 (실측 녹화용, 예: classroom-1014-s2-t1). 주면 --run 무시")
+    parser.add_argument("--sessions", default=None, help="session 목록 파일. 주면 --session이 목록에 있는지 확인")
     parser.add_argument("--calib", default="auto",
                         help="auto = cameras.json으로 계산해 등록, 파일 경로 = 그 값으로 등록, none = 등록 안 함")
     parser.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
@@ -153,7 +135,13 @@ def main():
     if args.max_frames:
         rows = rows[:args.max_frames]
 
-    session_id = next_session_id(folder.name, args.run)
+    # 실측 녹화(realtime.py) 폴더면 카메라별 받은 시각과 cam2 지연을 쓴다. Unity 폴더는 두 카메라가 같은 ts
+    meta_path = folder / "meta.json"
+    cam_offset = {"cam1": 0.0, "cam2": 0.0}
+    if meta_path.exists():
+        cam_offset["cam2"] = float(json.loads(meta_path.read_text(encoding="utf-8")).get("cam2_offset_ms", 0))
+
+    session_id = check_session_id(args.session, args.sessions) if args.session else next_session_id(folder.name, args.run)
     out_dir = OUT_ROOT / session_id
     vis_dir = out_dir / "vis" if args.save_every else None
     if vis_dir:
@@ -176,10 +164,8 @@ def main():
     if send_det:     # 어떤 엣지 설정으로 탐지했는지 남긴다 (실험 pack·설계도에서 읽음)
         d = detectors[CAMERAS[0]]
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "edge_config.json").write_text(json.dumps({
-            "model": d.model_name, "imgsz": d.imgsz, "foot": d.foot, "classes": list(d.classes),
-            "conf": d.conf, "class_conf": d.class_conf, "tracker": d.tracker,
-        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        (out_dir / "edge_config.json").write_text(json.dumps(edge_config(d), indent=2, ensure_ascii=False),
+                                                  encoding="utf-8")
     print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode} | 모델 {args.model}, 발 위치 {args.foot}")
 
     # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록
@@ -211,8 +197,8 @@ def main():
                 h, w = img.shape[:2]
                 dets, removed = clean_detections(detectors[cam](img), w, h)
                 stats["removed"] += removed
-                frames.append({"camera_id": cam, "frame_id": frame, "ts": ts,
-                               "image_size": [w, h], "detections": dets})
+                cam_ts = int(round(row[cam]["recv_ms"] - cam_offset[cam])) if cam in row else ts
+                frames.append(build_frame(cam, frame, cam_ts, (w, h), dets))
                 if vis_dir and frame % args.save_every == 0:
                     cv2.imwrite(str(vis_dir / f"{frame:06d}_{cam}.jpg"), draw(img.copy(), dets))
         except Exception as e:  # 모델 오류도 추론 실패로 보고 보내지 않음
@@ -222,7 +208,7 @@ def main():
 
         if not any(f["detections"] for f in frames):
             stats["empty"] += 1
-        client.send({"session_id": session_id, "pair_id": frame, "frames": frames}, path="/detections")
+        client.send(build_bundle(session_id, frame, frames), path="/detections")
         stats["pairs"] += 1
         if stats["pairs"] % 50 == 0:
             print(f"  {stats['pairs']}묶음 처리 ({stats['pairs'] / (time.perf_counter() - t0):.1f} 묶음/초)")
