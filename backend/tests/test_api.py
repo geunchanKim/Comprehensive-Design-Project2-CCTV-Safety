@@ -60,27 +60,39 @@ def create_improved(payload):
 def test_health_exposes_deployment_settings():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "commit": "test-commit",
-        "max_epipolar_error_px": 50.0,
-        "box_foot_z_min": -0.35,
-        "box_foot_z_max": 0.2,
-        "ankle_foot_z_min": -0.1,
-        "ankle_foot_z_max": 0.4,
-        "bbox_position_method": "triangulate",
-        "matching_method": "epipolar",
-        "max_ground_distance_m": 2.0,
-        "kalman_filter": False,
-        "track_pair_hold": False,
-        "track_pair_confirm_frames": 3,
-        "track_pair_improvement_ratio": 0.9,
-        "risk_analysis": False,
-        "ankle_pairing": True,
-        "min_ankle_confidence": 0.6,
-        "warning_distance_m": 1.0,
-        "danger_distance_m": 0.5,
+    result = response.json()
+    assert result["status"] == "ok"
+    assert result["commit"] == "test-commit"
+    assert result["algorithms"]["baseline"] | {
+        "matching_method": "epipolar", "kalman_filter": False,
+        "track_pair_hold": False, "ankle_pairing": False,
+    } == result["algorithms"]["baseline"]
+    assert result["algorithms"]["improved"] | {
+        "matching_method": "ground-plane", "kalman_filter": True,
+        "track_pair_hold": True, "ankle_pairing": True,
+    } == result["algorithms"]["improved"]
+
+
+def test_improved_features_can_be_disabled_individually(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", False)
+    assert api_module._algorithm_settings("improved") == {
+        "matching_method": "ground-plane", "kalman_filter": False,
+        "track_pair_hold": True, "ankle_pairing": True,
     }
+    monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", False)
+    assert api_module._algorithm_settings("improved") == {
+        "matching_method": "ground-plane", "kalman_filter": True,
+        "track_pair_hold": False, "ankle_pairing": True,
+    }
+
+
+def test_box_foot_completion_is_limited_to_chair_and_suitcase():
+    assert api_module._should_complete_box_foot("chair", "box", "box")
+    assert api_module._should_complete_box_foot("suitcase", "box", "box")
+    for object_class in ("person", "cart", "desk", "backpack"):
+        assert not api_module._should_complete_box_foot(object_class, "box", "box")
+    assert not api_module._should_complete_box_foot("chair", "ankle", "box")
 
 
 def test_detection_bundle_returns_world_coordinate_and_contract_ids():
@@ -102,6 +114,7 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
 
 def test_profiles_store_independent_results_and_recompute_without_edge_upload(monkeypatch):
     monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    monkeypatch.setattr(api_module, "MAX_GROUND_DISTANCE_M", 100.0)
     session_id = "profile-recompute"
     for profile in ("basic", "precise"):
         for camera_id, tvec in (("cam1", [0, 0, 0]), ("cam2", [-1, 0, 0])):
@@ -114,16 +127,18 @@ def test_profiles_store_independent_results_and_recompute_without_edge_upload(mo
             assert client.put(f"/cameras/{camera_id}/calibration", json=payload).status_code == 200
     payload = detection_payload(pair_id=101, session_id=session_id)
     payload["calibration_profile"] = "basic"
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
     response = client.post("/detections", json=payload)
     assert response.status_code == 201, response.text
     assert response.json()["calibration_profile"] == "basic"
 
-    response = client.post(f"/sessions/{session_id}/recompute?profile=precise")
+    response = client.post(f"/sessions/{session_id}/recompute?profile=precise&algorithm=improved")
     assert response.status_code == 200, response.text
     assert response.json()["recomputed_bundles"] == 1
     # 같은 원본 타임스탬프를 다시 처리해도 대상 프로필 상태를 먼저 지우므로
     # 칼만 dt <= 0 오류가 발생하지 않아야 한다.
-    response = client.post(f"/sessions/{session_id}/recompute?profile=precise")
+    response = client.post(f"/sessions/{session_id}/recompute?profile=precise&algorithm=improved")
     assert response.status_code == 200, response.text
     with SessionLocal() as db:
         bundles = db.scalars(select(FrameBundle).where(FrameBundle.session_id == session_id)).all()
@@ -132,7 +147,8 @@ def test_profiles_store_independent_results_and_recompute_without_edge_upload(mo
             ObjectMotionState.session_id == session_id)).all()
     assert {bundle.calibration_profile for bundle in bundles} == {"basic", "precise"}
     assert {row.calibration_profile for row in detections} == {"basic", "precise"}
-    assert {row.calibration_profile for row in motion_states} == {"basic", "precise"}
+    assert {(row.calibration_profile, row.algorithm) for row in motion_states} == {
+        ("precise", "improved")}
     object_ids = {
         profile: {row.object_id for row in detections if row.calibration_profile == profile}
         for profile in ("basic", "precise")
@@ -458,23 +474,26 @@ def test_same_frame_and_tracks_are_allowed_in_another_session():
 
 def test_kalman_state_persists_position_and_velocity(monkeypatch):
     monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    monkeypatch.setattr(api_module, "MAX_GROUND_DISTANCE_M", 100.0)
     session_id = "kalman-motion"
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
 
-    first = client.post("/detections", json=detection_payload(pair_id=30, session_id=session_id))
-    assert first.status_code == 201, first.text
-    assert first.json()["matches"][0]["velocity"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+    first_payload = detection_payload(pair_id=30, session_id=session_id)
+    for frame, x in zip(first_payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+    first = create_improved(first_payload)
+    assert first["matches"][0]["velocity"] == {"x": 0.0, "y": 0.0, "z": 0.0}
 
     payload = detection_payload(pair_id=31, session_id=session_id, ts2=2020)
     payload["frames"][0]["ts"] = 2000
-    for frame in payload["frames"]:
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
         frame["detections"][0]["bbox"][0] += 10
         frame["detections"][0]["bbox"][2] += 10
-    second = client.post("/detections", json=payload)
-
-    assert second.status_code == 201, second.text
-    match = second.json()["matches"][0]
+        frame["detections"][0]["foot"][0] += 10
+    second = create_improved(payload)
+    match = second["matches"][0]
     assert match["raw_world"] is not None
     assert abs(match["velocity"]["x"]) > 0
     with SessionLocal() as db:
@@ -486,17 +505,21 @@ def test_kalman_state_persists_position_and_velocity(monkeypatch):
 
 def test_track_pair_hold_persists_across_frames(monkeypatch):
     monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", True)
+    monkeypatch.setattr(api_module, "MAX_GROUND_DISTANCE_M", 100.0)
     session_id = "track-pair-hold"
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
 
-    first = client.post("/detections", json=detection_payload(pair_id=40, session_id=session_id))
-    assert first.status_code == 201, first.text
+    first_payload = detection_payload(pair_id=40, session_id=session_id)
+    for frame, x in zip(first_payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+    create_improved(first_payload)
 
     second_payload = detection_payload(pair_id=41, session_id=session_id, ts2=2020)
     second_payload["frames"][0]["ts"] = 2000
-    second = client.post("/detections", json=second_payload)
-    assert second.status_code == 201, second.text
+    for frame, x in zip(second_payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+    create_improved(second_payload)
 
     with SessionLocal() as db:
         states = db.scalars(select(TrackPairState).where(TrackPairState.session_id == session_id)).all()
@@ -504,6 +527,24 @@ def test_track_pair_hold_persists_across_frames(monkeypatch):
     assert states[0].camera1_track_id == 7
     assert states[0].camera2_track_id == 9
     assert states[0].last_pair_id == 41
+
+
+def test_baseline_keeps_kalman_and_pair_hold_off(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", True)
+    session_id = "baseline-improvements-off"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    response = client.post("/detections", json=detection_payload(pair_id=42, session_id=session_id))
+
+    assert response.status_code == 201, response.text
+    assert response.json()["matches"][0]["raw_world"] is None
+    with SessionLocal() as db:
+        assert not db.scalars(select(ObjectMotionState).where(
+            ObjectMotionState.session_id == session_id)).all()
+        assert not db.scalars(select(TrackPairState).where(
+            TrackPairState.session_id == session_id)).all()
 
 
 def test_risk_analysis_excludes_non_person_pairs(monkeypatch):

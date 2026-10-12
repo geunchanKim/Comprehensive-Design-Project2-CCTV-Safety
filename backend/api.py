@@ -50,10 +50,9 @@ BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
 ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
 ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
 BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
-MATCHING_METHOD = os.getenv("MATCHING_METHOD", "epipolar")
 MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "2.0"))
-ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "false").lower() in {"1", "true", "yes"}
-ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "false").lower() in {"1", "true", "yes"}
+ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "true").lower() in {"1", "true", "yes"}
+ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "true").lower() in {"1", "true", "yes"}
 TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
 TRACK_PAIR_IMPROVEMENT_RATIO = float(os.getenv("TRACK_PAIR_IMPROVEMENT_RATIO", "0.9"))
 ENABLE_RISK_ANALYSIS = os.getenv("ENABLE_RISK_ANALYSIS", "false").lower() in {"1", "true", "yes"}
@@ -62,11 +61,10 @@ MIN_ANKLE_CONFIDENCE = float(os.getenv("MIN_ANKLE_CONFIDENCE", "0.6"))
 WARNING_DISTANCE_M = float(os.getenv("WARNING_DISTANCE_M", "1.0"))
 DANGER_DISTANCE_M = float(os.getenv("DANGER_DISTANCE_M", "0.5"))
 OBJECT_CLASSES = get_args(ObjectClass)
+BOX_FOOT_COMPLETION_CLASSES = frozenset({"chair", "suitcase"})
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
     raise ValueError("BBOX_POSITION_METHOD must be 'triangulate', 'plane', or 'weighted-plane'")
-if MATCHING_METHOD not in {"epipolar", "ground-plane"}:
-    raise ValueError("MATCHING_METHOD must be 'epipolar' or 'ground-plane'")
 
 
 def _height_bounds(*foot_sources: str) -> tuple[float, float]:
@@ -76,6 +74,10 @@ def _height_bounds(*foot_sources: str) -> tuple[float, float]:
     }
     selected = [bounds[source] for source in foot_sources]
     return min(bound[0] for bound in selected), max(bound[1] for bound in selected)
+
+
+def _should_complete_box_foot(object_class: str, source1: str, source2: str) -> bool:
+    return object_class in BOX_FOOT_COMPLETION_CLASSES and source1 == source2 == "box"
 
 
 def _calibration(camera: Camera) -> Calibration:
@@ -92,7 +94,7 @@ def _calibration(camera: Camera) -> Calibration:
 def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
                    object_id: int, world, timestamp_ms: int):
     raw = np.asarray(world, dtype=float)
-    if not ENABLE_KALMAN_FILTER:
+    if not _algorithm_settings(algorithm)["kalman_filter"]:
         return raw, None
     stored = db.get(ObjectMotionState, object_id)
     if stored is None:
@@ -111,17 +113,25 @@ def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
     return state.mean[:3], state.mean[3:]
 
 
-def _experiment_settings():
+def _algorithm_settings(algorithm: Algorithm):
+    """Return the features that are actually active for an algorithm condition."""
+    improved = algorithm == "improved"
     return {
-        "matching_method": MATCHING_METHOD,
+        "matching_method": "ground-plane" if improved else "epipolar",
+        "kalman_filter": improved and ENABLE_KALMAN_FILTER,
+        "track_pair_hold": improved and ENABLE_TRACK_PAIR_HOLD,
+        "ankle_pairing": improved and ENABLE_ANKLE_PAIRING,
+    }
+
+
+def _experiment_settings(algorithm: Algorithm):
+    return {
+        **_algorithm_settings(algorithm),
         "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
         "bbox_position_method": BBOX_POSITION_METHOD,
-        "kalman_filter": ENABLE_KALMAN_FILTER,
-        "track_pair_hold": ENABLE_TRACK_PAIR_HOLD,
         "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
         "track_pair_improvement_ratio": TRACK_PAIR_IMPROVEMENT_RATIO,
         "risk_analysis": ENABLE_RISK_ANALYSIS,
-        "ankle_pairing": ENABLE_ANKLE_PAIRING,
         "min_ankle_confidence": MIN_ANKLE_CONFIDENCE,
         "warning_distance_m": WARNING_DISTANCE_M,
         "danger_distance_m": DANGER_DISTANCE_M,
@@ -285,9 +295,9 @@ def _object_id(db: Session, session_id, profile, algorithm,
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     profile = body.calibration_profile
-    matching_method = "ground-plane" if algorithm == "improved" else "epipolar"
-    settings = {**_experiment_settings(), "matching_method": matching_method,
+    settings = {**_experiment_settings(algorithm),
                 "calibration_profile": profile, "algorithm": algorithm}
+    matching_method = settings["matching_method"]
     stored_settings = db.get(SessionSettings, (body.session_id, profile, algorithm))
     if stored_settings is None:
         db.add(SessionSettings(session_id=body.session_id, calibration_profile=profile,
@@ -358,7 +368,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             if key in candidate_points:
                 return candidate_points[key]
             pair = (points[0][local1], points[1][local2])
-            if source(0, local1) == source(1, local2) == "box":
+            if _should_complete_box_foot(object_class, source(0, local1), source(1, local2)):
                 i, j = indexes[0][local1], indexes[1][local2]
                 item1 = records[frames[0].camera_id][i][0]
                 item2 = records[frames[1].camera_id][j][0]
@@ -380,8 +390,12 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                     pass
                 candidate_pixels[key] = pixels
             else:
-                candidate_pixels[key] = (records[frames[0].camera_id][indexes[0][local1]][0].foot,
-                                         records[frames[1].camera_id][indexes[1][local2]][0].foot)
+                rows = (records[frames[0].camera_id][indexes[0][local1]],
+                        records[frames[1].camera_id][indexes[1][local2]])
+                candidate_pixels[key] = tuple(
+                    foot_point(row[0].bbox) if forced_source == "box" else row[2]
+                    for row in rows
+                )
             candidate_points[key] = pair
             return pair
 
@@ -422,7 +436,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             def pair_cost(row, col):
                 return symmetric_epipolar_distance(*points_for_pair(row, col), essential) * pixel_scale
 
-        if ENABLE_TRACK_PAIR_HOLD:
+        if settings["track_pair_hold"]:
             stabilized, claimed_cols = [], set()
             candidates = []
             for local1, local2, cost in stage_matches:
@@ -500,7 +514,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             world = candidate_worlds[(local1, local2)]
             position_method = "foot"
-            if (algorithm == "improved" and ENABLE_ANKLE_PAIRING
+            if (settings["ankle_pairing"]
                     and object_class == "person" and item1.ankles and item2.ankles):
                 ankle1 = {side: getattr(item1.ankles, side) for side in ("left", "right")
                           if getattr(item1.ankles, side) is not None}
@@ -589,7 +603,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
                             "raw_world": ({"x": raw_world[0], "y": raw_world[1], "z": raw_world[2]}
-                                          if ENABLE_KALMAN_FILTER else None),
+                                          if settings["kalman_filter"] else None),
                             "velocity": ({"x": velocity[0], "y": velocity[1], "z": velocity[2]}
                                          if velocity is not None else None),
                             "epipolar_error_px": round(epipolar_error, 3),

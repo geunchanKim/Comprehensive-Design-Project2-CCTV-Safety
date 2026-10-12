@@ -31,7 +31,10 @@ def health_check():
         "ankle_foot_z_min": ANKLE_FOOT_Z_MIN,
         "ankle_foot_z_max": ANKLE_FOOT_Z_MAX,
         "bbox_position_method": BBOX_POSITION_METHOD,
-        **_experiment_settings(),
+        "algorithms": {
+            "baseline": _experiment_settings("baseline"),
+            "improved": _experiment_settings("improved"),
+        },
     }
 
 
