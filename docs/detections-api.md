@@ -6,7 +6,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 `session_id`는 한 번의 실험 실행을 식별한다. 같은 Unity 데이터를 다시 실행해 결과를 비교할 때는 `unity-classroom-01-run2`처럼 새로운 `session_id`를 사용한다. 카메라 캘리브레이션, 전역 객체 ID, detection bundle, ground truth가 모두 세션 단위로 저장되므로 새 세션에서는 캘리브레이션도 다시 등록해야 한다.
 
-한 세션에서 `pair_id`는 프레임 묶음마다 고유해야 한다. 이미 저장된 `(session_id, pair_id)`를 다시 전송하면 HTTP 409를 반환한다.
+한 세션에서 `pair_id`는 실험 조건(`calibration_profile`, `algorithm`)마다 고유하다. 엣지의 최초 전송은 항상 `basic + baseline`으로 저장된다.
 
 ## 1. 카메라 캘리브레이션 등록
 
@@ -15,6 +15,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 ```json
 {
   "session_id": "unity-classroom-01-run1",
+  "calibration_profile": "basic",
   "method": "unity-gt",
   "image_size": [1920, 1080],
   "K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]],
@@ -25,7 +26,9 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 }
 ```
 
-`method`는 `unity-gt` 또는 `charuco-aruco`를 사용한다. 동일한 `(session_id, camera_id)`로 다시 요청하면 해당 캘리브레이션을 갱신한다.
+`calibration_profile`은 `basic` 또는 `precise`이며 생략하면 `basic`이다. `basic`은 저장된 왜곡 계수와 관계없이 왜곡 보정을 적용하지 않고, `precise`는 ChArUco 내부 보정값을 적용한다. 동일한 `(session_id, camera_id, calibration_profile)`로 다시 요청하면 해당 캘리브레이션을 갱신한다.
+
+`POST /cameras/{camera_id}/calibration/solve-pnp`는 화면 전체에 분산된 `grid_points` 6개 이상과 계산에 쓰지 않은 `validation_points`를 받는다. 격자점이 한 직선이면 HTTP 422를 반환하며, 계산 후 재투영 RMSE(px), 검증 위치 RMSE·최대 오차(cm), 검증점 수를 `precise` 프로필에 저장한다. 각 검증점은 자신의 `world.z` 높이 평면에서 오차를 계산하므로 원거리·다른 높이 점도 넣을 수 있다.
 
 ## 2. 프레임 묶음 전송
 
@@ -34,6 +37,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 ```json
 {
   "session_id": "unity-classroom-01-run1",
+  "calibration_profile": "basic",
   "pair_id": 42,
   "frames": [
     {
@@ -70,15 +74,34 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 각 단계는 에피폴라 오차, 삼각측량 높이, 두 카메라 앞쪽 여부를 헝가리안 알고리즘 실행 전에 검사한다. 기본 에피폴라 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
 
+개선 알고리즘은 `MATCHING_METHOD=ground-plane`으로 켠다. 이 모드에서는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. 발목은 `Z=0.1m`, bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=2.0`이다. S4 자동 실험에서 1.0m는 놓침이 증가했지만 2.0m는 정상 추적 95.4%, 놓침 4.6%, ID 변경 1회로 기존 에피폴라 방식(93.6%, 6.4%, 7회)보다 개선됐다. Docker 촬영 서버는 ground-plane 2.0m를 기본으로 사용하며, 애플리케이션을 직접 실행할 때 `MATCHING_METHOD`를 생략하면 비교 조건인 `epipolar`를 유지한다. 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
+
+`ENABLE_KALMAN_FILTER=true`로 설정하면 객체별 `[x, y, z, vx, vy, vz]` 상태를 DB에 저장하고 다음 프레임에서 이어서 보정한다. 이때 `world`는 보정 위치, `raw_world`는 보정 전 위치, `velocity`는 초당 월드 좌표 속도다. 기본값은 `false`로 기존 방법의 출력에 영향을 주지 않는다.
+
+`ENABLE_TRACK_PAIR_HOLD=true`로 설정하면 기존 카메라 간 트랙 쌍을 우선 유지한다. 새 상대의 비용이 기존 상대의 `TRACK_PAIR_IMPROVEMENT_RATIO` 배 이하인 상태가 `TRACK_PAIR_CONFIRM_FRAMES`번 연속되어야 교체를 허용한다. 기본값은 각각 `0.9`, `3`이며 기능 자체의 기본값은 `false`다. 현재 상대와 도전자 연속 횟수는 `track_pair_states`에 저장된다.
+
+세션이 처음 처리될 때 모든 실험 설정을 조건별 `session_settings`에 저장한다. `algorithm=baseline`은 epipolar, `algorithm=improved`는 ground-plane 매칭이다. `POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved`는 최초 `basic + baseline` 요청의 원본 frame·bbox·foot을 대상 조건으로 다시 계산한다. 대상 조건의 기존 결과와 추적 상태는 교체된다.
+
+탐지 한 번으로 2×2 결과를 만들려면 다음 세 요청을 실행한다. 최초 결과까지 합쳐 `basic/ baseline`, `basic/improved`, `precise/baseline`, `precise/improved`가 된다.
+
+```text
+POST /sessions/{session_id}/recompute?profile=precise&algorithm=baseline
+POST /sessions/{session_id}/recompute?profile=basic&algorithm=improved
+POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
+```
+
+`GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다. 두 query parameter의 기본값은 각각 `basic`, `baseline`이다.
+
 높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
 
-응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. Unity S1~S4 검증에서 발목 삼각측량이 고정 높이 평면보다 정확했으므로 발목 쌍은 항상 삼각측량을 사용한다. bbox 쌍은 `BBOX_POSITION_METHOD=triangulate|plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균한다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
+응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. Unity S1~S4 검증에서 발목 삼각측량이 고정 높이 평면보다 정확했으므로 발목 쌍은 항상 삼각측량을 사용한다. bbox 쌍은 `BBOX_POSITION_METHOD=triangulate|plane|weighted-plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균하고, `weighted-plane`은 멀거나 바닥과 평행에 가까운 광선의 가중치를 낮춘다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
 
 ```json
 {
   "bundle_id": 1,
   "session_id": "unity-classroom-01-run1",
   "pair_id": 42,
+  "calibration_profile": "basic",
   "sync_delta_ms": 20,
   "status": "processed",
   "matches": [],
