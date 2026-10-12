@@ -8,6 +8,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - bundle: session_id 규칙, 서버로 보내는 탐지 묶음 형식
   - realtime: 두 카메라 프레임을 가장 가까운 것끼리 짝짓는지
   - feet: 발 위치(foot)와 좌우 발목(ankles)
+  - run_experiment·crossing: 다른 조건 결과(results.csv) 변환, 교차 구간 지표
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -206,3 +207,44 @@ def test_bundle_keeps_ankles_inside_image():
     kept, _ = clean_detections([d], 1920, 1080)
     assert kept[0]["ankles"]["left"][1] < 1080 and kept[0]["ankles"]["left"][2] == 0.9
     assert kept[0]["ankles"]["right"] is None
+
+
+def test_results_csv_becomes_responses(tmp_path):
+    """recompute 결과(results.csv)를 카메라별 ts 로 짝 번호에 붙이고, 같은 물체는 한 번만 넣는다"""
+    import gzip
+    import run_experiment as rx
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    bundles = [{"pair_id": 1, "frames": [{"camera_id": "cam1", "ts": 1000}, {"camera_id": "cam2", "ts": 1010}]},
+               {"pair_id": 2, "frames": [{"camera_id": "cam1", "ts": 1100}, {"camera_id": "cam2", "ts": 1105}]}]
+    with gzip.open(pack / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.writelines(json.dumps(b) + "\n" for b in bundles)
+    text = "\n".join(["record_type,timestamp_ms,object_id,object2_id,cls,x,y,z,distance_m,ttc_s,level,settings",
+                      "position,1000,7,,person,1.0,2.0,0.1,,,,{}",
+                      "position,1010,7,,person,1.0,2.0,0.1,,,,{}",       # 같은 묶음의 cam2 줄
+                      "risk,1000,7,8,,,,,0.8,,warning,{}"])
+    resp = rx.results_to_responses(text, pack)
+    assert [r["pair_id"] for r in resp] == [1, 2]
+    assert resp[0]["matches"] == [{"object_id": 7, "cls": "person", "world": {"x": 1.0, "y": 2.0, "z": 0.1}}]
+    assert resp[1]["matches"] == []
+
+
+def test_crossing_metrics_counts_close_frames():
+    import crossing
+    gt = {f: {"objects": [{"object_id": "a", "cls": "person", "world": [0.0, 0, 0.0]},
+                          {"object_id": "b", "cls": "person", "world": [d, 0, 0.0]}]}
+          for f, d in ((1, 2.0), (2, 0.8), (3, 0.5), (4, 0.5))}
+    ok = lambda f, o, x, sid: {"frame": f, "cls": "person", "status": "ok", "object_id": o,
+                               "server_object_id": sid, "est_x": x, "est_y": 0.0}
+    rows = [ok(1, "a", 0.0, 1), ok(1, "b", 0.9, 2),          # 정답 2m 인데 서버 0.9m → 오경보
+            ok(2, "a", 0.0, 1), ok(2, "b", 0.8, 2),          # 0.8m: 둘 다 추적, 경고 맞음
+            ok(3, "a", 0.0, 1),                               # 0.5m: b 놓침 → 경고 놓침
+            ok(4, "a", 0.0, 3), ok(4, "b", 0.6, 2)]           # a 의 ID 가 1 → 3 으로 바뀜 (가까운 구간)
+    m = crossing.crossing_metrics(rows, gt)
+    assert (m["near_1m"], m["near_06m"]) == (3, 2)
+    assert m["both_1m"] == round(2 / 3, 4) and m["both_06m"] == 0.5
+    assert (m["warn_tp"], m["warn_fn"], m["warn_fp"]) == (2, 1, 1)
+    assert m["id_switches_near"] == 1
+    assert m["dist_err_cm"] == 5.0                            # (0 + 10) / 2
+    one = {1: {"objects": [{"object_id": "a", "cls": "person", "world": [0, 0, 0]}]}}
+    assert crossing.crossing_metrics([], one) is None          # 사람 한 명이면 계산 안 함
