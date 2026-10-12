@@ -25,12 +25,21 @@ pack 구조: ai/eval/packs/<이름>/
     python eval/run_experiment.py run --server URL --packs s1,s4 --label after-pr42 --compare runs/experiments/before
     python eval/run_experiment.py run --server URL --out ~/cctv-experiments --compare latest   (배포 후 자동 실행용)
 
+실험 조건 (--conditions, 논문 2×2 = 캘리브레이션 basic·precise × 알고리즘 baseline·improved)
+  - 탐지는 basic/baseline 으로 한 번만 보내고, 나머지 조건은 서버 recompute 로 다시 계산한 뒤
+    GET /sessions/{id}/results.csv 로 받아 같은 1:1 평가를 한다
+  - 기본: basic/baseline, basic/improved (Unity pack 은 정답 캘리브레이션 하나라 basic·precise 결과가 같음)
+  - all: 네 조건 모두 (실측 pack 처럼 basic·precise 캘리브레이션이 따로 있을 때)
+  - 서버에 recompute 가 없으면(예전 버전) basic/baseline 만 채점한다
+
 결과: runs/experiments/<label>/  (--out 으로 상위 폴더 변경)
   meta.json      서버 /health(커밋·설정), 사용한 pack, 실행 시각
-  summary.csv    pack·클래스별 지표 한 줄씩
+  summary.csv    pack·클래스·조건별 지표 한 줄씩
+  crossing.csv   교차 구간 지표 (사람 두 명 이상 pack, crossing.py)
   summary.md     설계도 + 표 (GitHub 작업 요약에 그대로 붙음), --compare 를 주면 전→후 비교
   diagram.mmd    파이프라인 설계도 (Mermaid). 직전 실험과 달라진 단계는 노란색
-  <pack>/        responses_detections.jsonl, position_errors.csv, failed.jsonl
+  <pack>/        responses_detections.jsonl, position_errors.csv, failed.jsonl (basic/baseline)
+  <pack>/<조건>/  다른 조건의 results.csv, responses_detections.jsonl(results.csv 를 응답 형식으로 바꾼 것), position_errors.csv
 """
 
 import argparse
@@ -50,12 +59,16 @@ import requests
 AI_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AI_DIR / "eval"))
 from eval_position import evaluate, summarize  # noqa: E402
+import crossing  # noqa: E402
 import pipeline_diagram  # noqa: E402
 
 PACK_DIR = AI_DIR / "eval" / "packs"
 EXP_DIR = AI_DIR / "runs" / "experiments"
 REPORT_CLASSES = ("person", "chair", "suitcase", "backpack")   # 표에 넣을 클래스 (책상·카트는 COCO로 못 잡음)
-COLUMNS = ["pack", "cls", "ok", "chance", "results", "mean_cm", "median_cm", "p90_cm", "max_cm",
+BASE = "basic/baseline"                                      # 엣지가 탐지를 보내는 조건
+ALL_CONDITIONS = ["basic/baseline", "basic/improved", "precise/baseline", "precise/improved"]
+DEFAULT_CONDITIONS = ["basic/baseline", "basic/improved"]
+COLUMNS = ["pack", "cls", "cond", "ok", "chance", "results", "mean_cm", "median_cm", "p90_cm", "max_cm",
            "mismatch_rate", "miss_rate", "id_switches", "bias_x_cm", "bias_y_cm", "mean_z_cm"]
 
 
@@ -143,17 +156,33 @@ def make_pack(args, extra: list[str]):
 
 # ---------- 실험 ----------
 
-def replay(server: str, pack: Path, session_id: str, out: Path, send_gt: bool) -> dict:
-    """pack 을 새 session_id 로 서버에 보낸다. 캘리브레이션 → (정답) → 탐지 순서"""
+def calibrations(pack: Path) -> dict:
+    """pack 의 calibration.json → {profile: {cam: body}}
+    Unity pack 은 {cam: body} 하나뿐이라 basic·precise 에 같은 값을 쓴다.
+    실측 pack 은 {cam: {"basic": body, "precise": body}} 로 둘을 따로 둔다."""
+    data = json.loads((pack / "calibration.json").read_text(encoding="utf-8"))
+    out = {"basic": {}, "precise": {}}
+    for cam, body in data.items():
+        for profile in out:
+            out[profile][cam] = body.get(profile, body.get("basic")) if "K" not in body else body
+    return out
+
+
+def replay(server: str, pack: Path, session_id: str, out: Path, send_gt: bool,
+           profiles: tuple = ("basic",)) -> dict:
+    """pack 을 새 session_id 로 서버에 보낸다. 캘리브레이션(필요한 프로필 모두) → (정답) → 탐지 순서"""
     out.mkdir(parents=True, exist_ok=True)
     http = requests.Session()
     failed = []
     stats = {"sent": 0, "failed": 0, "seconds": 0.0}
 
-    for cam, body in json.loads((pack / "calibration.json").read_text(encoding="utf-8")).items():
-        r = http.put(f"{server}/cameras/{cam}/calibration", json={**body, "session_id": session_id}, timeout=10)
-        if not r.ok:
-            raise SystemExit(f"[{pack.name}] {cam} 캘리브레이션 등록 실패 {r.status_code}: {r.text[:300]}")
+    calib = calibrations(pack)
+    for profile in profiles:
+        for cam, body in calib[profile].items():
+            payload = {**body, "session_id": session_id, "calibration_profile": profile}
+            r = http.put(f"{server}/cameras/{cam}/calibration", json=payload, timeout=10)
+            if not r.ok:
+                raise SystemExit(f"[{pack.name}] {cam} {profile} 캘리브레이션 등록 실패 {r.status_code}: {r.text[:300]}")
 
     if send_gt and (pack / "ground_truth.jsonl.gz").exists():
         for g in read_jsonl(pack / "ground_truth.jsonl.gz"):
@@ -182,6 +211,60 @@ def replay(server: str, pack: Path, session_id: str, out: Path, send_gt: bool) -
     return stats
 
 
+def results_to_responses(csv_text: str, pack: Path) -> list[dict]:
+    """서버 results.csv(위치 한 줄씩)를 /detections 응답 형식 {pair_id, matches: [...]} 으로 바꾼다.
+    csv 에는 pair_id 가 없어서 탐지 묶음의 카메라별 ts 로 짝 번호를 찾는다."""
+    ts_pair, pairs = {}, []
+    for b in read_jsonl(pack / "detections.jsonl.gz"):
+        pairs.append(b["pair_id"])
+        for f in b["frames"]:
+            ts_pair[int(f["ts"])] = b["pair_id"]
+    matches = {p: {} for p in pairs}
+    for r in csv.DictReader(csv_text.splitlines()):
+        if r["record_type"] != "position" or not r["object_id"]:
+            continue
+        pair = ts_pair.get(int(float(r["timestamp_ms"])))
+        if pair is None:
+            continue
+        matches[pair].setdefault(int(r["object_id"]), {          # 카메라 두 줄 중 하나만
+            "object_id": int(r["object_id"]), "cls": r["cls"],
+            "world": {"x": float(r["x"]), "y": float(r["y"]), "z": float(r["z"])}})
+    return [{"pair_id": p, "matches": list(matches[p].values())} for p in pairs]
+
+
+def recompute(server: str, session_id: str, cond: str, pack: Path, out: Path) -> str | None:
+    """다른 조건으로 다시 계산하고 결과를 응답 형식으로 저장. 실패하면 이유를 돌려준다"""
+    profile, algorithm = cond.split("/")
+    params = {"profile": profile, "algorithm": algorithm}
+    try:
+        r = requests.post(f"{server}/sessions/{session_id}/recompute", params=params, timeout=600)
+        if not r.ok:
+            return f"recompute {r.status_code}: {r.text[:200]}"
+        r = requests.get(f"{server}/sessions/{session_id}/results.csv", params=params, timeout=60)
+        if not r.ok:
+            return f"results.csv {r.status_code}: {r.text[:200]}"
+    except requests.RequestException as e:
+        return f"연결 오류: {e}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "results.csv").write_text(r.text, encoding="utf-8")
+    write_jsonl(out / "responses_detections.jsonl", results_to_responses(r.text, pack))
+    return None
+
+
+def score(out: Path, pack: Path, thr: float) -> tuple[list[dict], dict]:
+    """out/responses_detections.jsonl 을 pack 정답과 1:1 평가 → (위치 줄, 클래스별 기회)"""
+    gt_dir = out / "gt"
+    gt_dir.mkdir(exist_ok=True)
+    write_jsonl(gt_dir / "frames.jsonl", read_jsonl(pack / "frames.jsonl.gz"))
+    pos_rows, visible = evaluate(out, gt_dir, thr)
+    shutil.rmtree(gt_dir)
+    with open(out / "position_errors.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=sorted({k for r in pos_rows for k in r}))
+        w.writeheader()
+        w.writerows(pos_rows)
+    return pos_rows, visible
+
+
 def fmt(v, kind):
     if v is None:
         return "-"
@@ -195,10 +278,10 @@ def summary_markdown(rows: list[dict], meta: dict, before: dict | None) -> str:
              f"- pack: {', '.join(meta['packs'])}", ""]
     cols = [("맞음/기회", None), ("평균(cm)", "mean_cm"), ("90%(cm)", "p90_cm"),
             ("오매칭", "mismatch_rate"), ("놓침", "miss_rate"), ("ID 바뀜", "id_switches")]
-    lines.append("| pack | 클래스 | " + " | ".join(c for c, _ in cols) + " |")
-    lines.append("|---|---|" + "---|" * len(cols))
-    for r in rows:
-        b = (before or {}).get((r["pack"], r["cls"]))
+    lines.append("| pack | 클래스 | 조건 | " + " | ".join(c for c, _ in cols) + " |")
+    lines.append("|---|---|---|" + "---|" * len(cols))
+    for r in sorted(rows, key=lambda r: (r["pack"], REPORT_CLASSES.index(r["cls"]), ALL_CONDITIONS.index(r["cond"]))):
+        b = (before or {}).get((r["pack"], r["cls"], r["cond"]))
         cells = []
         for name, key in cols:
             if key is None:
@@ -209,7 +292,10 @@ def summary_markdown(rows: list[dict], meta: dict, before: dict | None) -> str:
                 now = fmt(r[key], kind)
                 old = fmt(b[key], kind) if b else None
             cells.append(f"{old} → **{now}**" if b and old != now else now)
-        lines.append(f"| {r['pack']} | {r['cls']} | " + " | ".join(cells) + " |")
+        lines.append(f"| {r['pack']} | {r['cls']} | {r['cond']} | " + " | ".join(cells) + " |")
+    skipped = {c: why for c, why in meta.get("skipped_conditions", {}).items()}
+    if skipped:
+        lines += [""] + [f"- 채점 못 한 조건 `{c}`: {why}" for c, why in skipped.items()]
     if before is not None:
         lines += ["", f"전 → 후 비교 기준: `{meta.get('compare')}`"]
     return "\n".join(lines) + "\n"
@@ -219,9 +305,10 @@ def load_summary(exp: Path) -> dict:
     out = {}
     with open(exp / "summary.csv", encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            for k in COLUMNS[2:]:
-                r[k] = None if r[k] in ("", "None") else (int(r[k]) if k in ("ok", "chance", "results", "id_switches") else float(r[k]))
-            out[(r["pack"], r["cls"])] = r
+            r["cond"] = r.get("cond") or BASE                  # 조건 열이 생기기 전 실험은 basic/baseline
+            for k in COLUMNS[3:]:
+                r[k] = None if r.get(k) in ("", "None", None) else (int(r[k]) if k in ("ok", "chance", "results", "id_switches") else float(r[k]))
+            out[(r["pack"], r["cls"], r["cond"])] = r
     return out
 
 
@@ -254,23 +341,34 @@ def run_experiment(args):
     stamp = datetime.now().strftime("%m%d%H%M%S")
     print(f"서버 {server} | 커밋 {health.get('commit')} | pack {', '.join(names)} | 결과 {exp}")
 
-    rows, packs_meta = [], {}
+    conditions = ALL_CONDITIONS if args.conditions == "all" else [c.strip() for c in args.conditions.split(",")]
+    if BASE not in conditions or any(c not in ALL_CONDITIONS for c in conditions):
+        raise SystemExit(f"--conditions 는 {BASE} 를 포함하고 {', '.join(ALL_CONDITIONS)} 중에서 골라야 해요")
+    profiles = tuple(sorted({c.split("/")[0] for c in conditions}))
+
+    rows, cross_rows, packs_meta, skipped = [], [], {}, {}
     for p in packs:
         session_id = f"exp-{p.name}-{stamp}"
         out = exp / p.name
-        stats = replay(server, p, session_id, out, args.send_gt)
-        gt_dir = out / "gt"
-        gt_dir.mkdir(exist_ok=True)
-        write_jsonl(gt_dir / "frames.jsonl", read_jsonl(p / "frames.jsonl.gz"))
-        pos_rows, visible = evaluate(out, gt_dir, args.thr)
-        shutil.rmtree(gt_dir)
-        with open(out / "position_errors.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=sorted({k for r in pos_rows for k in r}))
-            w.writeheader()
-            w.writerows(pos_rows)
-        for cls, s in summarize(pos_rows, visible).items():
-            if cls in REPORT_CLASSES:
-                rows.append({"pack": p.name, "cls": cls, **s})
+        stats = replay(server, p, session_id, out, args.send_gt, profiles)
+        gt = {g["frame"]: g for g in read_jsonl(p / "frames.jsonl.gz")}
+        for cond in conditions:
+            cond_out = out if cond == BASE else out / cond.replace("/", "-")
+            if cond != BASE:
+                if cond in skipped:
+                    continue
+                why = recompute(server, session_id, cond, p, cond_out)
+                if why:
+                    skipped[cond] = why
+                    print(f"  [건너뜀] {p.name} {cond}: {why}")
+                    continue
+            pos_rows, visible = score(cond_out, p, args.thr)
+            for cls, s in summarize(pos_rows, visible).items():
+                if cls in REPORT_CLASSES:
+                    rows.append({"pack": p.name, "cls": cls, "cond": cond, **s})
+            c = crossing.crossing_metrics(pos_rows, gt)
+            if c:
+                cross_rows.append({"pack": p.name, "cond": cond, **c})
         packs_meta[p.name] = {"session_id": session_id, **stats,
                               **json.loads((p / "meta.json").read_text(encoding="utf-8"))}
         print(f"  {p.name}: 전송 {stats['sent']} · 실패 {stats['failed']} · {stats['seconds']}초")
@@ -280,7 +378,13 @@ def run_experiment(args):
         w = csv.DictWriter(f, fieldnames=COLUMNS)
         w.writeheader()
         w.writerows([{k: r.get(k) for k in COLUMNS} for r in rows])
+    if cross_rows:
+        with open(exp / "crossing.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=crossing.COLUMNS)
+            w.writeheader()
+            w.writerows(cross_rows)
     meta = {"label": label, "server": server, "health": health, "packs": names, "thr_cm": args.thr,
+            "conditions": conditions, "skipped_conditions": skipped,
             "compare": str(compare) if compare else None, "created": datetime.now().isoformat(timespec="seconds"), "pack_runs": packs_meta}
     (exp / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     before = load_summary(compare) if compare else None
@@ -291,7 +395,7 @@ def run_experiment(args):
     now_view = pipeline_diagram.describe(meta, rows)
     (exp / "diagram.mmd").write_text(pipeline_diagram.mermaid(now_view, before_view), encoding="utf-8")
     md = (pipeline_diagram.markdown(now_view, before_view, health.get("commit", "?"), compare.name if compare else None)
-          + summary_markdown(rows, meta, before))
+          + summary_markdown(rows, meta, before) + crossing.markdown(cross_rows))
     (exp / "summary.md").write_text(md, encoding="utf-8")
     print("\n" + md)
     print(f"결과: {exp}")
@@ -319,6 +423,8 @@ def main():
     r.add_argument("--out", default=None, help="결과를 모을 상위 폴더. 기본: ai/runs/experiments")
     r.add_argument("--thr", type=float, default=50.0, help="맞음 기준 바닥 오차 cm")
     r.add_argument("--send-gt", action="store_true", help="정답도 서버에 보내기 (서버 DB에 남길 때)")
+    r.add_argument("--conditions", default=",".join(DEFAULT_CONDITIONS),
+                   help="채점할 조건. 예: basic/baseline,basic/improved (기본) 또는 all (네 조건)")
 
     args, extra = parser.parse_known_args()
     if args.cmd == "pack":

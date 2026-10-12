@@ -500,7 +500,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             world = candidate_worlds[(local1, local2)]
             position_method = "foot"
-            if ENABLE_ANKLE_PAIRING and object_class == "person" and item1.ankles and item2.ankles:
+            if (algorithm == "improved" and ENABLE_ANKLE_PAIRING
+                    and object_class == "person" and item1.ankles and item2.ankles):
                 ankle1 = {side: getattr(item1.ankles, side) for side in ("left", "right")
                           if getattr(item1.ankles, side) is not None}
                 ankle2 = {side: getattr(item2.ankles, side) for side in ("left", "right")
@@ -539,11 +540,13 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                         _, side, point1, point2, ankle_pair = min(choices, key=lambda choice: choice[0])
                         if point1.root[2] >= MIN_ANKLE_CONFIDENCE and point2.root[2] >= MIN_ANKLE_CONFIDENCE:
                             try:
-                                world = triangulate(*ankle_pair, *calibrations)
-                                foot1, foot2 = point1.root[:2], point2.root[:2]
-                                normalized_pair = ankle_pair
-                                position_method = side
-                                source1 = source2 = "ankle"
+                                ankle_world = triangulate(*ankle_pair, *calibrations)
+                                if ANKLE_FOOT_Z_MIN <= ankle_world[2] <= ANKLE_FOOT_Z_MAX:
+                                    world = ankle_world
+                                    foot1, foot2 = point1.root[:2], point2.root[:2]
+                                    normalized_pair = ankle_pair
+                                    position_method = side
+                                    source1 = source2 = "ankle"
                             except ValueError:
                                 pass
                 epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale

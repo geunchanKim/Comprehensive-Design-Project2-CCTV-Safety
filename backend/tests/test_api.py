@@ -13,6 +13,7 @@ import backend.api as api_module
 from backend.database import Base, SessionLocal, engine
 from backend.main import app
 from backend.models import Camera, Detection, FrameBundle, ObjectMotionState, TrackPairState
+from backend.schemas import DetectionBundleIn
 
 
 def setup_module():
@@ -48,6 +49,12 @@ def detection_payload(pair_id=1, session_id=SESSION, ts2=1020):
          "detections": [{"track_id": 9, "cls": "person", "conf": 0.9,
                          "bbox": [850, 400, 870, 540]}]},
     ]}
+
+
+def create_improved(payload):
+    with SessionLocal() as db:
+        return api_module._create_detections(
+            DetectionBundleIn.model_validate(payload), db, algorithm="improved")
 
 
 def test_health_exposes_deployment_settings():
@@ -243,17 +250,19 @@ def test_uses_midpoint_when_both_ankles_are_visible_and_stores_raw_ankles():
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
     payload = detection_payload(pair_id=201, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 520], foot_src="ankle")
     payload["frames"][0]["detections"][0]["ankles"] = {
         "left": [950, 510, 0.9], "right": [970, 530, 0.8]}
     # Edge labels are intentionally reversed in camera 2.
     payload["frames"][1]["detections"][0]["ankles"] = {
         "left": [870, 530, 0.8], "right": [850, 510, 0.9]}
 
-    response = client.post("/detections", json=payload)
+    result = create_improved(payload)
 
-    assert response.status_code == 201, response.text
-    match = response.json()["matches"][0]
-    assert match["foot_pixels"] == {"cam1": [960.0, 520.0], "cam2": [860.0, 520.0]}
+    match = result["matches"][0]
+    assert {camera: tuple(point) for camera, point in match["foot_pixels"].items()} == {
+        "cam1": (960.0, 520.0), "cam2": (860.0, 520.0)}
     assert {row["position_method"] for row in match["observations"]} == {"mid"}
     with SessionLocal() as db:
         stored = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
@@ -265,13 +274,14 @@ def test_pairs_single_ankle_across_reversed_labels_when_confident():
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
     payload = detection_payload(pair_id=202, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
     payload["frames"][0]["detections"][0]["ankles"] = {"left": [960, 510, 0.9], "right": None}
     payload["frames"][1]["detections"][0]["ankles"] = {"left": None, "right": [860, 510, 0.8]}
 
-    response = client.post("/detections", json=payload)
+    result = create_improved(payload)
 
-    assert response.status_code == 201, response.text
-    match = response.json()["matches"][0]
+    match = result["matches"][0]
     assert {row["position_method"] for row in match["observations"]} == {"left"}
     assert abs(match["world"]["z"] - 0.3) < 0.01
 
@@ -282,14 +292,15 @@ def test_single_ankle_below_confidence_threshold_falls_back_to_foot():
     put_camera("cam2", [-1, 0, 0], session_id)
     payload = detection_payload(pair_id=203, session_id=session_id)
     for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
         frame["detections"][0]["ankles"] = {"left": [x, 510, 0.55], "right": None}
 
-    response = client.post("/detections", json=payload)
+    result = create_improved(payload)
 
-    assert response.status_code == 201, response.text
-    match = response.json()["matches"][0]
+    match = result["matches"][0]
     assert {row["position_method"] for row in match["observations"]} == {"foot"}
-    assert match["foot_pixels"] == {"cam1": [960.0, 540.0], "cam2": [860.0, 540.0]}
+    assert {camera: tuple(point) for camera, point in match["foot_pixels"].items()} == {
+        "cam1": (960.0, 510.0), "cam2": (860.0, 510.0)}
 
 
 def test_ankle_pairing_can_be_disabled(monkeypatch):
@@ -299,12 +310,46 @@ def test_ankle_pairing_can_be_disabled(monkeypatch):
     put_camera("cam2", [-1, 0, 0], session_id)
     payload = detection_payload(pair_id=204, session_id=session_id)
     for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+        frame["detections"][0]["ankles"] = {"left": [x, 510, 0.9], "right": None}
+
+    result = create_improved(payload)
+
+    assert {row["position_method"] for row in result["matches"][0]["observations"]} == {"foot"}
+
+
+def test_baseline_ignores_ankle_pairing_even_when_enabled():
+    session_id = "baseline-ankle-pairing"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=205, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 520], foot_src="ankle")
         frame["detections"][0]["ankles"] = {"left": [x, 510, 0.9], "right": None}
 
     response = client.post("/detections", json=payload)
 
     assert response.status_code == 201, response.text
-    assert {row["position_method"] for row in response.json()["matches"][0]["observations"]} == {"foot"}
+    match = response.json()["matches"][0]
+    assert {row["position_method"] for row in match["observations"]} == {"foot"}
+    assert match["foot_pixels"] == {"cam1": [960.0, 520.0], "cam2": [860.0, 520.0]}
+
+
+def test_single_ankle_outside_height_range_falls_back_to_foot():
+    session_id = "single-ankle-height-fallback"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=206, session_id=session_id)
+    for frame, x in zip(payload["frames"], (960, 860)):
+        frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+        frame["detections"][0]["ankles"] = {"left": [x, 100, 0.9], "right": None}
+
+    result = create_improved(payload)
+
+    match = result["matches"][0]
+    assert {row["position_method"] for row in match["observations"]} == {"foot"}
+    assert {camera: tuple(point) for camera, point in match["foot_pixels"].items()} == {
+        "cam1": (960.0, 510.0), "cam2": (860.0, 510.0)}
 
 
 def test_falls_back_to_box_for_both_cameras_when_only_one_has_ankle():
