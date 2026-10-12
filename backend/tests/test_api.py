@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 from math import pi
 
@@ -236,9 +238,68 @@ def test_download_session_results_csv():
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
-    assert "record_type,timestamp_ms" in response.text
+    assert "record_type,pair_id,frame_id,timestamp_ms" in response.text
     assert "position" in response.text
     assert '""matching_method"": ""epipolar""' in response.text
+
+
+def test_crossing_mispair_keeps_distinct_object_ids_and_csv_rows():
+    session_id = "crossing-mispair"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    def crossing_payload(pair_id, cam2_tracks):
+        payload = detection_payload(pair_id=pair_id, session_id=session_id,
+                                    ts2=pair_id * 1000 + 20)
+        payload["frames"][0]["ts"] = pair_id * 1000
+        payload["frames"][0]["detections"] = [
+            {"track_id": 11, "cls": "person", "conf": 0.9,
+             "bbox": [950, 400, 970, 540]},
+            {"track_id": 12, "cls": "person", "conf": 0.9,
+             "bbox": [750, 400, 770, 540]},
+        ]
+        payload["frames"][1]["detections"] = [
+            {"track_id": cam2_tracks[0], "cls": "person", "conf": 0.9,
+             "bbox": [850, 400, 870, 540]},
+            {"track_id": cam2_tracks[1], "cls": "person", "conf": 0.9,
+             "bbox": [650, 400, 670, 540]},
+        ]
+        return payload
+
+    first = client.post("/detections", json=crossing_payload(1, (21, 22)))
+    wrong = client.post("/detections", json=crossing_payload(2, (22, 21)))
+    recovered = client.post("/detections", json=crossing_payload(3, (21, 22)))
+
+    assert first.status_code == wrong.status_code == recovered.status_code == 201
+    for response in (first, wrong, recovered):
+        ids = [match["object_id"] for match in response.json()["matches"]]
+        assert len(ids) == 2
+        assert len(set(ids)) == 2
+    assert {match["object_id"] for match in recovered.json()["matches"]} == {
+        match["object_id"] for match in first.json()["matches"]
+    }
+
+    csv_response = client.get(f"/sessions/{session_id}/results.csv")
+    rows = list(csv.DictReader(io.StringIO(csv_response.text)))
+    positions = [row for row in rows if row["record_type"] == "position"]
+    assert [sum(row["pair_id"] == str(pair_id) for row in positions)
+            for pair_id in (1, 2, 3)] == [2, 2, 2]
+    assert {row["frame_id"] for row in positions} == {"1", "2", "3"}
+
+
+def test_reconnects_when_old_counterpart_track_is_no_longer_visible():
+    session_id = "counterpart-reacquired"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    first = client.post("/detections", json=detection_payload(pair_id=1, session_id=session_id))
+
+    payload = detection_payload(pair_id=2, session_id=session_id, ts2=2020)
+    payload["frames"][0]["ts"] = 2000
+    payload["frames"][1]["detections"][0]["track_id"] = 10
+    reacquired = client.post("/detections", json=payload)
+
+    assert first.status_code == reacquired.status_code == 201
+    assert first.json()["matches"][0]["object_id"] == reacquired.json()["matches"][0]["object_id"]
 
 
 def test_uses_and_stores_explicit_ankle_foot():

@@ -146,34 +146,43 @@ def download_session_results(session_id: str, profile: CalibrationProfile = "bas
     if stored_settings is None:
         raise HTTPException(404, "session results not found")
     output = io.StringIO()
-    fields = ["record_type", "timestamp_ms", "object_id", "object2_id", "cls",
+    fields = ["record_type", "pair_id", "frame_id", "timestamp_ms", "object_id", "object2_id", "cls",
               "x", "y", "z", "distance_m", "ttc_s", "level", "settings"]
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
     settings_json = json.dumps(stored_settings.settings, sort_keys=True)
-    detections = db.scalars(select(Detection).where(
+    detections = db.execute(select(Detection, FrameBundle.pair_id).join(
+        FrameBundle, Detection.bundle_id == FrameBundle.id).where(
         Detection.session_id == session_id,
         Detection.calibration_profile == profile,
         Detection.algorithm == algorithm,
         Detection.object_id.is_not(None),
-    ).order_by(Detection.captured_at_ms, Detection.object_id)).all()
+    ).order_by(Detection.captured_at_ms, Detection.bundle_id,
+               Detection.camera_id, Detection.track_id)).all()
     seen = set()
-    for item in detections:
-        key = (item.bundle_id, item.object_id)
+    first_camera_by_bundle = {}
+    for item, pair_id in detections:
+        first_camera = first_camera_by_bundle.setdefault(item.bundle_id, item.camera_id)
+        if item.camera_id != first_camera:
+            continue
+        key = (item.bundle_id, item.camera_id, item.track_id)
         if key in seen:
             continue
         seen.add(key)
-        writer.writerow({"record_type": "position", "timestamp_ms": item.captured_at_ms,
+        writer.writerow({"record_type": "position", "pair_id": pair_id,
+                         "frame_id": item.frame_id, "timestamp_ms": item.captured_at_ms,
                          "object_id": item.object_id, "cls": item.cls,
                          "x": item.world_x, "y": item.world_y, "z": item.world_z,
                          "settings": settings_json})
-    events = db.scalars(select(RiskEvent).join(FrameBundle, RiskEvent.bundle_id == FrameBundle.id).where(
+    events = db.execute(select(RiskEvent, FrameBundle.pair_id).join(
+                        FrameBundle, RiskEvent.bundle_id == FrameBundle.id).where(
                         RiskEvent.session_id == session_id,
                         FrameBundle.calibration_profile == profile,
                         FrameBundle.algorithm == algorithm)
                         .order_by(RiskEvent.captured_at_ms, RiskEvent.id)).all()
-    for event in events:
-        writer.writerow({"record_type": "risk", "timestamp_ms": event.captured_at_ms,
+    for event, pair_id in events:
+        writer.writerow({"record_type": "risk", "pair_id": pair_id,
+                         "timestamp_ms": event.captured_at_ms,
                          "object_id": event.object1_id, "object2_id": event.object2_id,
                          "distance_m": event.distance_m, "ttc_s": event.ttc_s,
                          "level": event.level, "settings": settings_json})
@@ -248,7 +257,8 @@ def solve_precise_calibration(camera_id: str, body: PnPCalibrationIn,
 
 
 def _object_id(db: Session, session_id, profile, algorithm,
-               camera1, track1, camera2, track2, cls: str) -> int:
+               camera1, track1, camera2, track2, cls: str,
+               visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int]) -> int:
     link = db.scalar(
         select(TrackLink).where(
             TrackLink.session_id == session_id,
@@ -261,10 +271,24 @@ def _object_id(db: Session, session_id, profile, algorithm,
             TrackLink.cls == cls,
         )
     )
-    if link:
+    if link and link.object_id not in used_object_ids:
         return link.object_id
 
-    # Re-use identity when one camera reacquires its counterpart under a new local ID.
+    def new_object_id() -> int:
+        global_object = GlobalObject(session_id=session_id, calibration_profile=profile,
+                                     algorithm=algorithm, cls=cls)
+        db.add(global_object)
+        db.flush()
+        return global_object.id
+
+    # A historical bad pairing may have assigned this exact pair an ID already used
+    # by another person in the current bundle. Split it instead of merging positions.
+    if link:
+        link.object_id = new_object_id()
+        return link.object_id
+
+    # Reconnect only when one local track is stable and the old counterpart has
+    # disappeared. If that counterpart is still visible, this is a crossing/mispair.
     link = db.scalar(
         select(TrackLink).where(
             TrackLink.session_id == session_id,
@@ -272,19 +296,19 @@ def _object_id(db: Session, session_id, profile, algorithm,
             TrackLink.algorithm == algorithm,
             TrackLink.cls == cls,
             or_(
-                (TrackLink.camera1_id == camera1) & (TrackLink.camera1_track_id == track1),
-                (TrackLink.camera2_id == camera2) & (TrackLink.camera2_track_id == track2),
+                ((TrackLink.camera1_id == camera1) &
+                 (TrackLink.camera1_track_id == track1) &
+                 TrackLink.camera2_track_id.not_in(visible_tracks[1])),
+                ((TrackLink.camera2_id == camera2) &
+                 (TrackLink.camera2_track_id == track2) &
+                 TrackLink.camera1_track_id.not_in(visible_tracks[0])),
             ),
         ).order_by(TrackLink.id.desc())
     )
-    if link:
+    if link and link.object_id not in used_object_ids:
         next_id = link.object_id
     else:
-        global_object = GlobalObject(session_id=session_id, calibration_profile=profile,
-                                     algorithm=algorithm, cls=cls)
-        db.add(global_object)
-        db.flush()
-        next_id = global_object.id
+        next_id = new_object_id()
     db.add(TrackLink(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
                      object_id=next_id,
                      camera1_id=camera1, camera1_track_id=track1,
@@ -294,6 +318,8 @@ def _object_id(db: Session, session_id, profile, algorithm,
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
+    visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
+    used_object_ids: set[int] = set()
     profile = body.calibration_profile
     settings = {**_experiment_settings(algorithm),
                 "calibration_profile": profile, "algorithm": algorithm}
@@ -576,7 +602,9 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                          if BBOX_POSITION_METHOD == "weighted-plane" else np.mean(positions, axis=0))
             object_id = _object_id(db, body.session_id, profile, algorithm,
                                    frames[0].camera_id, item1.track_id,
-                                   frames[1].camera_id, item2.track_id, object_class)
+                                   frames[1].camera_id, item2.track_id, object_class,
+                                   visible_tracks, used_object_ids)
+            used_object_ids.add(object_id)
             raw_world = np.asarray(world, dtype=float)
             timestamp_ms = max(frames[0].ts, frames[1].ts)
             world, velocity = _filter_motion(db, body.session_id, profile, algorithm,

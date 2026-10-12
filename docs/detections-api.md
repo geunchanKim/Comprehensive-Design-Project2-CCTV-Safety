@@ -95,6 +95,7 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 ```
 
 `GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다. 두 query parameter의 기본값은 각각 `basic`, `baseline`이다.
+위치 행에는 원본 묶음과 카메라 프레임을 추적할 수 있도록 `pair_id`, `frame_id`가 포함된다. 한 묶음의 위치 행은 대표 카메라의 `(camera_id, track_id)`를 기준으로 구분하므로, 잘못된 전역 `object_id` 충돌이 있더라도 서로 다른 사람의 행이 합쳐지지 않는다.
 
 높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
 
