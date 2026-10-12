@@ -1,8 +1,9 @@
 import numpy as np
 
 import backend.geometry as geometry
-from backend.geometry import (Calibration, complete_box_foot, foot_point, fundamental_matrix,
-                              in_front_of_both, match_class, position_on_plane, triangulate, undistort)
+from backend.geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
+                              in_front_of_both, match_by_cost, match_class, position_on_plane,
+                              triangulate, undistort)
 
 
 def calibration(translation):
@@ -125,3 +126,29 @@ def test_complete_box_foot_restores_clipped_centres_from_depth_ratio():
 def test_complete_box_foot_keeps_visible_centre_when_estimated_width_is_smaller():
     assert complete_box_foot([0, 20, 30, 180], 200, [100, 20, 120, 180],
                              depth=10, other_depth=5) == (15, 180.0)
+
+
+def test_match_by_cost_uses_ground_distance_threshold_before_hungarian():
+    distances = {
+        (0, 0): 0.2,
+        (0, 1): 0.8,
+        (1, 0): 0.8,
+        (1, 1): 1.1,
+    }
+
+    matches = match_by_cost(2, 2, lambda row, col: distances[(row, col)], max_cost=1.0)
+
+    assert matches == [(0, 1, 0.8), (1, 0, 0.8)]
+
+
+def test_combine_plane_positions_prefers_near_steep_observation():
+    near = Calibration(K=np.eye(3), dist=np.zeros(5), R=np.eye(3), t=np.array([0.0, 0.0, -2.0]))
+    far = Calibration(K=np.eye(3), dist=np.zeros(5), R=np.eye(3), t=np.array([-10.0, 0.0, -2.0]))
+
+    combined = combine_plane_positions(
+        [np.array([0.0, 0.0, 0.0]), np.array([4.0, 0.0, 0.0])],
+        [near, far],
+    )
+
+    assert combined[0] < 1.0
+    assert combined[2] == 0.0

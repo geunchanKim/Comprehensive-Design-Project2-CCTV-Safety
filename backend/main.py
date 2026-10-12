@@ -6,11 +6,13 @@ from sqlalchemy import text
 
 try:
     from .api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
-                      BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, router)
+                      BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX,
+                      _experiment_settings, router)
     from .database import get_db
 except ImportError:  # Docker runs this directory as the import root.
     from api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
-                     BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, router)
+                     BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX,
+                     _experiment_settings, router)
     from database import get_db
 
 app = FastAPI(title="CCTV Safety Monitor API")
@@ -29,6 +31,7 @@ def health_check():
         "ankle_foot_z_min": ANKLE_FOOT_Z_MIN,
         "ankle_foot_z_max": ANKLE_FOOT_Z_MAX,
         "bbox_position_method": BBOX_POSITION_METHOD,
+        **_experiment_settings(),
     }
 
 
