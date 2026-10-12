@@ -1,4 +1,6 @@
 import argparse
+import getpass
+import os
 import time
 
 import cv2
@@ -16,13 +18,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="외부 캘리브레이션용 ArUco 촬영")
     parser.add_argument("--camera-id", required=True)
     parser.add_argument("--marker-id", type=int, default=0)
+    parser.add_argument(
+        "--camera-ip",
+        help="Tapo 등 RTSP 카메라 IP 주소 (예: 192.168.0.25)",
+    )
     args = parser.parse_args()
 
     captures_dir = CAPTURES_DIR / "aruco" / args.camera_id
     captures_dir.mkdir(parents=True, exist_ok=True)
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICTIONARY_ID)
     detector = cv2.aruco.ArucoDetector(dictionary)
-    camera = cv2.VideoCapture(CAMERA_INDEX)
+    camera_source = None
+    if args.camera_ip:
+        username = input("카메라 계정 사용자 이름: ").strip()
+        password = getpass.getpass("카메라 계정 비밀번호: ")
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+        camera_source = (
+            f"rtsp://{username}:{password}@"
+            f"{args.camera_ip}:554/stream1"
+        )
+        camera = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
+    else:
+        camera = cv2.VideoCapture(CAMERA_INDEX)
     if not camera.isOpened():
         raise RuntimeError("카메라를 열 수 없습니다.")
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
@@ -32,7 +49,14 @@ def main() -> None:
     while True:
         success, frame = camera.read()
         if not success:
-            break
+            if camera_source is None:
+                print("카메라 프레임을 읽지 못했습니다.")
+                break
+            print("RTSP 프레임이 끊겼습니다. 다시 연결합니다...")
+            camera.release()
+            time.sleep(1)
+            camera = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
+            continue
         preview = frame.copy()
         corners, ids, _ = detector.detectMarkers(frame)
         found = ids is not None and args.marker_id in ids.reshape(-1)

@@ -5,6 +5,8 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - unity_calibration: Unity 카메라 → OpenCV 캘리브레이션 변환이 정확한지 (투영 → 삼각측량 왕복)
   - server_client: dry-run 저장, 대기열이 꽉 차도 메시지를 버리지 않는지
   - eval_position: 서버 응답과 정답 비교 계산
+  - bundle: session_id 규칙, 서버로 보내는 탐지 묶음 형식
+  - realtime: 두 카메라 프레임을 가장 가까운 것끼리 짝짓는지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -20,7 +22,11 @@ AI_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AI_DIR / "edge"))
 sys.path.insert(0, str(AI_DIR / "eval"))
 
+import pytest  # noqa: E402
+from bundle import build_bundle, build_frame, check_session_id, clean_detections  # noqa: E402
+from camera_source import Frame  # noqa: E402
 from eval_position import evaluate  # noqa: E402
+from realtime import Recorder  # noqa: E402
 from server_client import ServerClient  # noqa: E402
 from unity_calibration import load_calibrations, project, projection, unity_to_world  # noqa: E402
 
@@ -120,3 +126,49 @@ def test_pipeline_diagram_marks_changed_settings():
     assert "삼각측량 → <b>바닥 평면 교점</b>" in text
     assert "class position changed" in text
     assert "class" not in pd.mermaid(before, before).split("classDef")[1].split("\n", 1)[1]
+
+
+def test_session_id_rule_and_list(tmp_path):
+    for ok in ("classroom-1014-s2-t1", "diy-1014-s10-t3-v2"):
+        assert check_session_id(ok) == ok
+    for bad in ("classroom-s1", "lab-1014-s1-t1", "classroom-1014-s1", "classroom-1014-s1-t1-run1"):
+        with pytest.raises(SystemExit):
+            check_session_id(bad)
+    sessions = tmp_path / "classroom-1014.txt"
+    sessions.write_text("# 강의실\nclassroom-1014-s1-t1\n\nclassroom-1014-s2-t1\n", encoding="utf-8")
+    assert check_session_id("classroom-1014-s2-t1", str(sessions))
+    with pytest.raises(SystemExit):
+        check_session_id("classroom-1014-s3-t1", str(sessions))
+
+
+def test_bundle_follows_server_rules():
+    dets = [
+        {"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [-5, 10, 300, 1085], "foot": [150, 1080], "foot_src": "ankle"},
+        {"track_id": None, "cls": "person", "conf": 0.9, "bbox": [0, 0, 10, 10]},   # 추적 번호 없음
+        {"track_id": 2, "cls": "tv", "conf": 0.9, "bbox": [0, 0, 10, 10]},          # 서버가 모르는 클래스
+        {"track_id": 3, "cls": "chair", "conf": 0.9, "bbox": [1919.5, 0, 1925, 10]},  # 잘라내면 폭 1px 미만
+    ]
+    kept, removed = clean_detections(dets, 1920, 1080)
+    assert removed == 3 and len(kept) == 1
+    assert kept[0]["bbox"] == [0.0, 10.0, 300.0, 1080.0]
+    assert kept[0]["foot"][1] < 1080                     # 서버는 foot < 이미지 크기 를 요구
+    frames = [build_frame("cam1", 7, 1000, (1920, 1080), kept), build_frame("cam2", 7, 1030, (1920, 1080), [])]
+    bundle = build_bundle("classroom-1014-s1-t1", 7, frames)
+    assert bundle["calibration_profile"] == "basic" and bundle["pair_id"] == 7
+    assert [f["camera_id"] for f in bundle["frames"]] == ["cam1", "cam2"]
+    assert set(bundle["frames"][0]) == {"camera_id", "frame_id", "ts", "image_size", "detections"}
+
+
+def test_recorder_pairs_nearest_frames(tmp_path):
+    """cam1 30fps, cam2 15fps: cam2 프레임마다 시각이 가장 가까운 cam1 프레임과 짝지어야 한다"""
+    image = np.zeros((4, 4, 3), np.uint8)
+    pairs = []
+    rec = Recorder(tmp_path, tol_ms=50, cam2_offset_ms=0, jpeg_quality=90, save=False,
+                   on_pair=lambda n, f1, f2, dt: pairs.append((f1.seq, f2.seq, dt)))
+    events = [(round(i * 33.3), "cam1", i) for i in range(60)] + [(round(i * 66.7 + 20), "cam2", i) for i in range(30)]
+    for t, cam, seq in sorted(events):
+        rec.add(Frame(cam, seq, 0.0, 1_000_000 + t, image))
+    rec.close()
+    assert len(pairs) >= 29
+    assert max(abs(dt) for _, _, dt in pairs) <= 17          # 30fps 간격(33ms)의 절반 이하
+    assert all(f1 in (2 * f2, 2 * f2 + 1) for f1, f2, _ in pairs)
