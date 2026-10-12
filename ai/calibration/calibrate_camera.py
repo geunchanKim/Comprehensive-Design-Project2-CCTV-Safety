@@ -12,7 +12,7 @@ from config import (
     CHARUCO_SQUARE_LENGTH_M,
     CHARUCO_SQUARES_X,
     CHARUCO_SQUARES_Y,
-    OUTPUT_DIR,
+    RESULTS_DIR,
 )
 
 
@@ -76,7 +76,7 @@ def main() -> None:
 
     result = calibrate(args.images)
     result["camera_id"] = args.camera_id
-    output = args.output or OUTPUT_DIR / f"{args.camera_id}_intrinsics.json"
+    output = args.output or RESULTS_DIR / f"{args.camera_id}_intrinsics.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"내부 캘리브레이션 저장: {output}")

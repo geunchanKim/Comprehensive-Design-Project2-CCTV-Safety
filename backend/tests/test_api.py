@@ -12,7 +12,7 @@ from sqlalchemy import select
 import backend.api as api_module
 from backend.database import Base, SessionLocal, engine
 from backend.main import app
-from backend.models import Detection, ObjectMotionState, TrackPairState
+from backend.models import Camera, Detection, FrameBundle, ObjectMotionState, TrackPairState
 
 
 def setup_module():
@@ -63,7 +63,7 @@ def test_health_exposes_deployment_settings():
         "ankle_foot_z_max": 0.4,
         "bbox_position_method": "triangulate",
         "matching_method": "epipolar",
-        "max_ground_distance_m": 1.0,
+        "max_ground_distance_m": 2.0,
         "kalman_filter": False,
         "track_pair_hold": False,
         "track_pair_confirm_frames": 3,
@@ -89,6 +89,121 @@ def test_detection_bundle_returns_world_coordinate_and_contract_ids():
     assert result["matches"][0]["observations"][0]["foot_src"] == "box"
     assert abs(result["matches"][0]["world"]["y"] - 10) < 0.01
     assert abs(result["matches"][0]["world"]["z"]) < 0.01
+
+
+def test_profiles_store_independent_results_and_recompute_without_edge_upload(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
+    session_id = "profile-recompute"
+    for profile in ("basic", "precise"):
+        for camera_id, tvec in (("cam1", [0, 0, 0]), ("cam2", [-1, 0, 0])):
+            payload = {
+                "session_id": session_id, "calibration_profile": profile,
+                "method": "unity-gt", "image_size": [1920, 1080], "K": K,
+                "dist": [0, 0, 0, 0, 0], "rvec": [pi / 2, 0, 0],
+                "tvec": tvec, "reproj_error_px": 0,
+            }
+            assert client.put(f"/cameras/{camera_id}/calibration", json=payload).status_code == 200
+    payload = detection_payload(pair_id=101, session_id=session_id)
+    payload["calibration_profile"] = "basic"
+    response = client.post("/detections", json=payload)
+    assert response.status_code == 201, response.text
+    assert response.json()["calibration_profile"] == "basic"
+
+    response = client.post(f"/sessions/{session_id}/recompute?profile=precise")
+    assert response.status_code == 200, response.text
+    assert response.json()["recomputed_bundles"] == 1
+    # 같은 원본 타임스탬프를 다시 처리해도 대상 프로필 상태를 먼저 지우므로
+    # 칼만 dt <= 0 오류가 발생하지 않아야 한다.
+    response = client.post(f"/sessions/{session_id}/recompute?profile=precise")
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        bundles = db.scalars(select(FrameBundle).where(FrameBundle.session_id == session_id)).all()
+        detections = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
+        motion_states = db.scalars(select(ObjectMotionState).where(
+            ObjectMotionState.session_id == session_id)).all()
+    assert {bundle.calibration_profile for bundle in bundles} == {"basic", "precise"}
+    assert {row.calibration_profile for row in detections} == {"basic", "precise"}
+    assert {row.calibration_profile for row in motion_states} == {"basic", "precise"}
+    object_ids = {
+        profile: {row.object_id for row in detections if row.calibration_profile == profile}
+        for profile in ("basic", "precise")
+    }
+    assert object_ids["basic"].isdisjoint(object_ids["precise"])
+
+
+def test_one_upload_produces_all_four_experiment_conditions():
+    session_id = "four-conditions"
+    for profile in ("basic", "precise"):
+        for camera_id, tvec in (("cam1", [0, 0, 0]), ("cam2", [-1, 0, 0])):
+            payload = {"session_id": session_id, "calibration_profile": profile,
+                       "method": "unity-gt", "image_size": [1920, 1080], "K": K,
+                       "dist": [0, 0, 0, 0, 0], "rvec": [pi / 2, 0, 0],
+                       "tvec": tvec, "reproj_error_px": 0}
+            assert client.put(f"/cameras/{camera_id}/calibration", json=payload).status_code == 200
+    payload = detection_payload(pair_id=1, session_id=session_id)
+    assert client.post("/detections", json=payload).status_code == 201
+    for profile, algorithm in (("precise", "baseline"), ("basic", "improved"),
+                               ("precise", "improved")):
+        response = client.post(
+            f"/sessions/{session_id}/recompute?profile={profile}&algorithm={algorithm}")
+        assert response.status_code == 200, response.text
+        assert response.json()["algorithm"] == algorithm
+        csv_response = client.get(
+            f"/sessions/{session_id}/results.csv?profile={profile}&algorithm={algorithm}")
+        assert csv_response.status_code == 200
+    with SessionLocal() as db:
+        conditions = set(db.execute(select(
+            FrameBundle.calibration_profile, FrameBundle.algorithm
+        ).where(FrameBundle.session_id == session_id)).all())
+    assert conditions == {("basic", "baseline"), ("precise", "baseline"),
+                          ("basic", "improved"), ("precise", "improved")}
+    response = client.post(
+        f"/sessions/{session_id}/recompute?profile=basic&algorithm=baseline")
+    assert response.status_code == 200, response.text
+
+
+def test_recompute_preserves_camera_frames_with_no_detections():
+    session_id = "empty-camera-recompute"
+    for profile in ("basic", "precise"):
+        for camera_id, tvec in (("cam1", [0, 0, 0]), ("cam2", [-1, 0, 0])):
+            payload = {"session_id": session_id, "calibration_profile": profile,
+                       "method": "unity-gt", "image_size": [1920, 1080], "K": K,
+                       "dist": [0, 0, 0, 0, 0], "rvec": [pi / 2, 0, 0],
+                       "tvec": tvec, "reproj_error_px": 0}
+            assert client.put(f"/cameras/{camera_id}/calibration", json=payload).status_code == 200
+    payload = detection_payload(pair_id=1, session_id=session_id)
+    payload["frames"][1]["detections"] = []
+    assert client.post("/detections", json=payload).status_code == 201
+    response = client.post(
+        f"/sessions/{session_id}/recompute?profile=precise&algorithm=baseline")
+    assert response.status_code == 200, response.text
+
+
+def test_precise_pnp_stores_held_out_validation_error():
+    session_id = "precise-pnp"
+    grid_world = [(-2, -1, 0), (0, -1, 0), (2, -1, 0),
+                  (-2, 1, 0), (0, 1, 0), (2, 1, 0)]
+    validation_world = [(-1, 0.5, 0), (1.5, -0.5, 1)]
+
+    def image_point(world):
+        x, y, z = world
+        return [960 + 1000 * x / (5 - z), 540 - 1000 * y / (5 - z)]
+
+    response = client.post("/cameras/cam1/calibration/solve-pnp", json={
+        "session_id": session_id, "image_size": [1920, 1080], "K": K,
+        "dist": [0, 0, 0, 0, 0],
+        "grid_points": [{"world": point, "image": image_point(point)} for point in grid_world],
+        "validation_points": [{"world": point, "image": image_point(point)}
+                              for point in validation_world],
+    })
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["calibration_profile"] == "precise"
+    assert result["validation_point_count"] == 2
+    assert result["validation_rmse_cm"] < 0.01
+    with SessionLocal() as db:
+        stored = db.get(Camera, (session_id, "cam1", "precise"))
+    assert stored.validation_point_count == 2
 
 
 def test_download_session_results_csv():
@@ -311,7 +426,7 @@ def test_session_rejects_changed_experiment_settings(monkeypatch):
     assert first.status_code == 201, first.text
     assert first.json()["settings"]["matching_method"] == "epipolar"
 
-    monkeypatch.setattr(api_module, "MATCHING_METHOD", "ground-plane")
+    monkeypatch.setattr(api_module, "BBOX_POSITION_METHOD", "plane")
     payload = detection_payload(pair_id=51, session_id=session_id, ts2=2020)
     payload["frames"][0]["ts"] = 2000
     changed = client.post("/detections", json=payload)

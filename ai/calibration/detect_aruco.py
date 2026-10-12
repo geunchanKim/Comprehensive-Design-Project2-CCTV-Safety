@@ -7,7 +7,8 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
-from config import ARUCO_DICTIONARY_ID, ARUCO_MARKER_LENGTH_M, OUTPUT_DIR
+from config import ARUCO_DICTIONARY_ID, ARUCO_MARKER_LENGTH_M, RESULTS_DIR
+from image_selection import image_paths
 
 
 def marker_object_points() -> np.ndarray:
@@ -18,14 +19,14 @@ def marker_object_points() -> np.ndarray:
     )
 
 
-def estimate_extrinsics(images_dir: Path, K: np.ndarray, dist: np.ndarray, marker_id: int):
+def estimate_extrinsics(images_dir: Path, K: np.ndarray, dist: np.ndarray, marker_id: int,
+                        best: int | None = None):
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICTIONARY_ID)
     detector = cv2.aruco.ArucoDetector(dictionary)
     object_points, image_points = [], []
     used = 0
 
-    paths = sorted(images_dir.glob("*.png")) + sorted(images_dir.glob("*.jpg"))
-    for path in paths:
+    for path in image_paths(images_dir, best):
         image = cv2.imread(str(path))
         if image is None:
             continue
@@ -81,6 +82,7 @@ def main() -> None:
     parser.add_argument("--intrinsics", type=Path, required=True)
     parser.add_argument("--images", type=Path, required=True)
     parser.add_argument("--marker-id", type=int, default=0)
+    parser.add_argument("--best", type=int, help="선명도 상위 N개 프레임만 사용")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--backend-url", help="예: http://localhost:8000")
     args = parser.parse_args()
@@ -88,9 +90,10 @@ def main() -> None:
     intrinsic = json.loads(args.intrinsics.read_text(encoding="utf-8"))
     K = np.asarray(intrinsic["K"], dtype=np.float64)
     dist = np.asarray(intrinsic["dist"], dtype=np.float64)
-    rvec, tvec, error, used = estimate_extrinsics(args.images, K, dist, args.marker_id)
+    rvec, tvec, error, used = estimate_extrinsics(args.images, K, dist, args.marker_id, args.best)
     payload = {
         "session_id": args.session_id,
+        "calibration_profile": "basic",
         "method": "charuco-aruco",
         "image_size": intrinsic["image_size"],
         "K": K.tolist(),
@@ -99,7 +102,7 @@ def main() -> None:
         "tvec": tvec.tolist(),
         "reproj_error_px": error,
     }
-    output = args.output or OUTPUT_DIR / f"{args.camera_id}.json"
+    output = args.output or RESULTS_DIR / f"{args.camera_id}.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"백엔드 호환 캘리브레이션 저장: {output}")

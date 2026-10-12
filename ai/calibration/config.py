@@ -10,7 +10,7 @@ CHARUCO_BOARD_DIR = BOARDS_DIR / "charuco"
 ARUCO_MARKER_DIR = BOARDS_DIR / "aruco"
 
 CAPTURES_DIR = BASE_DIR / "captures"
-OUTPUT_DIR = BASE_DIR / "output"
+RESULTS_DIR = BASE_DIR / "results"
 
 
 # ─────────────────────────────────────────────
@@ -38,6 +38,8 @@ ARUCO_MARKER_IDS = list(range(8))
 
 # 실제 출력 규격: 180 × 180mm (검은 마커 영역 기준)
 ARUCO_MARKER_LENGTH_M = 0.180
+# 다점 PnP는 중심만 사용하므로 ID 1~7은 원거리 검출을 위해 크게 출력한다.
+ARUCO_GRID_MARKER_LENGTH_M = 0.270
 
 
 # ─────────────────────────────────────────────
@@ -48,6 +50,8 @@ DPI = 300
 
 A4_WIDTH_MM = 210
 A4_HEIGHT_MM = 297
+A3_WIDTH_MM = 297
+A3_HEIGHT_MM = 420
 
 CAMERA_INDEX = 0
 CAMERA_WIDTH = 1920
