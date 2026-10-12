@@ -30,6 +30,9 @@ ai/datasets/
 ai/runs/
 ai/calibration/captures/
 ai/calibration/output/
+ai/calibration/results/*.json
+!ai/calibration/results/cam1_intrinsics.json
+!ai/calibration/results/cam2_intrinsics.json
 *.pt
 *.pth
 *.onnx

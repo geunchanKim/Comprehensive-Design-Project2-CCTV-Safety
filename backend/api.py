@@ -21,7 +21,7 @@ try:
     from .models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
                          ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
     from .models import SessionSettings
-    from .schemas import (CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
+    from .schemas import (Algorithm, CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
     from .schemas import PnPCalibrationIn
     from .tracking import (KalmanState, PairHysteresis, initialize_kalman,
@@ -35,7 +35,7 @@ except ImportError:  # Docker runs this directory as the import root.
     from models import (Camera, Detection, FrameBundle, GlobalObject, GroundTruth,
                         ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
     from models import SessionSettings
-    from schemas import (CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
+    from schemas import (Algorithm, CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
     from schemas import PnPCalibrationIn
     from tracking import (KalmanState, PairHysteresis, initialize_kalman,
@@ -87,14 +87,16 @@ def _calibration(camera: Camera) -> Calibration:
     )
 
 
-def _filter_motion(db: Session, session_id: str, object_id: int, world, timestamp_ms: int):
+def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
+                   object_id: int, world, timestamp_ms: int):
     raw = np.asarray(world, dtype=float)
     if not ENABLE_KALMAN_FILTER:
         return raw, None
     stored = db.get(ObjectMotionState, object_id)
     if stored is None:
         state = initialize_kalman(raw, timestamp_ms)
-        stored = ObjectMotionState(object_id=object_id, session_id=session_id)
+        stored = ObjectMotionState(object_id=object_id, session_id=session_id,
+                                   calibration_profile=profile, algorithm=algorithm)
         db.add(stored)
     else:
         state = KalmanState(mean=np.asarray(stored.mean, dtype=float),
@@ -124,8 +126,9 @@ def _experiment_settings():
 
 @router.get("/sessions/{session_id}/results.csv")
 def download_session_results(session_id: str, profile: CalibrationProfile = "basic",
+                             algorithm: Algorithm = "baseline",
                              db: Session = Depends(get_db)):
-    stored_settings = db.get(SessionSettings, (session_id, profile))
+    stored_settings = db.get(SessionSettings, (session_id, profile, algorithm))
     if stored_settings is None:
         raise HTTPException(404, "session results not found")
     output = io.StringIO()
@@ -137,6 +140,7 @@ def download_session_results(session_id: str, profile: CalibrationProfile = "bas
     detections = db.scalars(select(Detection).where(
         Detection.session_id == session_id,
         Detection.calibration_profile == profile,
+        Detection.algorithm == algorithm,
         Detection.object_id.is_not(None),
     ).order_by(Detection.captured_at_ms, Detection.object_id)).all()
     seen = set()
@@ -151,7 +155,8 @@ def download_session_results(session_id: str, profile: CalibrationProfile = "bas
                          "settings": settings_json})
     events = db.scalars(select(RiskEvent).join(FrameBundle, RiskEvent.bundle_id == FrameBundle.id).where(
                         RiskEvent.session_id == session_id,
-                        FrameBundle.calibration_profile == profile)
+                        FrameBundle.calibration_profile == profile,
+                        FrameBundle.algorithm == algorithm)
                         .order_by(RiskEvent.captured_at_ms, RiskEvent.id)).all()
     for event in events:
         writer.writerow({"record_type": "risk", "timestamp_ms": event.captured_at_ms,
@@ -228,10 +233,13 @@ def solve_precise_calibration(camera_id: str, body: PnPCalibrationIn,
     return upsert_camera_calibration(camera_id, result, db)
 
 
-def _object_id(db: Session, session_id, camera1, track1, camera2, track2, cls: str) -> int:
+def _object_id(db: Session, session_id, profile, algorithm,
+               camera1, track1, camera2, track2, cls: str) -> int:
     link = db.scalar(
         select(TrackLink).where(
             TrackLink.session_id == session_id,
+            TrackLink.calibration_profile == profile,
+            TrackLink.algorithm == algorithm,
             TrackLink.camera1_id == camera1,
             TrackLink.camera1_track_id == track1,
             TrackLink.camera2_id == camera2,
@@ -246,6 +254,8 @@ def _object_id(db: Session, session_id, camera1, track1, camera2, track2, cls: s
     link = db.scalar(
         select(TrackLink).where(
             TrackLink.session_id == session_id,
+            TrackLink.calibration_profile == profile,
+            TrackLink.algorithm == algorithm,
             TrackLink.cls == cls,
             or_(
                 (TrackLink.camera1_id == camera1) & (TrackLink.camera1_track_id == track1),
@@ -256,30 +266,35 @@ def _object_id(db: Session, session_id, camera1, track1, camera2, track2, cls: s
     if link:
         next_id = link.object_id
     else:
-        global_object = GlobalObject(session_id=session_id, cls=cls)
+        global_object = GlobalObject(session_id=session_id, calibration_profile=profile,
+                                     algorithm=algorithm, cls=cls)
         db.add(global_object)
         db.flush()
         next_id = global_object.id
-    db.add(TrackLink(session_id=session_id, object_id=next_id,
+    db.add(TrackLink(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
+                     object_id=next_id,
                      camera1_id=camera1, camera1_track_id=track1,
                      camera2_id=camera2, camera2_track_id=track2, cls=cls))
     return next_id
 
 
-@router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
-def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
+def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     profile = body.calibration_profile
-    settings = {**_experiment_settings(), "calibration_profile": profile}
-    stored_settings = db.get(SessionSettings, (body.session_id, profile))
+    matching_method = "ground-plane" if algorithm == "improved" else "epipolar"
+    settings = {**_experiment_settings(), "matching_method": matching_method,
+                "calibration_profile": profile, "algorithm": algorithm}
+    stored_settings = db.get(SessionSettings, (body.session_id, profile, algorithm))
     if stored_settings is None:
-        db.add(SessionSettings(session_id=body.session_id, calibration_profile=profile, settings=settings))
+        db.add(SessionSettings(session_id=body.session_id, calibration_profile=profile,
+                               algorithm=algorithm, settings=settings))
     elif stored_settings.settings != settings:
         raise HTTPException(409, "session was already processed with different experiment settings")
     duplicate = db.scalar(select(FrameBundle.id).where(
         FrameBundle.session_id == body.session_id,
         FrameBundle.pair_id == body.pair_id,
         FrameBundle.calibration_profile == profile,
+        FrameBundle.algorithm == algorithm,
     ))
     if duplicate is not None:
         raise HTTPException(409, "this session/pair detection bundle was already stored")
@@ -299,7 +314,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     essential = fundamental_matrix(*calibrations)
     pixel_scale = float(np.mean([c.K[0, 0] for c in calibrations] + [c.K[1, 1] for c in calibrations]))
     bundle = FrameBundle(session_id=body.session_id, pair_id=body.pair_id,
-                         calibration_profile=profile, sync_delta_ms=sync_delta)
+                         calibration_profile=profile, algorithm=algorithm, sync_delta_ms=sync_delta,
+                         source_frames=[frame.model_dump(mode="json") for frame in frames])
     db.add(bundle)
     db.flush()
 
@@ -312,6 +328,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             foot_source = (item.foot_src or "box") if item.foot is not None else "box"
             record = Detection(bundle_id=bundle.id, session_id=body.session_id,
                                camera_id=frame.camera_id, calibration_profile=profile,
+                               algorithm=algorithm,
                                frame_id=frame.frame_id,
                                captured_at_ms=frame.ts, track_id=item.track_id, cls=item.cls,
                                confidence=round(item.conf, 3), bbox=list(item.bbox),
@@ -385,7 +402,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             ground_distances[key] = distance
             return distance
 
-        if MATCHING_METHOD == "ground-plane":
+        if matching_method == "ground-plane":
             stage_matches = match_by_cost(len(points[0]), len(points[1]), ground_cost,
                                           MAX_GROUND_DISTANCE_M, valid_candidate)
             max_matching_cost = MAX_GROUND_DISTANCE_M
@@ -408,6 +425,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                 track1 = records[frames[0].camera_id][i][0].track_id
                 state = db.scalar(select(TrackPairState).where(
                     TrackPairState.session_id == body.session_id,
+                    TrackPairState.calibration_profile == profile,
+                    TrackPairState.algorithm == algorithm,
                     TrackPairState.cls == object_class,
                     TrackPairState.camera1_id == frames[0].camera_id,
                     TrackPairState.camera1_track_id == track1,
@@ -438,6 +457,9 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                     )
                     if locked_col is not None:
                         chosen_col, chosen_cost = locked_col, row_costs[locked_col]
+                if chosen_col in claimed_cols and proposed_col not in claimed_cols:
+                    chosen_col, chosen_cost = proposed_col, proposed_cost
+                    next_hysteresis = PairHysteresis()
                 if chosen_col in claimed_cols or not np.isfinite(chosen_cost):
                     continue
                 claimed_cols.add(chosen_col)
@@ -446,7 +468,9 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                 item1 = records[frames[0].camera_id][i][0]
                 item2 = records[frames[1].camera_id][j][0]
                 if state is None:
-                    state = TrackPairState(session_id=body.session_id, cls=object_class,
+                    state = TrackPairState(session_id=body.session_id,
+                                           calibration_profile=profile, algorithm=algorithm,
+                                           cls=object_class,
                                            camera1_id=frames[0].camera_id,
                                            camera1_track_id=item1.track_id,
                                            camera2_id=frames[1].camera_id,
@@ -480,11 +504,13 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                     positions = [world, world]
                 world = (combine_plane_positions(positions, calibrations)
                          if BBOX_POSITION_METHOD == "weighted-plane" else np.mean(positions, axis=0))
-            object_id = _object_id(db, body.session_id, frames[0].camera_id, item1.track_id,
+            object_id = _object_id(db, body.session_id, profile, algorithm,
+                                   frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class)
             raw_world = np.asarray(world, dtype=float)
             timestamp_ms = max(frames[0].ts, frames[1].ts)
-            world, velocity = _filter_motion(db, body.session_id, object_id, raw_world, timestamp_ms)
+            world, velocity = _filter_motion(db, body.session_id, profile, algorithm,
+                                             object_id, raw_world, timestamp_ms)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
                 record.object_id = object_id
                 record.world_x, record.world_y, record.world_z = map(float, world)
@@ -509,9 +535,9 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                             "velocity": ({"x": velocity[0], "y": velocity[1], "z": velocity[2]}
                                          if velocity is not None else None),
                             "epipolar_error_px": round(epipolar_error, 3),
-                            "matching_method": MATCHING_METHOD,
+                            "matching_method": matching_method,
                             "ground_distance_m": (round(matching_cost, 4)
-                                                  if MATCHING_METHOD == "ground-plane" else None)})
+                                                  if matching_method == "ground-plane" else None)})
 
     for object_class in OBJECT_CLASSES:
         class_indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class]
@@ -527,6 +553,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     risks = []
     if ENABLE_RISK_ANALYSIS:
         for first, second in combinations(matches, 2):
+            if first["cls"] != "person" and second["cls"] != "person":
+                continue
             position1 = [first["world"][axis] for axis in ("x", "y", "z")]
             position2 = [second["world"][axis] for axis in ("x", "y", "z")]
             velocity1 = ([first["velocity"][axis] for axis in ("x", "y", "z")]
@@ -554,44 +582,31 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
             "risks": risks, "settings": settings}
 
 
+@router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
+def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
+    return _create_detections(body, db, algorithm="baseline")
+
+
 @router.post("/sessions/{session_id}/recompute")
-def recompute_session(session_id: str, profile: CalibrationProfile, db: Session = Depends(get_db)):
-    """Re-run stored observations with another calibration without edge re-upload."""
-    source_profile = "precise" if profile == "basic" else "basic"
+def recompute_session(session_id: str, profile: CalibrationProfile,
+                      algorithm: Algorithm = "baseline", db: Session = Depends(get_db)):
+    """Re-run the original edge observations for one experiment condition."""
+    source_profile, source_algorithm = "basic", "baseline"
+    if (profile, algorithm) == (source_profile, source_algorithm):
+        source_profile = "precise"
     source_bundles = db.scalars(select(FrameBundle).where(
         FrameBundle.session_id == session_id,
         FrameBundle.calibration_profile == source_profile,
+        FrameBundle.algorithm == source_algorithm,
     ).order_by(FrameBundle.pair_id)).all()
     if not source_bundles:
-        source_profile = profile
-        source_bundles = db.scalars(select(FrameBundle).where(
-            FrameBundle.session_id == session_id,
-            FrameBundle.calibration_profile == profile,
-        ).order_by(FrameBundle.pair_id)).all()
-    if not source_bundles:
-        raise HTTPException(404, "no stored detections found for this session")
+        raise HTTPException(404, f"no {source_profile}/{source_algorithm} detections found for this session")
 
     payloads = []
     for bundle in source_bundles:
-        rows = db.scalars(select(Detection).where(Detection.bundle_id == bundle.id)
-                          .order_by(Detection.camera_id, Detection.id)).all()
-        frames = []
-        for camera_id in sorted({row.camera_id for row in rows}):
-            camera_rows = [row for row in rows if row.camera_id == camera_id]
-            source_camera = db.get(Camera, (session_id, camera_id, source_profile))
-            if source_camera is None:
-                raise HTTPException(409, f"source calibration is missing for {camera_id}")
-            first = camera_rows[0]
-            frames.append({
-                "camera_id": camera_id,
-                "frame_id": first.frame_id,
-                "ts": first.captured_at_ms,
-                "image_size": [source_camera.image_width, source_camera.image_height],
-                "detections": [{
-                    "track_id": row.track_id, "cls": row.cls, "conf": row.confidence,
-                    "bbox": row.bbox, "foot": row.foot_pixel, "foot_src": row.foot_src,
-                } for row in camera_rows],
-            })
+        frames = bundle.source_frames
+        if not frames:
+            raise HTTPException(409, "stored bundle has no source frames; upload it again after migration")
         payloads.append(DetectionBundleIn(session_id=session_id, pair_id=bundle.pair_id,
                                           calibration_profile=profile, frames=frames))
 
@@ -604,16 +619,32 @@ def recompute_session(session_id: str, profile: CalibrationProfile, db: Session 
     target_bundle_ids = list(db.scalars(select(FrameBundle.id).where(
         FrameBundle.session_id == session_id,
         FrameBundle.calibration_profile == profile,
+        FrameBundle.algorithm == algorithm,
     )).all())
     if target_bundle_ids:
         db.execute(delete(RiskEvent).where(RiskEvent.bundle_id.in_(target_bundle_ids)))
         db.execute(delete(Detection).where(Detection.bundle_id.in_(target_bundle_ids)))
         db.execute(delete(FrameBundle).where(FrameBundle.id.in_(target_bundle_ids)))
-        db.commit()
+    target_objects = list(db.scalars(select(GlobalObject.id).where(
+        GlobalObject.session_id == session_id,
+        GlobalObject.calibration_profile == profile,
+        GlobalObject.algorithm == algorithm,
+    )).all())
+    if target_objects:
+        db.execute(delete(ObjectMotionState).where(ObjectMotionState.object_id.in_(target_objects)))
+        db.execute(delete(TrackLink).where(TrackLink.object_id.in_(target_objects)))
+        db.execute(delete(GlobalObject).where(GlobalObject.id.in_(target_objects)))
+    db.execute(delete(TrackPairState).where(
+        TrackPairState.session_id == session_id,
+        TrackPairState.calibration_profile == profile,
+        TrackPairState.algorithm == algorithm,
+    ))
+    db.commit()
 
-    results = [create_detections(payload, db) for payload in payloads]
+    results = [_create_detections(payload, db, algorithm=algorithm) for payload in payloads]
     return {"session_id": session_id, "source_profile": source_profile,
-            "calibration_profile": profile, "recomputed_bundles": len(results)}
+            "source_algorithm": source_algorithm, "calibration_profile": profile,
+            "algorithm": algorithm, "recomputed_bundles": len(results)}
 
 
 @router.post("/ground-truth", response_model=GroundTruthOut, status_code=status.HTTP_201_CREATED)

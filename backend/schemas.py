@@ -6,6 +6,7 @@ ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
 FootSource = Literal["ankle", "box"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 CalibrationProfile = Literal["basic", "precise"]
+Algorithm = Literal["baseline", "improved"]
 
 
 class CameraCalibrationIn(BaseModel):

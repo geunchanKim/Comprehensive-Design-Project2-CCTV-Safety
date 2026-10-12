@@ -2,7 +2,8 @@
 
 이 도구는 `CCTV-Safety-backend`의 `PUT /cameras/{camera_id}/calibration` 입력 형식에 맞는
 `cam1.json`, `cam2.json`을 만든다. 길이 단위는 미터이며, 개별 ArUco 마커의
-검은 정사각형 영역은 **18cm × 18cm**이다.
+검은 정사각형 영역은 basic 기준 ID 0이 **18cm × 18cm**, 다점 계산·검증용
+ID 1~7이 **27cm × 27cm**이다.
 
 ## 1. 보드와 마커 생성
 
@@ -26,7 +27,7 @@ python capture_charuco.py --camera-id cam2
 python calibrate_camera.py --camera-id cam2 --images captures/cam2
 ```
 
-결과는 각각 `output/cam1_intrinsics.json`, `output/cam2_intrinsics.json`에 저장된다.
+결과는 각각 `results/cam1_intrinsics.json`, `results/cam2_intrinsics.json`에 저장된다.
 
 ## 3. 공통 월드 좌표계의 rvec, tvec 계산
 
@@ -37,8 +38,8 @@ ID 0 마커를 두 카메라가 모두 볼 수 있는 바닥에 고정한다. �
 ```powershell
 python capture_images.py --camera-id cam1 --marker-id 0
 python capture_images.py --camera-id cam2 --marker-id 0
-python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics output/cam1_intrinsics.json --images captures/aruco/cam1
-python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics output/cam2_intrinsics.json --images captures/aruco/cam2
+python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics results/cam1_intrinsics.json --images captures/aruco/cam1
+python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics results/cam2_intrinsics.json --images captures/aruco/cam2
 ```
 
 생성된 JSON은 백엔드가 요구하는 `session_id`, `method`, `image_size`, `K`, `dist`,
@@ -48,8 +49,8 @@ python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --in
 백엔드가 실행 중이면 생성과 등록을 한 번에 할 수 있다.
 
 ```powershell
-python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics output/cam1_intrinsics.json --images captures/aruco/cam1 --backend-url http://localhost:8000
-python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics output/cam2_intrinsics.json --images captures/aruco/cam2 --backend-url http://localhost:8000
+python detect_aruco.py --camera-id cam1 --session-id cctv-classroom-01-run1 --intrinsics results/cam1_intrinsics.json --images captures/aruco/cam1 --backend-url http://localhost:8000
+python detect_aruco.py --camera-id cam2 --session-id cctv-classroom-01-run1 --intrinsics results/cam2_intrinsics.json --images captures/aruco/cam2 --backend-url http://localhost:8000
 ```
 
 두 카메라의 JSON은 반드시 같은 위치와 방향으로 고정된 기준 마커에서 계산해야 한다.
@@ -78,7 +79,7 @@ python calibrate_grid.py --camera-id cam1 --session-id <SESSION_ID> --intrinsics
 python calibrate_grid.py --camera-id cam2 --session-id <SESSION_ID> --intrinsics results/cam2_intrinsics.json --images captures/grid/cam2 --points grid_points.json
 ```
 
-결과는 `output/cam1_precise.json`, `output/cam2_precise.json`이며 백엔드의 `precise`
+결과는 `results/cam1_precise.json`, `results/cam2_precise.json`이며 백엔드의 `precise`
 프로필에 바로 등록할 수 있다. 같은 이름의 `.report.json`에는 마커별 검출 횟수·중심 픽셀,
 검증점별 추정 좌표와 cm 오차가 저장된다. 실행기는 다음 조건을 만족하지 않으면 중단한다.
 
@@ -90,3 +91,33 @@ python calibrate_grid.py --camera-id cam2 --session-id <SESSION_ID> --intrinsics
 
 백엔드 실행 중이면 명령 끝에 `--backend-url http://localhost:8000`을 추가해 계산과 등록을
 한 번에 수행할 수 있다. 기존 단일 마커 방식은 빠른 설치 확인용 보조 수단으로만 사용한다.
+
+## 5. 실측 촬영 폴더에서 장소 파일 생성
+
+`realtime.py` 결과의 `cam1/000001.jpg`, `cam2/000001.jpg`를 직접 읽는다. `--best 10`은
+라플라시안 분산이 큰 선명한 프레임 열 장만 선택한다.
+
+```powershell
+python build_calibration.py --run ../../runs/real/classroom-1014-calib-0900 `
+  --points grid_points.json --cam1-intrinsics results/cam1_intrinsics.json `
+  --cam2-intrinsics results/cam2_intrinsics.json `
+  --output output/calib-classroom-1014.json --best 10
+```
+
+출력 파일은 `cam1·cam2 × basic·precise` payload를 담으며 `session_id`는 포함하지 않는다.
+같은 이름의 `.report.json`에서 precise 검증점별 cm 오차를 확인한다. ID 0 중심과 방향을
+월드 원점 및 X/Y축으로 사용하도록 `grid_points.json`의 좌표도 같은 기준으로 측정한다.
+
+## 6. 세션 일괄 등록과 2×2 재계산
+
+세션 목록은 `^(diy|classroom)-\d{4}-s\d+-t\d+(-v\d+)?$` 형식으로 한 줄에 하나씩 쓴다.
+
+```powershell
+python register_calibration.py --calib output/calib-classroom-1014.json `
+  --sessions sessions/classroom-1014.txt --backend-url http://localhost:32130
+python recompute_sessions.py --sessions sessions/classroom-1014.txt `
+  --backend-url http://localhost:32130
+```
+
+등록기는 세션마다 네 보정값을 PUT하고, 재계산기는 최초 `basic/baseline` 이외의 세 조건을
+만든다. 각 스크립트는 결과 표를 출력하며 요청 하나라도 실패하면 종료 코드 1을 반환한다.

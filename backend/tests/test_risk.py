@@ -22,3 +22,12 @@ def test_ttc_is_none_for_objects_moving_apart():
     risk = calculate_pair_risk([0, 0, 0], [-1, 0, 0], [2, 0, 0], [1, 0, 0])
 
     assert risk.ttc_s is None
+
+
+def test_risk_ignores_height_difference():
+    risk = calculate_pair_risk([0, 0, 0.14], [0, 0, 1],
+                               [0.4, 0, 0], [0, 0, -1])
+
+    assert risk.distance_m == pytest.approx(0.4)
+    assert risk.level == "danger"
+    assert risk.ttc_s == 0.0

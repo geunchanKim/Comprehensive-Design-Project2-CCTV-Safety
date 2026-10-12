@@ -8,7 +8,8 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
-from config import ARUCO_DICTIONARY_ID, OUTPUT_DIR
+from config import ARUCO_DICTIONARY_ID, RESULTS_DIR
+from image_selection import image_paths
 
 
 def load_points(path: Path) -> dict[int, dict]:
@@ -25,12 +26,11 @@ def load_points(path: Path) -> dict[int, dict]:
     return points
 
 
-def detect_centers(images_dir: Path) -> tuple[dict[int, np.ndarray], dict[int, int], tuple[int, int]]:
+def detect_centers(images_dir: Path, best: int | None = None) -> tuple[dict[int, np.ndarray], dict[int, int], tuple[int, int]]:
     detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(ARUCO_DICTIONARY_ID))
     observations: dict[int, list[np.ndarray]] = {}
     image_size = None
-    paths = sorted(images_dir.glob("*.png")) + sorted(images_dir.glob("*.jpg"))
-    for path in paths:
+    for path in image_paths(images_dir, best):
         image = cv2.imread(str(path))
         if image is None:
             continue
@@ -122,13 +122,14 @@ def main():
     parser.add_argument("--intrinsics", type=Path, required=True)
     parser.add_argument("--images", type=Path, required=True)
     parser.add_argument("--points", type=Path, required=True)
+    parser.add_argument("--best", type=int, help="선명도 상위 N개 프레임만 사용")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--backend-url")
     args = parser.parse_args()
     intrinsic = json.loads(args.intrinsics.read_text(encoding="utf-8"))
     K, dist = np.asarray(intrinsic["K"], dtype=float), np.asarray(intrinsic["dist"], dtype=float)
     points = load_points(args.points)
-    centers, counts, image_size = detect_centers(args.images)
+    centers, counts, image_size = detect_centers(args.images, args.best)
     if tuple(intrinsic["image_size"]) != image_size:
         raise ValueError(f"image size {image_size} differs from intrinsics {intrinsic['image_size']}")
     rvec, tvec, reproj, validation, errors = solve(points, centers, image_size, K, dist)
@@ -139,7 +140,7 @@ def main():
                "validation_rmse_cm": float(np.sqrt(np.mean(errors ** 2))),
                "validation_max_error_cm": float(np.max(errors)),
                "validation_point_count": len(validation)}
-    output = args.output or OUTPUT_DIR / f"{args.camera_id}_precise.json"
+    output = args.output or RESULTS_DIR / f"{args.camera_id}_precise.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report = {"camera_id": args.camera_id, "detected_marker_counts": counts,

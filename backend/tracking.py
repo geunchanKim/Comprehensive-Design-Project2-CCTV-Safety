@@ -52,7 +52,7 @@ def update_kalman(state: KalmanState, position, timestamp_ms: int,
                   process_noise: float = 1.0, measurement_noise: float = 0.04) -> KalmanState:
     dt = (int(timestamp_ms) - state.timestamp_ms) / 1000.0
     if dt <= 0:
-        raise ValueError("Kalman timestamps must increase")
+        return state
 
     transition = np.eye(6, dtype=float)
     transition[:3, 3:] = np.eye(3) * dt

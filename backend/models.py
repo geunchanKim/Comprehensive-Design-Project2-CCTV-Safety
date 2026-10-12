@@ -33,13 +33,15 @@ class Camera(Base):
 
 class FrameBundle(Base):
     __tablename__ = "frame_bundles"
-    __table_args__ = (UniqueConstraint("session_id", "pair_id", "calibration_profile"),)
+    __table_args__ = (UniqueConstraint("session_id", "pair_id", "calibration_profile", "algorithm"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
     pair_id: Mapped[int] = mapped_column(BigInteger)
     calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     sync_delta_ms: Mapped[int] = mapped_column(Integer)
+    source_frames: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     detections: Mapped[list["Detection"]] = relationship(cascade="all, delete-orphan")
 
@@ -47,7 +49,7 @@ class FrameBundle(Base):
 class Detection(Base):
     __tablename__ = "detections"
     __table_args__ = (
-        UniqueConstraint("session_id", "camera_id", "frame_id", "track_id", "calibration_profile"),
+        UniqueConstraint("session_id", "camera_id", "frame_id", "track_id", "calibration_profile", "algorithm"),
         ForeignKeyConstraint(["session_id", "camera_id", "calibration_profile"],
                              ["cameras.session_id", "cameras.id", "cameras.calibration_profile"]),
     )
@@ -57,6 +59,7 @@ class Detection(Base):
     session_id: Mapped[str] = mapped_column(String(128), index=True)
     camera_id: Mapped[str] = mapped_column(String(64), index=True)
     calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     frame_id: Mapped[int] = mapped_column(Integer, index=True)
     captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
     track_id: Mapped[int] = mapped_column(Integer)
@@ -76,16 +79,20 @@ class GlobalObject(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     cls: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class TrackLink(Base):
     __tablename__ = "track_links"
-    __table_args__ = (UniqueConstraint("session_id", "camera1_id", "camera1_track_id", "camera2_id", "camera2_track_id"),)
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "camera1_id", "camera1_track_id", "camera2_id", "camera2_track_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), index=True)
     camera1_id: Mapped[str] = mapped_column(String(64))
     camera1_track_id: Mapped[int] = mapped_column(Integer)
@@ -99,6 +106,8 @@ class ObjectMotionState(Base):
 
     object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     mean: Mapped[list] = mapped_column(JSON)
     covariance: Mapped[list] = mapped_column(JSON)
     timestamp_ms: Mapped[int] = mapped_column(BigInteger)
@@ -108,10 +117,12 @@ class ObjectMotionState(Base):
 
 class TrackPairState(Base):
     __tablename__ = "track_pair_states"
-    __table_args__ = (UniqueConstraint("session_id", "cls", "camera1_id", "camera1_track_id"),)
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "cls", "camera1_id", "camera1_track_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     cls: Mapped[str] = mapped_column(String(16))
     camera1_id: Mapped[str] = mapped_column(String(64))
     camera1_track_id: Mapped[int] = mapped_column(Integer)
@@ -145,6 +156,8 @@ class SessionSettings(Base):
     session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True, default="basic",
                                                      server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), primary_key=True, default="baseline",
+                                           server_default="baseline")
     settings: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
