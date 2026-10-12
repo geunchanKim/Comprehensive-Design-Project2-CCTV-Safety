@@ -13,11 +13,14 @@ def test_kalman_estimates_constant_velocity():
     assert np.allclose(state.mean[3:], [1.0, 0.0, 0.0], atol=0.1)
 
 
-def test_kalman_rejects_non_increasing_timestamp():
+def test_kalman_skips_non_increasing_timestamp():
     state = initialize_kalman([0.0, 0.0, 0.0], timestamp_ms=1000)
 
-    with np.testing.assert_raises_regex(ValueError, "timestamps must increase"):
-        update_kalman(state, [1.0, 0.0, 0.0], timestamp_ms=1000)
+    unchanged = update_kalman(state, [1.0, 0.0, 0.0], timestamp_ms=1000)
+
+    assert unchanged is state
+    assert unchanged.timestamp_ms == 1000
+    assert np.array_equal(unchanged.mean[:3], [0.0, 0.0, 0.0])
 
 
 def test_pair_hysteresis_switches_only_after_consecutive_better_frames():

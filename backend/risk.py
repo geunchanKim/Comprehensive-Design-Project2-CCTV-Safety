@@ -32,8 +32,12 @@ def calculate_pair_risk(position_a, velocity_a, position_b, velocity_b,
                         danger_distance_m: float = 0.5) -> PairRisk:
     if not 0 < danger_distance_m < warning_distance_m:
         raise ValueError("danger distance must be positive and below warning distance")
-    relative_position = np.asarray(position_b, dtype=float) - np.asarray(position_a, dtype=float)
-    relative_velocity = np.asarray(velocity_b, dtype=float) - np.asarray(velocity_a, dtype=float)
+    # Collision risk is measured on the ground plane; source-dependent foot
+    # heights must not inflate the distance or TTC.
+    relative_position = (np.asarray(position_b, dtype=float)
+                         - np.asarray(position_a, dtype=float))[:2]
+    relative_velocity = (np.asarray(velocity_b, dtype=float)
+                         - np.asarray(velocity_a, dtype=float))[:2]
     distance = float(np.linalg.norm(relative_position))
     if distance < danger_distance_m:
         level = "danger"

@@ -377,6 +377,9 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
                     )
                     if locked_col is not None:
                         chosen_col, chosen_cost = locked_col, row_costs[locked_col]
+                if chosen_col in claimed_cols and proposed_col not in claimed_cols:
+                    chosen_col, chosen_cost = proposed_col, proposed_cost
+                    next_hysteresis = PairHysteresis()
                 if chosen_col in claimed_cols or not np.isfinite(chosen_cost):
                     continue
                 claimed_cols.add(chosen_col)
@@ -466,6 +469,8 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
     risks = []
     if ENABLE_RISK_ANALYSIS:
         for first, second in combinations(matches, 2):
+            if first["cls"] != "person" and second["cls"] != "person":
+                continue
             position1 = [first["world"][axis] for axis in ("x", "y", "z")]
             position2 = [second["world"][axis] for axis in ("x", "y", "z")]
             velocity1 = ([first["velocity"][axis] for axis in ("x", "y", "z")]

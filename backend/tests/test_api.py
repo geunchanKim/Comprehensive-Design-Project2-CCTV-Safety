@@ -275,6 +275,34 @@ def test_track_pair_hold_persists_across_frames(monkeypatch):
     assert states[0].last_pair_id == 41
 
 
+def test_risk_analysis_excludes_non_person_pairs(monkeypatch):
+    monkeypatch.setattr(api_module, "ENABLE_RISK_ANALYSIS", True)
+    session_id = "person-risk-only"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    payload = detection_payload(pair_id=45, session_id=session_id)
+    for frame in payload["frames"]:
+        base = frame["detections"][0]
+        frame["detections"].extend([
+            {"track_id": 20, "cls": "chair", "conf": 0.9,
+             "bbox": list(base["bbox"])},
+            {"track_id": 21, "cls": "chair", "conf": 0.9,
+             "bbox": [value + (20 if index in (0, 2) else 0)
+                      for index, value in enumerate(base["bbox"])]},
+        ])
+
+    response = client.post("/detections", json=payload)
+
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert len(result["matches"]) == 3
+    person_id = next(match["object_id"] for match in result["matches"]
+                     if match["cls"] == "person")
+    assert len(result["risks"]) == 2
+    assert all(person_id in (risk["object1_id"], risk["object2_id"])
+               for risk in result["risks"])
+
+
 def test_session_rejects_changed_experiment_settings(monkeypatch):
     session_id = "immutable-settings"
     put_camera("cam1", [0, 0, 0], session_id)
