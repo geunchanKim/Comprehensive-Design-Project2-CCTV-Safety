@@ -26,6 +26,7 @@ sys.path.insert(0, str(AI_DIR / "eval"))
 
 import pytest  # noqa: E402
 from bundle import build_bundle, build_frame, check_session_id, clean_detections  # noqa: E402
+import camera_source  # noqa: E402
 from camera_source import Frame  # noqa: E402
 from eval_position import evaluate  # noqa: E402
 from feet import LEFT_ANKLE, RIGHT_ANKLE, attach_feet  # noqa: E402
@@ -158,8 +159,23 @@ def test_bundle_follows_server_rules():
     frames = [build_frame("cam1", 7, 1000, (1920, 1080), kept), build_frame("cam2", 7, 1030, (1920, 1080), [])]
     bundle = build_bundle("classroom-1014-s1-t1", 7, frames)
     assert bundle["calibration_profile"] == "basic" and bundle["pair_id"] == 7
+    assert bundle["max_sync_delta_ms"] == 50
     assert [f["camera_id"] for f in bundle["frames"]] == ["cam1", "cam2"]
     assert set(bundle["frames"][0]) == {"camera_id", "frame_id", "ts", "image_size", "detections"}
+
+
+def test_frame_carries_pts_and_receive_times():
+    frame = build_frame("cam1", 1, 1000, (1920, 1080), [], pts_ms=12.25, recv_ms=1010)
+    assert frame["pts_ms"] == 12.25
+    assert frame["recv_ms"] == 1010
+
+
+def test_tapo_credentials_are_url_encoded(monkeypatch):
+    monkeypatch.setattr(camera_source, "_credentials", ("user@name", "p:a/ss"))
+    target, shown, kind = camera_source.resolve("tapo:192.168.0.10")
+    assert target == "rtsp://user%40name:p%3Aa%2Fss@192.168.0.10:554/stream1"
+    assert shown == "rtsp://192.168.0.10:554/stream1"
+    assert kind == "rtsp"
 
 
 def test_recorder_pairs_nearest_frames(tmp_path):

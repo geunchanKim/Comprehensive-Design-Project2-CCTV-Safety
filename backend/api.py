@@ -50,21 +50,22 @@ BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
 ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
 ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
 BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
-MATCHING_METHOD = os.getenv("MATCHING_METHOD", "epipolar")
 MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "2.0"))
-ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "false").lower() in {"1", "true", "yes"}
-ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "false").lower() in {"1", "true", "yes"}
+ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "true").lower() in {"1", "true", "yes"}
+ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "true").lower() in {"1", "true", "yes"}
 TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
 TRACK_PAIR_IMPROVEMENT_RATIO = float(os.getenv("TRACK_PAIR_IMPROVEMENT_RATIO", "0.9"))
 ENABLE_RISK_ANALYSIS = os.getenv("ENABLE_RISK_ANALYSIS", "false").lower() in {"1", "true", "yes"}
+ENABLE_ANKLE_PAIRING = os.getenv("ENABLE_ANKLE_PAIRING", "true").lower() in {"1", "true", "yes"}
+MIN_ANKLE_CONFIDENCE = float(os.getenv("MIN_ANKLE_CONFIDENCE", "0.6"))
 WARNING_DISTANCE_M = float(os.getenv("WARNING_DISTANCE_M", "1.0"))
 DANGER_DISTANCE_M = float(os.getenv("DANGER_DISTANCE_M", "0.5"))
 OBJECT_CLASSES = get_args(ObjectClass)
+BOX_FOOT_COMPLETION_CLASSES = frozenset({"person", "chair", "suitcase"})
+BOX_PLANE_CLASSES = frozenset({"chair", "suitcase"})
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
     raise ValueError("BBOX_POSITION_METHOD must be 'triangulate', 'plane', or 'weighted-plane'")
-if MATCHING_METHOD not in {"epipolar", "ground-plane"}:
-    raise ValueError("MATCHING_METHOD must be 'epipolar' or 'ground-plane'")
 
 
 def _height_bounds(*foot_sources: str) -> tuple[float, float]:
@@ -74,6 +75,15 @@ def _height_bounds(*foot_sources: str) -> tuple[float, float]:
     }
     selected = [bounds[source] for source in foot_sources]
     return min(bound[0] for bound in selected), max(bound[1] for bound in selected)
+
+
+def _should_complete_box_foot(object_class: str, source1: str, source2: str) -> bool:
+    return object_class in BOX_FOOT_COMPLETION_CLASSES and source1 == source2 == "box"
+
+
+def _should_use_box_plane(object_class: str, source1: str, source2: str) -> bool:
+    return (object_class in BOX_PLANE_CLASSES and source1 == source2 == "box"
+            and BBOX_POSITION_METHOD in {"plane", "weighted-plane"})
 
 
 def _calibration(camera: Camera) -> Calibration:
@@ -90,7 +100,7 @@ def _calibration(camera: Camera) -> Calibration:
 def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
                    object_id: int, world, timestamp_ms: int):
     raw = np.asarray(world, dtype=float)
-    if not ENABLE_KALMAN_FILTER:
+    if not _algorithm_settings(algorithm)["kalman_filter"]:
         return raw, None
     stored = db.get(ObjectMotionState, object_id)
     if stored is None:
@@ -109,16 +119,26 @@ def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
     return state.mean[:3], state.mean[3:]
 
 
-def _experiment_settings():
+def _algorithm_settings(algorithm: Algorithm):
+    """Return the features that are actually active for an algorithm condition."""
+    improved = algorithm == "improved"
     return {
-        "matching_method": MATCHING_METHOD,
+        "matching_method": "ground-plane" if improved else "epipolar",
+        "kalman_filter": improved and ENABLE_KALMAN_FILTER,
+        "track_pair_hold": improved and ENABLE_TRACK_PAIR_HOLD,
+        "ankle_pairing": improved and ENABLE_ANKLE_PAIRING,
+    }
+
+
+def _experiment_settings(algorithm: Algorithm):
+    return {
+        **_algorithm_settings(algorithm),
         "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
         "bbox_position_method": BBOX_POSITION_METHOD,
-        "kalman_filter": ENABLE_KALMAN_FILTER,
-        "track_pair_hold": ENABLE_TRACK_PAIR_HOLD,
         "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
         "track_pair_improvement_ratio": TRACK_PAIR_IMPROVEMENT_RATIO,
         "risk_analysis": ENABLE_RISK_ANALYSIS,
+        "min_ankle_confidence": MIN_ANKLE_CONFIDENCE,
         "warning_distance_m": WARNING_DISTANCE_M,
         "danger_distance_m": DANGER_DISTANCE_M,
     }
@@ -307,9 +327,11 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
     used_object_ids: set[int] = set()
     profile = body.calibration_profile
-    matching_method = "ground-plane" if algorithm == "improved" else "epipolar"
-    settings = {**_experiment_settings(), "matching_method": matching_method,
-                "calibration_profile": profile, "algorithm": algorithm}
+    max_sync_delta_ms = body.max_sync_delta_ms if body.max_sync_delta_ms is not None else MAX_SYNC_DELTA_MS
+    settings = {**_experiment_settings(algorithm),
+                "calibration_profile": profile, "algorithm": algorithm,
+                "max_sync_delta_ms": max_sync_delta_ms}
+    matching_method = settings["matching_method"]
     stored_settings = db.get(SessionSettings, (body.session_id, profile, algorithm))
     if stored_settings is None:
         db.add(SessionSettings(session_id=body.session_id, calibration_profile=profile,
@@ -324,9 +346,17 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
     ))
     if duplicate is not None:
         raise HTTPException(409, "this session/pair detection bundle was already stored")
+    pts_delta = (abs(frames[0].pts_ms - frames[1].pts_ms)
+                 if all(frame.pts_ms is not None for frame in frames) else None)
+    recv_delta = (abs(frames[0].recv_ms - frames[1].recv_ms)
+                  if all(frame.recv_ms is not None for frame in frames) else None)
+    # `ts` includes the edge's measured per-camera delay correction. Keep the
+    # raw receive and presentation times for diagnostics only.
+    sync_time_basis = "ts"
     sync_delta = abs(frames[0].ts - frames[1].ts)
-    if sync_delta > MAX_SYNC_DELTA_MS:
-        raise HTTPException(422, f"frame timestamps differ by {sync_delta}ms (maximum {MAX_SYNC_DELTA_MS}ms)")
+    if sync_delta > max_sync_delta_ms:
+        raise HTTPException(422, f"frame {sync_time_basis} differ by {sync_delta}ms "
+                                 f"(session maximum {max_sync_delta_ms}ms)")
 
     cameras = [db.get(Camera, (body.session_id, frame.camera_id, profile)) for frame in frames]
     missing = [frame.camera_id for frame, camera in zip(frames, cameras) if camera is None]
@@ -358,7 +388,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                frame_id=frame.frame_id,
                                captured_at_ms=frame.ts, track_id=item.track_id, cls=item.cls,
                                confidence=round(item.conf, 3), bbox=list(item.bbox),
-                               foot_pixel=list(foot), foot_src=foot_source)
+                               foot_pixel=list(foot), foot_src=foot_source,
+                               ankles=(item.ankles.model_dump(mode="json") if item.ankles else None))
             db.add(record)
             records[frame.camera_id].append((item, record, foot, foot_source))
             normalized[frame.camera_id].append(undistort(foot, calibration))
@@ -379,7 +410,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             if key in candidate_points:
                 return candidate_points[key]
             pair = (points[0][local1], points[1][local2])
-            if source(0, local1) == source(1, local2) == "box":
+            if _should_complete_box_foot(object_class, source(0, local1), source(1, local2)):
                 i, j = indexes[0][local1], indexes[1][local2]
                 item1 = records[frames[0].camera_id][i][0]
                 item2 = records[frames[1].camera_id][j][0]
@@ -401,8 +432,12 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                     pass
                 candidate_pixels[key] = pixels
             else:
-                candidate_pixels[key] = (records[frames[0].camera_id][indexes[0][local1]][0].foot,
-                                         records[frames[1].camera_id][indexes[1][local2]][0].foot)
+                rows = (records[frames[0].camera_id][indexes[0][local1]],
+                        records[frames[1].camera_id][indexes[1][local2]])
+                candidate_pixels[key] = tuple(
+                    foot_point(row[0].bbox) if forced_source == "box" else row[2]
+                    for row in rows
+                )
             candidate_points[key] = pair
             return pair
 
@@ -443,7 +478,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             def pair_cost(row, col):
                 return symmetric_epipolar_distance(*points_for_pair(row, col), essential) * pixel_scale
 
-        if ENABLE_TRACK_PAIR_HOLD:
+        if settings["track_pair_hold"]:
             stabilized, claimed_cols = [], set()
             candidates = []
             for local1, local2, cost in stage_matches:
@@ -520,7 +555,60 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             foot1, foot2 = candidate_pixels[(local1, local2)]
             epipolar_error = symmetric_epipolar_distance(*normalized_pair, essential) * pixel_scale
             world = candidate_worlds[(local1, local2)]
-            if source1 == source2 == "box" and BBOX_POSITION_METHOD in {"plane", "weighted-plane"}:
+            position_method = "foot"
+            if (settings["ankle_pairing"]
+                    and object_class == "person" and item1.ankles and item2.ankles):
+                ankle1 = {side: getattr(item1.ankles, side) for side in ("left", "right")
+                          if getattr(item1.ankles, side) is not None}
+                ankle2 = {side: getattr(item2.ankles, side) for side in ("left", "right")
+                          if getattr(item2.ankles, side) is not None}
+                layouts = (
+                    (("left", "left"), ("right", "right")),
+                    (("left", "right"), ("right", "left")),
+                )
+                layout_candidates = []
+                for layout in layouts:
+                    pairs = []
+                    for side1, side2 in layout:
+                        if side1 not in ankle1 or side2 not in ankle2:
+                            continue
+                        point1, point2 = ankle1[side1], ankle2[side2]
+                        if min(point1.root[2], point2.root[2]) < MIN_ANKLE_CONFIDENCE:
+                            continue
+                        normalized_ankles = (
+                            undistort(point1.root[:2], calibrations[0]),
+                            undistort(point2.root[:2], calibrations[1]),
+                        )
+                        error = symmetric_epipolar_distance(
+                            *normalized_ankles, essential) * pixel_scale
+                        pairs.append((side1, side2, point1, point2, normalized_ankles, error))
+                    if pairs:
+                        layout_candidates.append((float(np.mean([pair[5] for pair in pairs])), pairs))
+
+                ankle_worlds = []
+                accepted_pairs = []
+                if layout_candidates:
+                    _, selected_pairs = min(layout_candidates, key=lambda candidate: candidate[0])
+                else:
+                    selected_pairs = []
+                for side1, side2, point1, point2, ankle_pair, error in selected_pairs:
+                    try:
+                        ankle_world = triangulate(*ankle_pair, *calibrations)
+                        if ANKLE_FOOT_Z_MIN <= ankle_world[2] <= ANKLE_FOOT_Z_MAX:
+                            ankle_worlds.append(ankle_world)
+                            accepted_pairs.append((side1, side2, point1, point2, error))
+                    except ValueError:
+                        pass
+                if accepted_pairs:
+                    world = np.mean(ankle_worlds, axis=0)
+                    foot1 = tuple(np.mean([pair[2].root[:2] for pair in accepted_pairs], axis=0))
+                    foot2 = tuple(np.mean([pair[3].root[:2] for pair in accepted_pairs], axis=0))
+                    normalized_pair = tuple(undistort(pixel, calibration)
+                                            for pixel, calibration in zip((foot1, foot2), calibrations))
+                    position_method = "mid" if len(accepted_pairs) == 2 else accepted_pairs[0][0]
+                    source1 = source2 = "ankle"
+                    epipolar_error = float(np.mean([pair[4] for pair in accepted_pairs]))
+            if _should_use_box_plane(object_class, source1, source2):
                 try:
                     positions = [position_on_plane(point, calibration, 0.0)
                                  for point, calibration in zip(normalized_pair, calibrations)]
@@ -536,7 +624,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                    visible_tracks, used_object_ids)
             used_object_ids.add(object_id)
             raw_world = np.asarray(world, dtype=float)
-            timestamp_ms = max(frames[0].ts, frames[1].ts)
+            timestamp_ms = max(frame.ts for frame in frames)
             world, velocity = _filter_motion(db, body.session_id, profile, algorithm,
                                              object_id, raw_world, timestamp_ms)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):
@@ -551,15 +639,17 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                 {"camera_id": frames[0].camera_id, "frame_id": frames[0].frame_id, "ts": frames[0].ts,
                                  "track_id": item1.track_id, "cls": item1.cls, "conf": round(item1.conf, 3),
                                  "bbox": item1.bbox, "image_size": frames[0].image_size,
-                                 "foot_pixel": foot1, "foot_src": source1},
+                                 "foot_pixel": foot1, "foot_src": source1,
+                                 "position_method": position_method},
                                 {"camera_id": frames[1].camera_id, "frame_id": frames[1].frame_id, "ts": frames[1].ts,
                                  "track_id": item2.track_id, "cls": item2.cls, "conf": round(item2.conf, 3),
                                  "bbox": item2.bbox, "image_size": frames[1].image_size,
-                                 "foot_pixel": foot2, "foot_src": source2},
+                                 "foot_pixel": foot2, "foot_src": source2,
+                                 "position_method": position_method},
                             ],
                             "world": {"x": world[0], "y": world[1], "z": world[2]},
                             "raw_world": ({"x": raw_world[0], "y": raw_world[1], "z": raw_world[2]}
-                                          if ENABLE_KALMAN_FILTER else None),
+                                          if settings["kalman_filter"] else None),
                             "velocity": ({"x": velocity[0], "y": velocity[1], "z": velocity[2]}
                                          if velocity is not None else None),
                             "epipolar_error_px": round(epipolar_error, 3),
@@ -606,6 +696,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                  for n, frame in enumerate(frames)}
     return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
             "calibration_profile": profile, "sync_delta_ms": sync_delta,
+            "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
+            "sync_time_basis": sync_time_basis, "max_sync_delta_ms": max_sync_delta_ms,
             "matches": matches, "unmatched": unmatched,
             "risks": risks, "settings": settings}
 
@@ -635,8 +727,12 @@ def recompute_session(session_id: str, profile: CalibrationProfile,
         frames = bundle.source_frames
         if not frames:
             raise HTTPException(409, "stored bundle has no source frames; upload it again after migration")
+        source_settings = db.get(SessionSettings, (session_id, source_profile, source_algorithm))
+        max_sync_delta_ms = ((source_settings.settings or {}).get("max_sync_delta_ms", MAX_SYNC_DELTA_MS)
+                             if source_settings else MAX_SYNC_DELTA_MS)
         payloads.append(DetectionBundleIn(session_id=session_id, pair_id=bundle.pair_id,
-                                          calibration_profile=profile, frames=frames))
+                                          calibration_profile=profile, frames=frames,
+                                          max_sync_delta_ms=max_sync_delta_ms))
 
     camera_ids = {frame.camera_id for payload in payloads for frame in payload.frames}
     missing_targets = [camera_id for camera_id in sorted(camera_ids)

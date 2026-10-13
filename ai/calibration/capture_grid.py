@@ -1,54 +1,26 @@
 """Capture fixed-camera frames containing multiple surveyed ArUco grid points."""
 import argparse
-import getpass
-import os
 import time
-from urllib.parse import quote
 
 import cv2
 
 from config import ARUCO_DICTIONARY_ID, CAMERA_HEIGHT, CAMERA_INDEX, CAMERA_WIDTH, CAPTURES_DIR
-
-
-def open_camera(camera_ip: str | None):
-    if not camera_ip:
-        return cv2.VideoCapture(CAMERA_INDEX), None
-    username = input("카메라 계정 사용자 이름: ").strip()
-    password = getpass.getpass("카메라 계정 비밀번호: ")
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-    source = (f"rtsp://{quote(username, safe='')}:{quote(password, safe='')}@"
-              f"{camera_ip}:554/stream1")
-    return cv2.VideoCapture(source, cv2.CAP_FFMPEG), source
+from capture_source import add_camera_args, next_image, open_camera
 
 
 def main():
     parser = argparse.ArgumentParser(description="다점 PnP용 ArUco 격자 촬영")
     parser.add_argument("--camera-id", required=True)
-    parser.add_argument("--camera-ip", help="RTSP 카메라 IP")
+    add_camera_args(parser)
     parser.add_argument("--min-markers", type=int, default=6)
-    parser.add_argument("--max-reconnects", type=int, default=5)
     args = parser.parse_args()
     output_dir = CAPTURES_DIR / "grid" / args.camera_id
     output_dir.mkdir(parents=True, exist_ok=True)
     detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(ARUCO_DICTIONARY_ID))
-    camera, source = open_camera(args.camera_ip)
-    if not camera.isOpened():
-        raise RuntimeError("카메라를 열 수 없습니다. IP와 RTSP 카메라 계정을 확인하세요.")
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    camera = open_camera(args, args.camera_id)
     saved = len(list(output_dir.glob("*.png")))
-    reconnects = 0
     while True:
-        ok, frame = camera.read()
-        if not ok:
-            if source is None or reconnects >= args.max_reconnects:
-                raise RuntimeError(f"프레임 수신 실패 (재연결 {reconnects}회)")
-            reconnects += 1
-            camera.release()
-            time.sleep(1)
-            camera = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
-            continue
-        reconnects = 0
+        frame = next_image(camera)
         corners, ids, _ = detector.detectMarkers(frame)
         marker_ids = sorted(ids.reshape(-1).tolist()) if ids is not None else []
         preview = frame.copy()
@@ -71,7 +43,7 @@ def main():
             print(f"[{saved}] 저장: {path.name}, IDs={marker_ids}")
         elif key in (ord("q"), 27):
             break
-    camera.release()
+    camera.stop()
     cv2.destroyAllWindows()
 
 

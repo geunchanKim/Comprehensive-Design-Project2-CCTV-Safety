@@ -10,7 +10,7 @@
 
 짝 맞추기
   - 노트북이 받은 시각(recv_ms) 기준으로 가장 가까운 프레임끼리 짝짓는다.
-  - 차이가 --tol-ms 이내만 짝으로 인정한다. 기본 50ms (서버 MAX_SYNC_DELTA_MS와 같음).
+  - 차이가 --tol-ms 이내만 짝으로 인정하고 같은 값을 서버 세션 설정으로 보낸다. 기본 50ms.
   - 짝마다 실제 차이(dt_ms)를 적어 두므로, 나중에 17·33·50ms 기준별로 다시 골라 평가할 수 있다.
   - --cam2-offset-ms: 깜빡임 동기화로 잰 cam2 지연을 빼고 비교한다 (재기 전에는 0).
 
@@ -191,14 +191,16 @@ class Sender:
                     h, w = f.image.shape[:2]
                     dets, removed = clean_detections(self.detectors[f.camera](f.image), w, h)
                     self.stats["removed"] += removed
-                    frames.append(build_frame(f.camera, n, self.recorder.corrected_ms(f), (w, h), dets))
+                    frames.append(build_frame(f.camera, n, self.recorder.corrected_ms(f), (w, h), dets,
+                                              pts_ms=f.pts_ms, recv_ms=f.recv_ms))
             except Exception as e:                     # 모델 오류는 이 짝만 건너뜀
                 self.stats["errors"] += 1
                 print(f"  [탐지 오류] 짝 {n}: {e}")
                 continue
             if not any(fr["detections"] for fr in frames):
                 self.stats["empty"] += 1
-            self.client.send(build_bundle(self.session_id, n, frames), path="/detections")
+            self.client.send(build_bundle(self.session_id, n, frames,
+                                          max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections")
             self.stats["sent"] += 1
             self._check_server()
 
@@ -271,8 +273,8 @@ def main():
         if not args.session:
             raise SystemExit("--send 에는 --session 이 필요해요 (해민이 캘리브레이션을 등록한 이름)")
         check_session_id(args.session, args.sessions)
-        if args.tol_ms > MAX_SYNC_DELTA_MS:
-            raise SystemExit(f"--tol-ms 는 서버 기준 {MAX_SYNC_DELTA_MS}ms 이하여야 해요 (넘으면 서버가 422로 거절)")
+        if args.tol_ms < 0 or args.tol_ms > 10_000:
+            raise SystemExit("--tol-ms 는 0~10000ms 범위여야 해요")
         if not args.dry_run and not args.server:
             raise SystemExit("--server 주소를 주거나 --dry-run 으로 실행하세요")
 

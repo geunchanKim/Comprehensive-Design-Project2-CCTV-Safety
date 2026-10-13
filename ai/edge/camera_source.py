@@ -85,11 +85,13 @@ def resolve(source: str):
 
 class CameraSource:
     def __init__(self, source, name: str | None = None, queue_size: int = 64,
-                 reconnect_limit: int = 5, reconnect_wait: float = 2.0):
+                 reconnect_limit: int = 5, reconnect_wait: float = 2.0,
+                 requested_size: tuple[int, int] | None = None):
         self.target, self.shown, self.kind = resolve(source)
         self.name = name or self.shown
         self.reconnect_limit = reconnect_limit
         self.reconnect_wait = reconnect_wait
+        self.requested_size = requested_size
         self.frames: queue.Queue[Frame] = queue.Queue(maxsize=queue_size)
         self.received = 0
         self.dropped = 0
@@ -104,6 +106,9 @@ class CameraSource:
     # ---- 열기 / 닫기 ----
     def _open(self) -> bool:
         cap = cv2.VideoCapture(self.target)
+        if self.requested_size:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.requested_size[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.requested_size[1])
         if not cap.isOpened():
             cap.release()
             return False

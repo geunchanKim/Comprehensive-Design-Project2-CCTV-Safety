@@ -30,7 +30,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 | 같은 지도 | 정답 좌표(③)와 캘리브레이션 rvec·tvec(①)은 **같은 월드 좌표계**를 쓴다 |
 | 이미지 좌표 | 픽셀, 원점 = 좌상단, x는 오른쪽, y는 아래쪽 |
 | bbox | `[x1, y1, x2, y2]` 픽셀 절대좌표 (정규화 안 함) |
-| 시간 `ts` | epoch ms. Unity는 시뮬레이션 시각(시작 + frame × 100ms), 실제 카메라는 엣지 수신 시각 |
+| 시간 | `ts`: 호환용 epoch ms, `pts_ms`: 카메라/영상 PTS, `recv_ms`: 엣지 수신 epoch ms |
 | 클래스 | 서버 지원: `person`, `chair`, `cart`, `desk`, `suitcase`(카트 대신), `backpack`(통로 적치물) |
 | camera_id | `cam1`, `cam2` |
 | session_id | 폴더 이름 + `-runN`. 실행할 때마다 N이 1씩 늘어난다. 예: `unity-classroom-01-run3` |
@@ -94,10 +94,13 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 |---|---|---|
 | `session_id` | string | |
 | `pair_id` | int | 묶음 번호 = Unity `frame` |
+| `max_sync_delta_ms` | int | (선택) 세션에 고정할 허용 시간차. 기본 50ms |
 | `frames` | array | 카메라별 결과, 정확히 2개 (cam1, cam2) |
 | `frames[].camera_id` | string | `cam1`, `cam2` |
 | `frames[].frame_id` | int | Unity `frame` |
-| `frames[].ts` | int | `frames.jsonl`의 ts. 두 카메라 차이 50ms 이하 |
+| `frames[].ts` | int | 호환용 epoch ms |
+| `frames[].pts_ms` | float | (선택) 카메라 또는 영상의 presentation timestamp |
+| `frames[].recv_ms` | int | (선택) 엣지가 프레임을 받은 원본 epoch ms. 기록·진단용 |
 | `frames[].image_size` | [int, int] | `[width, height]` |
 | `frames[].detections` | array | 탐지 결과, 없으면 빈 배열 `[]` |
 | `detections[].track_id` | int | **카메라별** 추적 번호, 0 이상 (cam1의 1과 cam2의 1은 다른 물체) |
@@ -146,13 +149,14 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 
 서버가 할 일 (참고)
 - 사람 짝짓기: 1차는 양쪽 발목끼리, 2차는 남은 사람의 양쪽 bbox 아래 가운데끼리 수행. `K`·`dist`로 왜곡 보정
-- 화면 좌우 끝에서 잘린 bbox는 반대 카메라 bbox 폭을 깊이 비율로 환산해 중심 복원
+- `chair`, `suitcase`의 화면 좌우 끝에서 잘린 bbox만 반대 카메라 bbox 폭을 깊이 비율로 환산해 바닥 중심 복원
 - 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 높이(z) + 두 카메라 앞쪽 여부를 먼저 검사한 뒤 헝가리안 매칭
 - 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 50px
-- 개선 매칭: `MATCHING_METHOD=ground-plane`이면 평면 교점 사이 XY 거리를 비용으로 사용 (`MAX_GROUND_DISTANCE_M`, 기본 2m)
+- 개선 매칭: `algorithm=improved`이면 평면 교점 사이 XY 거리를 비용으로 사용 (`MAX_GROUND_DISTANCE_M`, 기본 2m)
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
+- 개선 알고리즘에서 `ENABLE_ANKLE_PAIRING=true`이면 왼발목끼리와 오른발목끼리를 각각 삼각측량한다. 둘 다 유효하면 두 3D 좌표를 평균하고, 한쪽만 유효하면 그쪽 좌표를 사용한다. confidence 0.6 미만, 높이 -0.1~0.4m 밖, 같은 쪽 대응 없음은 `foot`으로 fallback한다. baseline은 이 설정과 관계없이 기존 `foot` 방식을 유지한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 
@@ -196,4 +200,4 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 발 위치 `foot` | ✅ 엣지 전송 및 서버 저장·삼각측량 지원 |
 | 에피폴라 기준 + 높이 검사 | ✅ 50px + `foot_src`별 z 범위 검사 |
 | `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |
-| 좌우 발목 `ankles` | 🔶 엣지 전송 ✅ / 서버 같은 쪽 발목 대응은 해민 REQ |
+| 좌우 발목 `ankles` | ✅ 엣지 전송·서버 같은 쪽 발목별 삼각측량 |

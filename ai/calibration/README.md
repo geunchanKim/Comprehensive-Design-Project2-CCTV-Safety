@@ -27,6 +27,10 @@ python capture_charuco.py --camera-id cam2
 python calibrate_camera.py --camera-id cam2 --images captures/cam2
 ```
 
+RTSP 카메라는 `--camera-ip <IP> --max-reconnects 5`로 연다. 세 촬영 스크립트는
+실시간 엣지와 같은 `CameraSource`를 사용하므로 계정 URL 인코딩, TCP 전송 및 유한 재연결
+동작이 동일하다.
+
 결과는 각각 `results/cam1_intrinsics.json`, `results/cam2_intrinsics.json`에 저장된다.
 
 ## 3. 공통 월드 좌표계의 rvec, tvec 계산
