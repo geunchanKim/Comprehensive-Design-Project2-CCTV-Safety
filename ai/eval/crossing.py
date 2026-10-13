@@ -18,6 +18,9 @@
                        서버가 경고가 아니거나 한 명이라도 놓치면 놓침(fn),
                        정답은 1m 이상인데 서버가 경고면 오경보(fp)
                        서버 경고 = 서버가 준 경고 단계(risk 줄, F 경고 유지)가 있으면 그것, 없으면 서버 위치 거리 < 1m
+  warn_toggles / gt_toggles
+                       경고 깜빡임: 두 사람마다 프레임 순서대로 경고가 켜졌다 꺼진 횟수 (서버 / 정답)
+                       서버는 둘 중 한 명이라도 놓친 프레임을 "경고 없음"으로 본다. 정답 횟수에 가까울수록 좋다
   warn_fn_band / warn_fp_band
                        채점 여유 구간: 정답 거리가 0.9~1.1m인 프레임은 빼고 센 놓침·오경보
                        (1m 경계에서 몇 cm 차이로 갈리는 경우를 따로 보기 위함)
@@ -30,7 +33,8 @@ WARN_M = 1.0
 CLOSE_M = 0.6
 BAND_M = (0.9, 1.1)
 COLUMNS = ["pack", "cond", "near_1m", "both_1m", "near_06m", "both_06m", "dist_err_cm",
-           "id_switches_near", "warn_tp", "warn_fn", "warn_fp", "warn_fn_band", "warn_fp_band"]
+           "id_switches_near", "warn_tp", "warn_fn", "warn_fp", "warn_fn_band", "warn_fp_band",
+           "warn_toggles", "gt_toggles"]
 
 
 def _floor(o):
@@ -54,7 +58,8 @@ def crossing_metrics(rows: list[dict], gt: dict, risks: dict | None = None) -> d
     near1 = near06 = both1 = both06 = tp = fn = fp = fn_band = fp_band = 0
     dist_errs, near_frames = [], {}
     any_pair = False
-    for frame, g in gt.items():
+    last_warn, last_gt, toggles, gt_toggles = {}, {}, 0, 0
+    for frame, g in sorted(gt.items()):
         people = [o for o in g.get("objects", []) if o["cls"] == "person"]
         for a, b in itertools.combinations(people, 2):
             any_pair = True
@@ -68,6 +73,10 @@ def crossing_metrics(rows: list[dict], gt: dict, risks: dict | None = None) -> d
                 if level is not None:
                     warn = level != "safe"
             in_band = BAND_M[0] <= d_gt < BAND_M[1]
+            key = frozenset((a["object_id"], b["object_id"]))
+            toggles += key in last_warn and last_warn[key] != warn
+            gt_toggles += key in last_gt and last_gt[key] != (d_gt < WARN_M)
+            last_warn[key], last_gt[key] = warn, d_gt < WARN_M
             if d_gt < WARN_M:
                 near1 += 1
                 both1 += both
@@ -100,7 +109,8 @@ def crossing_metrics(rows: list[dict], gt: dict, risks: dict | None = None) -> d
     return {"near_1m": near1, "both_1m": rate(both1, near1), "near_06m": near06, "both_06m": rate(both06, near06),
             "dist_err_cm": round(sum(dist_errs) / len(dist_errs), 1) if dist_errs else None,
             "id_switches_near": switches, "warn_tp": tp, "warn_fn": fn, "warn_fp": fp,
-            "warn_fn_band": fn_band, "warn_fp_band": fp_band}
+            "warn_fn_band": fn_band, "warn_fp_band": fp_band,
+            "warn_toggles": toggles, "gt_toggles": gt_toggles}
 
 
 def markdown(rows: list[dict]) -> str:
@@ -109,12 +119,13 @@ def markdown(rows: list[dict]) -> str:
         return ""
     pct = lambda v: "-" if v is None else f"{v * 100:.0f}%"
     lines = ["", "#### 교차 구간 (정답에서 두 사람이 가까운 프레임)", "",
-             "| pack | 조건 | 1m 안 | 둘 다 추적 | 0.6m 안 | 둘 다 추적 | 거리 오차(cm) | ID 바뀜 | 1m 경고 맞음 / 놓침 / 오경보 | 여유 구간(0.9~1.1m) 빼고 놓침 / 오경보 |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "| pack | 조건 | 1m 안 | 둘 다 추적 | 0.6m 안 | 둘 다 추적 | 거리 오차(cm) | ID 바뀜 | 1m 경고 맞음 / 놓침 / 오경보 | 여유 구간(0.9~1.1m) 빼고 놓침 / 오경보 | 경고 깜빡임 (정답) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         err = "-" if r["dist_err_cm"] is None else f"{r['dist_err_cm']:.1f}"
         lines.append(f"| {r['pack']} | {r['cond']} | {r['near_1m']} | {pct(r['both_1m'])} | {r['near_06m']} | "
                      f"{pct(r['both_06m'])} | {err} | {r['id_switches_near']} | "
                      f"{r['warn_tp']} / {r['warn_fn']} / {r['warn_fp']} | "
-                     f"{r.get('warn_fn_band', '-')} / {r.get('warn_fp_band', '-')} |")
+                     f"{r.get('warn_fn_band', '-')} / {r.get('warn_fp_band', '-')} | "
+                     f"{r.get('warn_toggles', '-')} ({r.get('gt_toggles', '-')}) |")
     return "\n".join(lines) + "\n"

@@ -317,6 +317,9 @@ def test_crossing_uses_server_warning_levels_and_band():
     held = crossing.crossing_metrics(rows, gt, risks)
     assert (held["warn_tp"], held["warn_fn"], held["warn_fp"]) == (1, 0, 1)
     assert (held["warn_fn_band"], held["warn_fp_band"]) == (0, 0)
+    # 깜빡임: 정답은 1번→2번 프레임에서 꺼짐(1번). 서버 거리는 계속 꺼짐(0번), 경고 유지는 2→3번에서 꺼짐(1번)
+    assert (plain["warn_toggles"], plain["gt_toggles"]) == (0, 1)
+    assert (held["warn_toggles"], held["gt_toggles"]) == (1, 1)
 
 
 def test_results_csv_risk_rows_become_response_risks(tmp_path):

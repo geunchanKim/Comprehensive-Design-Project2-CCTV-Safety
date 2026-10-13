@@ -383,8 +383,8 @@ def ablation_markdown(rows: list[dict], cross_rows: list[dict], conditions: list
         return f"{text} ({dtxt} {'✅' if better else '❌'})"
 
     lines = ["### 기능별 효과 (사람, 기존 대비)", "",
-             "| pack | 조건 | 평균(cm) | 90%(cm) | 오매칭 | 놓침 | ID 바뀜 | 교차 둘 다 추적 | 교차 ID 바뀜 | 경고 놓침 | 경고 오경보 | 놓침 (여유 빼고) | 오경보 (여유 빼고) |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| pack | 조건 | 평균(cm) | 90%(cm) | 오매칭 | 놓침 | ID 바뀜 | 교차 둘 다 추적 | 교차 ID 바뀜 | 경고 놓침 | 경고 오경보 | 놓침 (여유 빼고) | 오경보 (여유 빼고) | 경고 깜빡임 |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for pack in packs:
         base, cbase = person.get((pack, BASE)), cross.get((pack, BASE))
         for cond in conditions:
@@ -402,9 +402,10 @@ def ablation_markdown(rows: list[dict], cross_rows: list[dict], conditions: list
                           cell(c["id_switches_near"], cb("id_switches_near"), "num"),
                           cell(c["warn_fn"], cb("warn_fn"), "num"), cell(c["warn_fp"], cb("warn_fp"), "num"),
                           cell(c.get("warn_fn_band"), cb("warn_fn_band"), "num"),
-                          cell(c.get("warn_fp_band"), cb("warn_fp_band"), "num")]
+                          cell(c.get("warn_fp_band"), cb("warn_fp_band"), "num"),
+                          cell(c.get("warn_toggles"), cb("warn_toggles"), "num")]
             else:
-                cells += ["-"] * 6
+                cells += ["-"] * 7
             lines.append(f"| {pack} | {cond_label(cond)} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n\n"
 

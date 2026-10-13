@@ -64,6 +64,9 @@ TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
 TRACK_PAIR_IMPROVEMENT_RATIO = float(os.getenv("TRACK_PAIR_IMPROVEMENT_RATIO", "0.9"))
 ENABLE_RISK_ANALYSIS = os.getenv("ENABLE_RISK_ANALYSIS", "false").lower() in {"1", "true", "yes"}
 ENABLE_ANKLE_PAIRING = os.getenv("ENABLE_ANKLE_PAIRING", "true").lower() in {"1", "true", "yes"}
+# improved에 켤 기능 글자 (예: cdfg = 바닥추적 + 한카메라 + 경고유지 + 바닥 짝짓기).
+#   비우면 예전 방식: 바닥 짝짓기 + ENABLE_KALMAN_FILTER·ENABLE_TRACK_PAIR_HOLD·ENABLE_ANKLE_PAIRING
+IMPROVED_FEATURES = os.getenv("IMPROVED_FEATURES", "").strip()
 MIN_ANKLE_CONFIDENCE = float(os.getenv("MIN_ANKLE_CONFIDENCE", "0.6"))
 WARNING_DISTANCE_M = float(os.getenv("WARNING_DISTANCE_M", "1.0"))
 DANGER_DISTANCE_M = float(os.getenv("DANGER_DISTANCE_M", "0.5"))
@@ -154,6 +157,8 @@ def algorithm_features(algorithm: str) -> frozenset[str]:
     if algorithm == "baseline":
         return frozenset()
     if algorithm == "improved":
+        if IMPROVED_FEATURES:
+            return algorithm_features("f-" + "".join(sorted(set(IMPROVED_FEATURES))))
         return frozenset(name for name, enabled in (
             ("ground", True), ("kalman", ENABLE_KALMAN_FILTER),
             ("hold", ENABLE_TRACK_PAIR_HOLD), ("ankle", ENABLE_ANKLE_PAIRING)) if enabled)
