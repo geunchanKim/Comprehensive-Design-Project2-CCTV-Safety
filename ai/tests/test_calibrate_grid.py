@@ -8,6 +8,13 @@ CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration"
 sys.path.insert(0, str(CALIBRATION_DIR))
 
 from calibrate_grid import solve  # noqa: E402
+from detect_aruco import marker_object_points  # noqa: E402
+
+
+def test_basic_marker_uses_measured_176mm_size():
+    points = marker_object_points()
+    assert np.isclose(np.ptp(points[:, 0]), 0.176)
+    assert np.isclose(np.ptp(points[:, 1]), 0.176)
 
 
 def test_multi_point_pnp_and_held_out_height_validation():
