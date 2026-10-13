@@ -61,7 +61,8 @@ MIN_ANKLE_CONFIDENCE = float(os.getenv("MIN_ANKLE_CONFIDENCE", "0.6"))
 WARNING_DISTANCE_M = float(os.getenv("WARNING_DISTANCE_M", "1.0"))
 DANGER_DISTANCE_M = float(os.getenv("DANGER_DISTANCE_M", "0.5"))
 OBJECT_CLASSES = get_args(ObjectClass)
-BOX_FOOT_COMPLETION_CLASSES = frozenset({"chair", "suitcase"})
+BOX_FOOT_COMPLETION_CLASSES = frozenset({"person", "chair", "suitcase"})
+BOX_PLANE_CLASSES = frozenset({"chair", "suitcase"})
 
 if BBOX_POSITION_METHOD not in {"triangulate", "plane", "weighted-plane"}:
     raise ValueError("BBOX_POSITION_METHOD must be 'triangulate', 'plane', or 'weighted-plane'")
@@ -81,7 +82,7 @@ def _should_complete_box_foot(object_class: str, source1: str, source2: str) -> 
 
 
 def _should_use_box_plane(object_class: str, source1: str, source2: str) -> bool:
-    return (object_class in BOX_FOOT_COMPLETION_CLASSES and source1 == source2 == "box"
+    return (object_class in BOX_PLANE_CLASSES and source1 == source2 == "box"
             and BBOX_POSITION_METHOD in {"plane", "weighted-plane"})
 
 
@@ -349,8 +350,10 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                  if all(frame.pts_ms is not None for frame in frames) else None)
     recv_delta = (abs(frames[0].recv_ms - frames[1].recv_ms)
                   if all(frame.recv_ms is not None for frame in frames) else None)
-    sync_time_basis = "recv_ms" if recv_delta is not None else "ts"
-    sync_delta = recv_delta if recv_delta is not None else abs(frames[0].ts - frames[1].ts)
+    # `ts` includes the edge's measured per-camera delay correction. Keep the
+    # raw receive and presentation times for diagnostics only.
+    sync_time_basis = "ts"
+    sync_delta = abs(frames[0].ts - frames[1].ts)
     if sync_delta > max_sync_delta_ms:
         raise HTTPException(422, f"frame {sync_time_basis} differ by {sync_delta}ms "
                                  f"(session maximum {max_sync_delta_ms}ms)")
@@ -559,36 +562,52 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                           if getattr(item1.ankles, side) is not None}
                 ankle2 = {side: getattr(item2.ankles, side) for side in ("left", "right")
                           if getattr(item2.ankles, side) is not None}
+                layouts = (
+                    (("left", "left"), ("right", "right")),
+                    (("left", "right"), ("right", "left")),
+                )
+                layout_candidates = []
+                for layout in layouts:
+                    pairs = []
+                    for side1, side2 in layout:
+                        if side1 not in ankle1 or side2 not in ankle2:
+                            continue
+                        point1, point2 = ankle1[side1], ankle2[side2]
+                        if min(point1.root[2], point2.root[2]) < MIN_ANKLE_CONFIDENCE:
+                            continue
+                        normalized_ankles = (
+                            undistort(point1.root[:2], calibrations[0]),
+                            undistort(point2.root[:2], calibrations[1]),
+                        )
+                        error = symmetric_epipolar_distance(
+                            *normalized_ankles, essential) * pixel_scale
+                        pairs.append((side1, side2, point1, point2, normalized_ankles, error))
+                    if pairs:
+                        layout_candidates.append((float(np.mean([pair[5] for pair in pairs])), pairs))
+
                 ankle_worlds = []
-                accepted_sides = []
-                normalized_by_side = {}
-                for side in ("left", "right"):
-                    if side not in ankle1 or side not in ankle2:
-                        continue
-                    point1, point2 = ankle1[side], ankle2[side]
-                    if min(point1.root[2], point2.root[2]) < MIN_ANKLE_CONFIDENCE:
-                        continue
-                    ankle_pair = (undistort(point1.root[:2], calibrations[0]),
-                                  undistort(point2.root[:2], calibrations[1]))
+                accepted_pairs = []
+                if layout_candidates:
+                    _, selected_pairs = min(layout_candidates, key=lambda candidate: candidate[0])
+                else:
+                    selected_pairs = []
+                for side1, side2, point1, point2, ankle_pair, error in selected_pairs:
                     try:
                         ankle_world = triangulate(*ankle_pair, *calibrations)
                         if ANKLE_FOOT_Z_MIN <= ankle_world[2] <= ANKLE_FOOT_Z_MAX:
                             ankle_worlds.append(ankle_world)
-                            accepted_sides.append(side)
-                            normalized_by_side[side] = ankle_pair
+                            accepted_pairs.append((side1, side2, point1, point2, error))
                     except ValueError:
                         pass
-                if accepted_sides:
+                if accepted_pairs:
                     world = np.mean(ankle_worlds, axis=0)
-                    foot1 = tuple(np.mean([ankle1[side].root[:2] for side in accepted_sides], axis=0))
-                    foot2 = tuple(np.mean([ankle2[side].root[:2] for side in accepted_sides], axis=0))
+                    foot1 = tuple(np.mean([pair[2].root[:2] for pair in accepted_pairs], axis=0))
+                    foot2 = tuple(np.mean([pair[3].root[:2] for pair in accepted_pairs], axis=0))
                     normalized_pair = tuple(undistort(pixel, calibration)
                                             for pixel, calibration in zip((foot1, foot2), calibrations))
-                    position_method = "mid" if len(accepted_sides) == 2 else accepted_sides[0]
+                    position_method = "mid" if len(accepted_pairs) == 2 else accepted_pairs[0][0]
                     source1 = source2 = "ankle"
-                    epipolar_error = float(np.mean([
-                        symmetric_epipolar_distance(*normalized_by_side[side], essential)
-                        for side in accepted_sides])) * pixel_scale
+                    epipolar_error = float(np.mean([pair[4] for pair in accepted_pairs]))
             if _should_use_box_plane(object_class, source1, source2):
                 try:
                     positions = [position_on_plane(point, calibration, 0.0)
@@ -605,8 +624,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                                    visible_tracks, used_object_ids)
             used_object_ids.add(object_id)
             raw_world = np.asarray(world, dtype=float)
-            timestamp_ms = max((frame.recv_ms if frame.recv_ms is not None else frame.ts)
-                               for frame in frames)
+            timestamp_ms = max(frame.ts for frame in frames)
             world, velocity = _filter_motion(db, body.session_id, profile, algorithm,
                                              object_id, raw_world, timestamp_ms)
             for record, foot, foot_source in ((record1, foot1, source1), (record2, foot2, source2)):

@@ -89,10 +89,11 @@ def test_improved_features_can_be_disabled_individually(monkeypatch):
     }
 
 
-def test_box_foot_completion_is_limited_to_chair_and_suitcase():
+def test_box_foot_completion_keeps_people_chairs_and_suitcases():
+    assert api_module._should_complete_box_foot("person", "box", "box")
     assert api_module._should_complete_box_foot("chair", "box", "box")
     assert api_module._should_complete_box_foot("suitcase", "box", "box")
-    for object_class in ("person", "cart", "desk", "backpack"):
+    for object_class in ("cart", "desk", "backpack"):
         assert not api_module._should_complete_box_foot(object_class, "box", "box")
     assert not api_module._should_complete_box_foot("chair", "ankle", "box")
 
@@ -105,22 +106,22 @@ def test_box_plane_is_limited_to_chair_and_suitcase(monkeypatch):
         assert not api_module._should_use_box_plane(object_class, "box", "box")
 
 
-def test_receive_timestamps_and_session_sync_tolerance():
+def test_corrected_timestamps_drive_session_sync_tolerance():
     session_id = "receive-timestamps"
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
     payload = detection_payload(pair_id=208, session_id=session_id)
     payload["max_sync_delta_ms"] = 80
-    for frame, pts, recv in zip(payload["frames"], (100.0, 140.5), (10_000, 10_060)):
+    for frame, pts, recv in zip(payload["frames"], (100.0, 140.5), (10_000, 10_100)):
         frame.update(pts_ms=pts, recv_ms=recv)
 
     response = client.post("/detections", json=payload)
 
     assert response.status_code == 201, response.text
-    assert response.json()["sync_delta_ms"] == 60
+    assert response.json()["sync_delta_ms"] == 20
     assert response.json()["pts_delta_ms"] == 40.5
-    assert response.json()["recv_delta_ms"] == 60
-    assert response.json()["sync_time_basis"] == "recv_ms"
+    assert response.json()["recv_delta_ms"] == 100
+    assert response.json()["sync_time_basis"] == "ts"
     assert response.json()["max_sync_delta_ms"] == 80
 
     changed = detection_payload(pair_id=209, session_id=session_id, ts2=2020)
@@ -373,6 +374,7 @@ def test_uses_midpoint_when_both_ankles_are_visible_and_stores_raw_ankles():
     assert {camera: tuple(point) for camera, point in match["foot_pixels"].items()} == {
         "cam1": (960.0, 520.0), "cam2": (860.0, 520.0)}
     assert {row["position_method"] for row in match["observations"]} == {"mid"}
+    assert match["epipolar_error_px"] == 0
     with SessionLocal() as db:
         stored = db.scalars(select(Detection).where(Detection.session_id == session_id)).all()
     assert stored[0].ankles["left"] == [950.0, 510.0, 0.9]
@@ -395,7 +397,7 @@ def test_uses_single_same_side_ankle_when_confident():
     assert abs(match["world"]["z"] - 0.3) < 0.01
 
 
-def test_does_not_pair_opposite_side_single_ankles():
+def test_pairs_opposite_labels_when_single_ankles_have_lower_error():
     session_id = "opposite-single-ankles"
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
@@ -407,7 +409,7 @@ def test_does_not_pair_opposite_side_single_ankles():
 
     result = create_improved(payload)
 
-    assert {row["position_method"] for row in result["matches"][0]["observations"]} == {"foot"}
+    assert {row["position_method"] for row in result["matches"][0]["observations"]} == {"left"}
 
 
 def test_single_ankle_below_confidence_threshold_falls_back_to_foot():
@@ -590,6 +592,8 @@ def test_kalman_state_persists_position_and_velocity(monkeypatch):
     first_payload = detection_payload(pair_id=30, session_id=session_id)
     for frame, x in zip(first_payload["frames"], (960, 860)):
         frame["detections"][0].update(foot=[x, 510], foot_src="ankle")
+    for frame, recv in zip(first_payload["frames"], (10_000, 10_020)):
+        frame["recv_ms"] = recv
     first = create_improved(first_payload)
     assert first["matches"][0]["velocity"] == {"x": 0.0, "y": 0.0, "z": 0.0}
 
@@ -600,6 +604,8 @@ def test_kalman_state_persists_position_and_velocity(monkeypatch):
         frame["detections"][0]["bbox"][0] += 10
         frame["detections"][0]["bbox"][2] += 10
         frame["detections"][0]["foot"][0] += 10
+    for frame, recv in zip(payload["frames"], (10_001, 10_002)):
+        frame["recv_ms"] = recv
     second = create_improved(payload)
     match = second["matches"][0]
     assert match["raw_world"] is not None

@@ -100,7 +100,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | `frames[].frame_id` | int | Unity `frame` |
 | `frames[].ts` | int | 호환용 epoch ms |
 | `frames[].pts_ms` | float | (선택) 카메라 또는 영상의 presentation timestamp |
-| `frames[].recv_ms` | int | (선택) 엣지가 프레임을 받은 epoch ms. 있으면 동기화 검사 기준 |
+| `frames[].recv_ms` | int | (선택) 엣지가 프레임을 받은 원본 epoch ms. 기록·진단용 |
 | `frames[].image_size` | [int, int] | `[width, height]` |
 | `frames[].detections` | array | 탐지 결과, 없으면 빈 배열 `[]` |
 | `detections[].track_id` | int | **카메라별** 추적 번호, 0 이상 (cam1의 1과 cam2의 1은 다른 물체) |

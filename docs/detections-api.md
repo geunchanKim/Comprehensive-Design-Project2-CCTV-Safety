@@ -32,7 +32,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 ## 2. 프레임 묶음 전송
 
-`POST /detections`는 최상위에 `session_id`, `pair_id`, 선택적인 `max_sync_delta_ms`와 서로 다른 카메라의 프레임을 정확히 2개 받는다. 각 프레임은 호환용 `ts`와 선택적인 카메라 PTS `pts_ms`, 엣지 수신 epoch 시각 `recv_ms`를 받는다. 양쪽 `recv_ms`가 있으면 그 차이로 동기화를 검사하고, 없으면 `ts` 차이를 사용한다. `max_sync_delta_ms`는 처음 요청할 때 세션의 실험 설정으로 고정되며 생략 시 서버 `MAX_SYNC_DELTA_MS`(기본 50ms)를 사용한다. 응답은 `pts_delta_ms`, `recv_delta_ms`, `sync_time_basis`, `max_sync_delta_ms`를 함께 제공한다.
+`POST /detections`는 최상위에 `session_id`, `pair_id`, 선택적인 `max_sync_delta_ms`와 서로 다른 카메라의 프레임을 정확히 2개 받는다. 각 프레임은 카메라 지연을 보정한 `ts`와 선택적인 카메라 PTS `pts_ms`, 엣지 수신 원본 epoch 시각 `recv_ms`를 받는다. 동기화 검사와 칼만 필터 시각에는 `ts`를 사용하고, `pts_ms`와 `recv_ms`는 기록·진단용으로만 사용한다. `max_sync_delta_ms`는 처음 요청할 때 세션의 실험 설정으로 고정되며 생략 시 서버 `MAX_SYNC_DELTA_MS`(기본 50ms)를 사용한다. 응답은 `pts_delta_ms`, `recv_delta_ms`, `sync_time_basis`, `max_sync_delta_ms`를 함께 제공한다.
 
 ```json
 {
