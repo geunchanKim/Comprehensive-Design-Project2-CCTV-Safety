@@ -20,7 +20,7 @@ try:
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
                            symmetric_epipolar_distance, triangulate, undistort)
     from .models import (Camera, Detection, FloorTrack, FrameBundle, GlobalObject, GroundTruth,
-                         ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
+                         ObjectMotionState, RiskEvent, RiskPairState, TrackLink, TrackPairState)
     from .models import SessionSettings
     from .schemas import (Algorithm, CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
@@ -30,14 +30,14 @@ try:
                            PairHysteresis, associate_floor_tracks, initialize_kalman,
                            predict_floor_position,
                            update_kalman, update_pair_hysteresis)
-    from .risk import calculate_pair_risk
+    from .risk import WARNING_RELEASE_MARGIN_M, calculate_pair_risk, hysteresis_level
 except ImportError:  # Docker runs this directory as the import root.
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
                           symmetric_epipolar_distance, triangulate, undistort)
     from models import (Camera, Detection, FloorTrack, FrameBundle, GlobalObject, GroundTruth,
-                        ObjectMotionState, RiskEvent, TrackLink, TrackPairState)
+                        ObjectMotionState, RiskEvent, RiskPairState, TrackLink, TrackPairState)
     from models import SessionSettings
     from schemas import (Algorithm, CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
@@ -47,7 +47,7 @@ except ImportError:  # Docker runs this directory as the import root.
                           PairHysteresis, associate_floor_tracks, initialize_kalman,
                           predict_floor_position,
                           update_kalman, update_pair_hysteresis)
-    from risk import calculate_pair_risk
+    from risk import WARNING_RELEASE_MARGIN_M, calculate_pair_risk, hysteresis_level
 
 router = APIRouter()
 MAX_SYNC_DELTA_MS = int(os.getenv("MAX_SYNC_DELTA_MS", "50"))
@@ -131,11 +131,20 @@ def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
 FEATURE_CODES = {
     "a": "ankle",    # 같은 쪽 발목끼리 삼각측량
     "c": "floor",    # C 바닥 좌표 추적 (사람 번호를 바닥 움직임으로 이어 붙임, 칼만 포함)
+    "d": "fallback", # D 한 카메라 보완 (짝이 안 된 사람을 한 카메라 바닥 투영으로 이어 붙임, c 필요)
+    "e": "timesync", # E 시간차 보정 (두 카메라 사진 시각 차이만큼 속도로 보정, c 필요)
+    "f": "hysteresis",  # F 경고 유지 (1.0m 안에서 켜진 경고는 1.1m를 넘어야 꺼짐)
     "g": "ground",   # 바닥 위치로 짝짓기
     "h": "hold",     # 카메라 짝 유지
     "k": "kalman",   # 칼만 필터
 }
 ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
+FEATURES_NEEDING_FLOOR = ("d", "e")   # C의 트랙(예측 위치·속도)을 써야 동작
+
+# D 한 카메라 보완: 발목은 이 높이 평면, 박스 발은 바닥(0) 평면과 만나는 점을 위치로 쓴다.
+#   한 카메라 위치는 덜 정확하니 칼만 측정 잡음을 크게 준다 (Unity s2·s4 오프라인 시뮬로 정함, 2026-10-13)
+SINGLE_CAMERA_ANKLE_Z_M = 0.15
+SINGLE_CAMERA_MEASUREMENT_NOISE = 0.05
 
 
 def algorithm_features(algorithm: str) -> frozenset[str]:
@@ -154,6 +163,10 @@ def algorithm_features(algorithm: str) -> frozenset[str]:
         raise ValueError(f"unknown feature code(s): {', '.join(unknown)} (available: {FEATURE_CODES})")
     if codes != "".join(sorted(set(codes))):
         raise ValueError(f"feature codes must be sorted and unique: use f-{''.join(sorted(set(codes)))}")
+    needs_floor = sorted(set(codes) & set(FEATURES_NEEDING_FLOOR))
+    if needs_floor and "c" not in codes:
+        raise ValueError(f"feature(s) {', '.join(needs_floor)} need c (floor tracking): "
+                         f"use f-{''.join(sorted(set(codes) | {'c'}))}")
     return frozenset(FEATURE_CODES[code] for code in codes)
 
 
@@ -174,6 +187,9 @@ def _algorithm_settings(algorithm: Algorithm):
         "track_pair_hold": "hold" in features,
         "ankle_pairing": "ankle" in features,
         "floor_tracking": "floor" in features,
+        "single_camera_fallback": "fallback" in features,
+        "time_offset_correction": "timesync" in features,
+        "warning_hysteresis": "hysteresis" in features,
     }
 
 
@@ -186,6 +202,9 @@ def _experiment_settings(algorithm: Algorithm):
         "kalman_measurement_noise": KALMAN_MEASUREMENT_NOISE,
         "floor_track_gate_m": FLOOR_TRACK_GATE_M,
         "floor_track_max_missed": FLOOR_TRACK_MAX_MISSED,
+        "single_camera_ankle_z_m": SINGLE_CAMERA_ANKLE_Z_M,
+        "single_camera_measurement_noise": SINGLE_CAMERA_MEASUREMENT_NOISE,
+        "warning_release_margin_m": WARNING_RELEASE_MARGIN_M,
         "bbox_position_method": BBOX_POSITION_METHOD,
         "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
         "track_pair_improvement_ratio": TRACK_PAIR_IMPROVEMENT_RATIO,
@@ -219,12 +238,8 @@ def download_session_results(session_id: str, profile: CalibrationProfile = "bas
     ).order_by(Detection.captured_at_ms, Detection.bundle_id,
                Detection.camera_id, Detection.track_id)).all()
     seen = set()
-    first_camera_by_bundle = {}
     for item, pair_id in detections:
-        first_camera = first_camera_by_bundle.setdefault(item.bundle_id, item.camera_id)
-        if item.camera_id != first_camera:
-            continue
-        key = (item.bundle_id, item.camera_id, item.track_id)
+        key = (item.bundle_id, item.object_id)   # 짝이 된 두 카메라 탐지는 같은 사람 번호라 한 줄만
         if key in seen:
             continue
         seen.add(key)
@@ -375,14 +390,45 @@ def _object_id(db: Session, session_id, profile, algorithm,
     return next_id
 
 
-def _apply_floor_tracking(db: Session, session_id: str, profile: str, algorithm: str,
-                          entries: list, timestamp_ms: int):
-    """C 바닥 좌표 추적: 이번 묶음의 사람 위치를 바닥 트랙에 이어 붙이고 사람 번호·위치를 바꾼다.
+def _time_corrected_position(raw, velocity_xy, normalized_pair, frame_ts, timestamp_ms: int, calibrations):
+    """E 시간차 보정: 두 카메라 사진 시각이 다르면 사람이 그 사이 움직인 만큼 위치가 섞인다.
 
-    entries: [(응답 match, 카메라1 Detection, 카메라2 Detection, 칼만 전 위치)]
+    카메라마다 (기준 시각 - 사진 시각) 동안 속도만큼 움직인 위치를 그 카메라에 투영해서
+    발 픽셀을 옮기고, 다시 삼각측량한 변화량만큼 원래 위치를 고친다. 기준 시각 = 더 늦은 사진 시각"""
+    raw = np.asarray(raw, dtype=float)
+    velocity = np.array([float(velocity_xy[0]), float(velocity_xy[1]), 0.0])
+    if not any(int(ts) != int(timestamp_ms) for ts in frame_ts):
+        return raw
+    corrected = []
+    for point, ts, calibration in zip(normalized_pair, frame_ts, calibrations):
+        dt = (int(timestamp_ms) - int(ts)) / 1000.0
+        before = calibration.R @ raw + calibration.t.reshape(3)
+        after = calibration.R @ (raw + velocity * dt) + calibration.t.reshape(3)
+        if before[2] <= 0 or after[2] <= 0:
+            return raw
+        corrected.append(np.asarray(point, dtype=float) + (after[:2] / after[2] - before[:2] / before[2]))
+    try:
+        original = triangulate(np.asarray(normalized_pair[0], dtype=float),
+                               np.asarray(normalized_pair[1], dtype=float), *calibrations)
+        moved = triangulate(corrected[0], corrected[1], *calibrations)
+    except ValueError:
+        return raw
+    return raw + (moved - original)
+
+
+def _apply_floor_tracking(db: Session, session_id: str, profile: str, algorithm: str, settings: dict,
+                          entries: list, singles: list, frames, calibrations) -> list:
+    """C 바닥 좌표 추적 (+ D 한 카메라 보완, E 시간차 보정).
+
+    entries: 두 카메라 짝이 된 사람 [{match, records, raw, normalized, used}]
+    singles: 짝이 안 된 사람 탐지 [{camera, item, record, foot, foot_source, normalized, used}]
     1) 트랙마다 지금 시각의 바닥 위치를 예측  2) 예측과 가까운 사람끼리 짝 (FLOOR_TRACK_GATE_M 안)
-    3) 짝이 된 트랙은 칼만 갱신, 짝이 없는 사람은 새 트랙(새 사람 번호)
-    4) 이번에 못 본 트랙은 missed를 올리고 FLOOR_TRACK_MAX_MISSED를 넘으면 지운다"""
+    3) 짝이 된 트랙은 칼만 갱신(E: 시간차 보정한 위치로), 짝이 없는 사람은 새 트랙(새 사람 번호)
+    4) D: 이번에 못 본 트랙은 짝 없는 한 카메라 탐지로 이어 붙임 (새 트랙은 만들지 않음)
+    5) 그래도 못 본 트랙은 missed를 올리고 FLOOR_TRACK_MAX_MISSED를 넘으면 지운다
+    반환: D가 새로 만든 응답 match 목록"""
+    timestamp_ms = max(frame.ts for frame in frames)
+    frame_ts = [frame.ts for frame in frames]
     tracks = list(db.scalars(select(FloorTrack).where(
         FloorTrack.session_id == session_id,
         FloorTrack.calibration_profile == profile,
@@ -392,14 +438,30 @@ def _apply_floor_tracking(db: Session, session_id: str, profile: str, algorithm:
     states = [KalmanState(mean=np.asarray(track.mean, dtype=float),
                           covariance=np.asarray(track.covariance, dtype=float),
                           timestamp_ms=track.timestamp_ms) for track in tracks]
+
+    def write(track, state, match, records):
+        track.mean, track.covariance = state.mean.tolist(), state.covariance.tolist()
+        track.timestamp_ms, track.missed = state.timestamp_ms, 0
+        world = [float(v) for v in state.mean[:3]]
+        match["object_id"] = track.object_id
+        match["world"] = dict(zip(("x", "y", "z"), world))
+        match["velocity"] = dict(zip(("x", "y", "z"), (float(v) for v in state.mean[3:])))
+        for record in records:
+            record.object_id = track.object_id
+            record.world_x, record.world_y, record.world_z = world
+
     pairs = associate_floor_tracks([predict_floor_position(state, timestamp_ms) for state in states],
-                                   [raw[:2] for _, _, _, raw in entries])
+                                   [entry["raw"][:2] for entry in entries])
     track_for_entry = {entry: track for track, entry in pairs}
     seen = set()
-    for n, (match, record1, record2, raw) in enumerate(entries):
+    for n, entry in enumerate(entries):
         if n in track_for_entry:
             index = track_for_entry[n]
-            track, state = tracks[index], update_kalman(states[index], raw, timestamp_ms)
+            measured = entry["raw"]
+            if settings["time_offset_correction"]:
+                measured = _time_corrected_position(measured, states[index].mean[3:5], entry["normalized"],
+                                                    frame_ts, timestamp_ms, calibrations)
+            track, state = tracks[index], update_kalman(states[index], measured, timestamp_ms)
             seen.add(index)
         else:
             global_object = GlobalObject(session_id=session_id, calibration_profile=profile,
@@ -409,23 +471,72 @@ def _apply_floor_tracking(db: Session, session_id: str, profile: str, algorithm:
             track = FloorTrack(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
                                cls="person", object_id=global_object.id)
             db.add(track)
-            state = initialize_kalman(raw, timestamp_ms)
-        track.mean, track.covariance = state.mean.tolist(), state.covariance.tolist()
-        track.timestamp_ms, track.missed = state.timestamp_ms, 0
-        world = [float(v) for v in state.mean[:3]]
-        velocity = [float(v) for v in state.mean[3:]]
-        match["object_id"] = track.object_id
-        match["world"] = dict(zip(("x", "y", "z"), world))
-        match["velocity"] = dict(zip(("x", "y", "z"), velocity))
-        for record in (record1, record2):
-            record.object_id = track.object_id
-            record.world_x, record.world_y, record.world_z = world
+            state = initialize_kalman(entry["raw"], timestamp_ms)
+        write(track, state, entry["match"], entry["records"])
+
+    added = []
+    free = [index for index in range(len(tracks)) if index not in seen]
+    if settings["single_camera_fallback"] and singles and free:
+        positions, usable = [], []
+        for single in singles:
+            camera = single["camera"]
+            plane_z = SINGLE_CAMERA_ANKLE_Z_M if single["foot_source"] == "ankle" else 0.0
+            try:
+                positions.append(position_on_plane(single["normalized"], calibrations[camera], plane_z))
+                usable.append(single)
+            except ValueError:
+                continue
+        pairs = associate_floor_tracks([predict_floor_position(states[index], timestamp_ms) for index in free],
+                                       [position[:2] for position in positions])
+        for slot, n in pairs:
+            index, single, position = free[slot], usable[n], positions[n]
+            state = update_kalman(states[index], position, timestamp_ms,
+                                  measurement_noise=SINGLE_CAMERA_MEASUREMENT_NOISE)
+            seen.add(index)
+            frame, item = frames[single["camera"]], single["item"]
+            match = {"cls": "person",
+                     "camera_tracks": {frame.camera_id: item.track_id},
+                     "foot_pixels": {frame.camera_id: single["foot"]},
+                     "observations": [{"camera_id": frame.camera_id, "frame_id": frame.frame_id, "ts": frame.ts,
+                                       "track_id": item.track_id, "cls": item.cls, "conf": round(item.conf, 3),
+                                       "bbox": item.bbox, "image_size": frame.image_size,
+                                       "foot_pixel": single["foot"], "foot_src": single["foot_source"],
+                                       "position_method": "single-camera"}],
+                     "raw_world": dict(zip(("x", "y", "z"), (float(v) for v in position))),
+                     "epipolar_error_px": None,
+                     "matching_method": "single-camera",
+                     "ground_distance_m": None}
+            write(tracks[index], state, match, [single["record"]])
+            single["used"].add(single["index"])
+            added.append(match)
+
     for index, track in enumerate(tracks):
         if index in seen:
             continue
         track.missed += 1
         if track.missed > FLOOR_TRACK_MAX_MISSED:
             db.delete(track)
+    return added
+
+
+def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algorithm: str,
+                                object1_id: int, object2_id: int, distance_m: float) -> str:
+    """F 경고 유지: 이 두 사람의 직전 경고 단계를 기억해서, 켜진 경고는 여유 거리만큼 더 멀어져야 끈다"""
+    state = db.scalar(select(RiskPairState).where(
+        RiskPairState.session_id == session_id,
+        RiskPairState.calibration_profile == profile,
+        RiskPairState.algorithm == algorithm,
+        RiskPairState.object1_id == object1_id,
+        RiskPairState.object2_id == object2_id,
+    ))
+    previous = state.level if state else "safe"
+    level = hysteresis_level(distance_m, previous, WARNING_DISTANCE_M, DANGER_DISTANCE_M)
+    if state is None:
+        db.add(RiskPairState(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
+                             object1_id=object1_id, object2_id=object2_id, level=level))
+    else:
+        state.level = level
+    return level
 
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
@@ -768,7 +879,8 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
                             "ground_distance_m": (round(matching_cost, 4)
                                                   if matching_method == "ground-plane" else None)})
             if use_floor:
-                floor_entries.append((matches[-1], record1, record2, raw_world))
+                floor_entries.append({"match": matches[-1], "records": (record1, record2), "raw": raw_world,
+                                      "normalized": normalized_pair})
 
     for object_class in OBJECT_CLASSES:
         class_indexes = [[i for i, row in enumerate(records[frame.camera_id]) if row[0].cls == object_class]
@@ -781,13 +893,26 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             match_stage(object_class, remaining, "box")
         else:
             match_stage(object_class, class_indexes)
-    if floor_entries:
-        _apply_floor_tracking(db, body.session_id, profile, algorithm, floor_entries,
-                              max(frame.ts for frame in frames))
+    if settings["floor_tracking"]:
+        singles = []
+        if settings["single_camera_fallback"]:   # 짝이 안 된 사람 탐지 (D가 C 트랙에 이어 붙일 후보)
+            for n, frame in enumerate(frames):
+                for i, (item, record, foot, foot_source) in enumerate(records[frame.camera_id]):
+                    if item.cls == "person" and i not in used[n]:
+                        singles.append({"camera": n, "index": i, "used": used[n], "item": item,
+                                        "record": record, "foot": foot, "foot_source": foot_source,
+                                        "normalized": normalized[frame.camera_id][i]})
+        if floor_entries or singles:
+            matches.extend(_apply_floor_tracking(db, body.session_id, profile, algorithm, settings,
+                                                 floor_entries, singles, frames, calibrations))
     risks = []
-    if ENABLE_RISK_ANALYSIS:
+    hysteresis = settings["warning_hysteresis"]
+    if ENABLE_RISK_ANALYSIS or hysteresis:
         for first, second in combinations(matches, 2):
             if first["cls"] != "person" and second["cls"] != "person":
+                continue
+            people = first["cls"] == "person" and second["cls"] == "person"
+            if not ENABLE_RISK_ANALYSIS and not people:   # F만 켜면 사람-사람 경고만 계산
                 continue
             position1 = [first["world"][axis] for axis in ("x", "y", "z")]
             position2 = [second["world"][axis] for axis in ("x", "y", "z")]
@@ -798,8 +923,12 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             result = calculate_pair_risk(position1, velocity1, position2, velocity2,
                                          WARNING_DISTANCE_M, DANGER_DISTANCE_M)
             object1_id, object2_id = sorted((first["object_id"], second["object_id"]))
+            level = result.level
+            if hysteresis and people:
+                level = _risk_level_with_hysteresis(db, body.session_id, profile, algorithm,
+                                                    object1_id, object2_id, result.distance_m)
             risk = {"object1_id": object1_id, "object2_id": object2_id,
-                    "distance_m": result.distance_m, "ttc_s": result.ttc_s, "level": result.level}
+                    "distance_m": result.distance_m, "ttc_s": result.ttc_s, "level": level}
             risks.append(risk)
             db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
                              captured_at_ms=max(frame.ts for frame in frames), **risk))
@@ -871,11 +1000,12 @@ def recompute_session(session_id: str, profile: CalibrationProfile,
         GlobalObject.calibration_profile == profile,
         GlobalObject.algorithm == algorithm,
     )).all())
-    db.execute(delete(FloorTrack).where(
-        FloorTrack.session_id == session_id,
-        FloorTrack.calibration_profile == profile,
-        FloorTrack.algorithm == algorithm,
-    ))
+    for table in (FloorTrack, RiskPairState):
+        db.execute(delete(table).where(
+            table.session_id == session_id,
+            table.calibration_profile == profile,
+            table.algorithm == algorithm,
+        ))
     if target_objects:
         db.execute(delete(ObjectMotionState).where(ObjectMotionState.object_id.in_(target_objects)))
         db.execute(delete(TrackLink).where(TrackLink.object_id.in_(target_objects)))

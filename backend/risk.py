@@ -3,6 +3,11 @@ from dataclasses import dataclass
 import numpy as np
 
 
+# F 경고 유지: 켜진 경고(위험)는 기준 거리보다 이만큼 더 멀어져야 끈다.
+#   1.0m 근처에서 위치가 몇 cm 흔들릴 때 경고가 켜졌다 꺼졌다 하는 것을 막는다
+WARNING_RELEASE_MARGIN_M = 0.1
+
+
 @dataclass(frozen=True)
 class PairRisk:
     distance_m: float
@@ -48,3 +53,14 @@ def calculate_pair_risk(position_a, velocity_a, position_b, velocity_b,
     return PairRisk(distance_m=distance,
                     ttc_s=time_to_distance(relative_position, relative_velocity, danger_distance_m),
                     level=level)
+
+
+def hysteresis_level(distance_m: float, previous: str, warning_distance_m: float = 1.0,
+                     danger_distance_m: float = 0.5, margin_m: float = WARNING_RELEASE_MARGIN_M) -> str:
+    """F 경고 유지: 켜질 때는 기준 거리(1.0m·0.5m), 꺼질 때는 기준 + 여유(1.1m·0.6m)"""
+    if distance_m < danger_distance_m or (previous == "danger" and distance_m < danger_distance_m + margin_m):
+        return "danger"
+    if distance_m < warning_distance_m or (previous in ("warning", "danger")
+                                           and distance_m < warning_distance_m + margin_m):
+        return "warning"
+    return "safe"

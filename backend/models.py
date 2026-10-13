@@ -152,6 +152,20 @@ class TrackPairState(Base):
                                                  onupdate=func.now())
 
 
+class RiskPairState(Base):
+    """F 경고 유지: 사람 두 명 사이의 직전 경고 단계"""
+    __tablename__ = "risk_pair_states"
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "object1_id", "object2_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    object1_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    object2_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    level: Mapped[str] = mapped_column(String(16))
+
+
 class RiskEvent(Base):
     __tablename__ = "risk_events"
     __table_args__ = (UniqueConstraint("bundle_id", "object1_id", "object2_id"),)

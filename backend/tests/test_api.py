@@ -69,10 +69,12 @@ def test_health_exposes_deployment_settings():
     assert result["algorithms"]["baseline"] | {
         "matching_method": "epipolar", "kalman_filter": False,
         "track_pair_hold": False, "ankle_pairing": False, "floor_tracking": False,
+        "single_camera_fallback": False, "time_offset_correction": False, "warning_hysteresis": False,
     } == result["algorithms"]["baseline"]
     assert result["algorithms"]["improved"] | {
         "matching_method": "ground-plane", "kalman_filter": True,
         "track_pair_hold": True, "ankle_pairing": True, "floor_tracking": False,
+        "single_camera_fallback": False, "time_offset_correction": False, "warning_hysteresis": False,
     } == result["algorithms"]["improved"]
 
 
@@ -81,12 +83,14 @@ def test_improved_features_can_be_disabled_individually(monkeypatch):
     assert api_module._algorithm_settings("improved") == {
         "matching_method": "ground-plane", "kalman_filter": False,
         "track_pair_hold": True, "ankle_pairing": True, "floor_tracking": False,
+        "single_camera_fallback": False, "time_offset_correction": False, "warning_hysteresis": False,
     }
     monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
     monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", False)
     assert api_module._algorithm_settings("improved") == {
         "matching_method": "ground-plane", "kalman_filter": True,
         "track_pair_hold": False, "ankle_pairing": True, "floor_tracking": False,
+        "single_camera_fallback": False, "time_offset_correction": False, "warning_hysteresis": False,
     }
 
 
@@ -738,13 +742,15 @@ def test_feature_labels_turn_on_single_features():
     assert api_module._algorithm_settings("f-g") == {
         "matching_method": "ground-plane", "kalman_filter": False,
         "track_pair_hold": False, "ankle_pairing": False, "floor_tracking": False,
+        "single_camera_fallback": False, "time_offset_correction": False, "warning_hysteresis": False,
     }
     assert api_module._algorithm_settings("f-hk") == {
         "matching_method": "epipolar", "kalman_filter": True,
         "track_pair_hold": True, "ankle_pairing": False, "floor_tracking": False,
+        "single_camera_fallback": False, "time_offset_correction": False, "warning_hysteresis": False,
     }
     assert api_module.algorithm_features("baseline") == frozenset()
-    for bad in ("f-gg", "f-ga", "f-x", "fast"):
+    for bad in ("f-gg", "f-ga", "f-x", "fast", "f-d", "f-e", "f-dg"):
         try:
             api_module.algorithm_features(bad)
         except ValueError:
@@ -758,7 +764,8 @@ def test_feature_conditions_recompute_from_one_upload():
     put_camera("cam2", [-1, 0, 0], session_id)
     assert client.post("/detections", json=detection_payload(pair_id=1, session_id=session_id)).status_code == 201
     for algorithm, features in (("f-g", ["ground"]), ("f-k", ["kalman"]), ("f-agk", ["ankle", "ground", "kalman"]),
-                                ("f-c", ["floor"]), ("f-cg", ["floor", "ground"])):
+                                ("f-c", ["floor"]), ("f-cg", ["floor", "ground"]),
+                                ("f-cdef", ["fallback", "floor", "hysteresis", "timesync"])):
         response = client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm={algorithm}")
         assert response.status_code == 200, response.text
         assert response.json()["algorithm"] == algorithm
@@ -776,7 +783,8 @@ def test_feature_conditions_recompute_from_one_upload():
 
 def test_health_lists_feature_codes():
     codes = client.get("/health").json()["feature_codes"]
-    assert codes == {"a": "ankle", "c": "floor", "g": "ground", "h": "hold", "k": "kalman"}
+    assert codes == {"a": "ankle", "c": "floor", "d": "fallback", "e": "timesync", "f": "hysteresis",
+                     "g": "ground", "h": "hold", "k": "kalman"}
 
 
 def test_floor_tracking_keeps_person_id_when_camera_tracks_change():
@@ -807,3 +815,92 @@ def test_floor_tracking_keeps_person_id_when_camera_tracks_change():
     assert client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm=f-c").status_code == 200
     again = person_ids("f-c")
     assert len(again) == 2 and again[0] == again[1]
+
+
+
+def _look_at_camera(center, target):
+    """center에서 target을 보는 카메라의 (rvec, tvec). 세계 z가 위쪽, 이미지 y가 아래쪽"""
+    import cv2
+    import numpy as np
+    center, target = np.asarray(center, float), np.asarray(target, float)
+    forward = (target - center) / np.linalg.norm(target - center)
+    right = np.cross(forward, [0.0, 0.0, 1.0])
+    right /= np.linalg.norm(right)
+    down = np.cross(forward, right)
+    rotation = np.vstack([right, down, forward])
+    rvec, _ = cv2.Rodrigues(rotation)
+    return rvec.reshape(3).tolist(), (-rotation @ center).tolist(), rotation
+
+
+def _project(point, rotation, tvec):
+    import numpy as np
+    camera = rotation @ np.asarray(point, float) + np.asarray(tvec, float)
+    return [float(v) for v in (np.asarray(K, float) @ (camera / camera[2]))[:2]]
+
+
+def _overhead_session(session_id):
+    """천장 높이(3m) 카메라 두 대가 바닥의 (2, 4)를 내려다보는 세션. 카메라별 (회전, tvec) 반환"""
+    poses = {}
+    for camera_id, center in (("cam1", [0.0, 0.0, 3.0]), ("cam2", [4.0, 0.0, 3.0])):
+        rvec, tvec, rotation = _look_at_camera(center, [2.0, 4.0, 0.0])
+        response = client.put(f"/cameras/{camera_id}/calibration", json={
+            "session_id": session_id, "method": "unity-gt", "image_size": [1920, 1080], "K": K,
+            "dist": [0, 0, 0, 0, 0], "rvec": rvec, "tvec": tvec, "reproj_error_px": 0})
+        assert response.status_code == 200, response.text
+        poses[camera_id] = (rotation, tvec)
+    return poses
+
+
+def _person(poses, camera_id, floor_point, track_id):
+    u, v = _project([*floor_point, 0.0], *poses[camera_id])
+    assert 0 < u < 1920 and 150 < v < 1080
+    return {"track_id": track_id, "cls": "person", "conf": 0.9, "bbox": [u - 15, v - 150, u + 15, v]}
+
+
+def test_single_camera_fallback_keeps_person_when_one_camera_loses_them():
+    # 1번째 묶음: 두 카메라 모두 사람을 봄 / 2번째 묶음: cam2가 사람을 놓침
+    # 기존·C: 2번째 묶음에 위치 없음 / C+D: cam1 한 대로 바닥 위치를 구해 같은 사람 번호로 이어 붙임
+    session_id = "single-camera"
+    poses = _overhead_session(session_id)
+    for pair_id, cameras in ((1, ("cam1", "cam2")), (2, ("cam1",))):
+        frames = [{"camera_id": camera_id, "frame_id": pair_id, "ts": 1000 * pair_id, "image_size": [1920, 1080],
+                   "detections": ([_person(poses, camera_id, (2.0, 4.0), 7 if camera_id == "cam1" else 9)]
+                                  if camera_id in cameras else [])}
+                  for camera_id in ("cam1", "cam2")]
+        response = client.post("/detections", json={"session_id": session_id, "pair_id": pair_id, "frames": frames})
+        assert response.status_code == 201, response.text
+
+    def positions(algorithm):
+        if algorithm != "baseline":
+            assert client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm={algorithm}").status_code == 200
+        csv_text = client.get(f"/sessions/{session_id}/results.csv?profile=basic&algorithm={algorithm}").text
+        return {int(r["pair_id"]): r for r in csv.DictReader(io.StringIO(csv_text)) if r["record_type"] == "position"}
+
+    assert set(positions("baseline")) == {1}
+    assert set(positions("f-c")) == {1}
+    fallback = positions("f-cd")
+    assert set(fallback) == {1, 2}
+    assert fallback[1]["object_id"] == fallback[2]["object_id"]
+    assert abs(float(fallback[2]["x"]) - 2.0) < 0.05 and abs(float(fallback[2]["y"]) - 4.0) < 0.05
+
+
+def test_time_offset_correction_moves_position_to_later_photo_time():
+    # 사람이 x 방향 1m/s로 걷는다. cam1은 1.0초, cam2는 1.1초에 찍음 → 섞인 위치가 나온다
+    # 속도로 cam1 사진을 0.1초 뒤로 옮기면 1.1초 위치 (2.1, 4.0)에 가까워져야 한다
+    import numpy as np
+    from backend.geometry import Calibration, triangulate
+    session_id = "time-offset"
+    poses = _overhead_session(session_id)
+    calibrations = [Calibration(K=np.asarray(K, float), dist=np.zeros(5), R=rotation, t=np.asarray(tvec, float))
+                    for rotation, tvec in (poses["cam1"], poses["cam2"])]
+    late, early = np.array([2.1, 4.0, 0.0]), np.array([2.0, 4.0, 0.0])
+    normalized = []
+    for calibration, point in zip(calibrations, (early, late)):
+        camera = calibration.R @ point + calibration.t
+        normalized.append(camera[:2] / camera[2])
+    raw = triangulate(normalized[0], normalized[1], *calibrations)
+    corrected = api_module._time_corrected_position(raw, [1.0, 0.0], normalized, [1000, 1100], 1100, calibrations)
+    assert np.linalg.norm(raw[:2] - late[:2]) > 0.03
+    assert np.linalg.norm(corrected[:2] - late[:2]) < 0.01
+    same_time = api_module._time_corrected_position(raw, [1.0, 0.0], normalized, [1100, 1100], 1100, calibrations)
+    assert np.allclose(same_time, raw)

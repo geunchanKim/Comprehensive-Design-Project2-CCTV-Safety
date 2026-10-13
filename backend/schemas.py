@@ -8,7 +8,7 @@ CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 CalibrationProfile = Literal["basic", "precise"]
 # baseline, improved, 또는 기능별 실험용 "f-<기능 글자>" (검사는 api.algorithm_features)
 Algorithm = str
-PositionMethod = Literal["mid", "left", "right", "foot"]
+PositionMethod = Literal["mid", "left", "right", "foot", "single-camera"]
 
 
 class AnklePoint(RootModel[tuple[float, float, float]]):
@@ -176,8 +176,8 @@ class DetectionResult(BaseModel):
     world: WorldPoint
     raw_world: WorldPoint | None = None
     velocity: WorldPoint | None = None
-    epipolar_error_px: float
-    matching_method: Literal["epipolar", "ground-plane"] = "epipolar"
+    epipolar_error_px: float | None = None   # D 한 카메라 위치는 None
+    matching_method: Literal["epipolar", "ground-plane", "single-camera"] = "epipolar"
     ground_distance_m: float | None = None
 
 
