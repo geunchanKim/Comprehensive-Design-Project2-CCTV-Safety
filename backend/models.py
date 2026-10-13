@@ -116,6 +116,22 @@ class ObjectMotionState(Base):
                                                  onupdate=func.now())
 
 
+class FloorTrack(Base):
+    """C 바닥 좌표 추적: 바닥 위에서 따라가는 사람 한 명 (칼만 상태 + 사람 번호)"""
+    __tablename__ = "floor_tracks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    cls: Mapped[str] = mapped_column(String(16))
+    object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), index=True)
+    mean: Mapped[list] = mapped_column(JSON)
+    covariance: Mapped[list] = mapped_column(JSON)
+    timestamp_ms: Mapped[int] = mapped_column(BigInteger)
+    missed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
 class TrackPairState(Base):
     __tablename__ = "track_pair_states"
     __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "cls", "camera1_id", "camera1_track_id"),)

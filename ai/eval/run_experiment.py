@@ -76,7 +76,7 @@ BASE = "basic/baseline"                                      # 엣지가 탐지�
 ALL_CONDITIONS = ["basic/baseline", "basic/improved", "precise/baseline", "precise/improved"]
 PROFILES = ["basic", "precise"]
 DEFAULT_ALGORITHMS = ["baseline", "improved"]
-ABLATION = ["baseline", "f-g", "f-a", "f-k", "f-h", "improved"]   # 기능 하나씩 + 전체
+ABLATION = ["baseline", "f-g", "f-a", "f-k", "f-h", "f-c", "improved"]   # 기능 하나씩 + 전체
 ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
 
 
@@ -305,7 +305,7 @@ def fmt(v, kind):
     return f"{v * 100:.1f}%" if kind == "rate" else (f"{v:.1f}" if isinstance(v, float) else str(v))
 
 
-FEATURE_NAMES = {"a": "발목", "g": "바닥", "h": "짝유지", "k": "칼만"}
+FEATURE_NAMES = {"a": "발목", "c": "바닥추적", "g": "바닥", "h": "짝유지", "k": "칼만"}
 
 
 def cond_label(cond: str) -> str:
