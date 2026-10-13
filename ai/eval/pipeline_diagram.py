@@ -17,9 +17,20 @@ FOOT_NAMES = {"ankle": "발목", "box": "박스 아래"}
 BASE = "basic/baseline"
 COND_NAMES = {"basic/baseline": "기존", "basic/improved": "개선", "precise/baseline": "정밀·기존",
               "precise/improved": "정밀·개선"}
+FEATURE_NAMES = {"a": "발목", "g": "바닥", "h": "짝유지", "k": "칼만", "ankle": "같은 쪽 발목",
+                 "ground": "바닥 짝짓기", "hold": "짝 유지", "kalman": "칼만"}
+
+
+def cond_name(cond: str) -> str:
+    """basic/improved → 개선, basic/f-gk → +바닥+칼만, precise/f-g → 정밀·+바닥"""
+    if cond in COND_NAMES:
+        return COND_NAMES[cond]
+    profile, alg = cond.split("/")
+    name = "+" + "+".join(FEATURE_NAMES.get(c, c) for c in alg[2:]) if alg.startswith("f-") else alg
+    return name if profile == "basic" else f"정밀·{name}"
 HEALTH_USED = {"status", "commit", "max_epipolar_error_px", "box_foot_z_min", "box_foot_z_max",
                "ankle_foot_z_min", "ankle_foot_z_max", "bbox_position_method",
-               "matching_method"}                      # 짝짓기 방식은 알고리즘 조건이 정함 (서버 환경 변수 값은 안 씀)
+               "matching_method", "algorithms", "feature_codes", "default_max_sync_delta_ms"}                      # 짝짓기 방식은 알고리즘 조건이 정함 (서버 환경 변수 값은 안 씀)
 
 
 def _join(values) -> str:
@@ -45,7 +56,7 @@ def describe(meta: dict, rows: list[dict]) -> dict:
     data = [("pack", ", ".join(sorted({n.replace("-ankle", "") for n in meta.get("packs", packs)}))),
             ("개수", f"{len(meta.get('packs', packs))}개")]
     if meta.get("conditions"):
-        data.append(("채점 조건", ", ".join(COND_NAMES.get(c, c) for c in meta["conditions"])))
+        data.append(("채점 조건", ", ".join(cond_name(c) for c in meta["conditions"])))
 
     edge = [("모델", _join(e.get("model", "?") for e in edges.values())),
             ("입력 크기", _join(e.get("imgsz", "?") for e in edges.values())),
@@ -53,7 +64,12 @@ def describe(meta: dict, rows: list[dict]) -> dict:
             ("클래스", _join(e.get("classes", "?") for e in edges.values()))]
 
     match = [("에피폴라 기준", f"{h['max_epipolar_error_px']:g}px" if "max_epipolar_error_px" in h else "?")]
-    if any(c.endswith("/improved") for c in meta.get("conditions", [])):
+    if "default_max_sync_delta_ms" in h:
+        match.append(("두 카메라 시간차 허용", f"{h['default_max_sync_delta_ms']}ms"))
+    improved = (h.get("algorithms") or {}).get("improved")
+    if improved and "features" in improved:              # 개선 알고리즘에 실제로 켜진 기능
+        match.append(("개선 기능", ", ".join(FEATURE_NAMES.get(f, f) for f in improved["features"]) or "없음"))
+    elif any(c.endswith("/improved") for c in meta.get("conditions", [])):
         match.append(("짝짓기", "기존 = 에피폴라, 개선 = 바닥 위치"))
     if "box_foot_z_min" in h:
         match.append(("박스 높이 범위", f"{h['box_foot_z_min']:g}~{h['box_foot_z_max']:g}m"))
@@ -69,9 +85,10 @@ def describe(meta: dict, rows: list[dict]) -> dict:
         position.append(("박스 쌍", "삼각측량"))
 
     result = []
-    for cond in [BASE] + [c for c in COND_NAMES if c != BASE]:
+    conds = meta.get("conditions") or [BASE] + [c for c in COND_NAMES if c != BASE]
+    for cond in [BASE] + [c for c in conds if c != BASE]:
         cond_rows = [r for r in rows if r.get("cond", BASE) == cond]
-        tag = "" if cond == BASE else f" · {COND_NAMES[cond]}"
+        tag = "" if cond == BASE else f" · {cond_name(cond)}"
         for foot in ("ankle", "box"):
             rs = [r for r in cond_rows if r["cls"] == "person" and edges.get(r["pack"], {}).get("foot") == foot]
             if not rs:

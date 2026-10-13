@@ -6,7 +6,8 @@ ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
 FootSource = Literal["ankle", "box"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
 CalibrationProfile = Literal["basic", "precise"]
-Algorithm = Literal["baseline", "improved"]
+# baseline, improved, 또는 기능별 실험용 "f-<기능 글자>" (검사는 api.algorithm_features)
+Algorithm = str
 PositionMethod = Literal["mid", "left", "right", "foot"]
 
 
@@ -202,7 +203,7 @@ class DetectionBundleOut(BaseModel):
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]
     risks: list[RiskResult] = Field(default_factory=list)
-    settings: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    settings: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
 
 
 class GroundTruthObjectIn(BaseModel):
