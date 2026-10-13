@@ -68,11 +68,11 @@ def test_health_exposes_deployment_settings():
     assert result["commit"] == "test-commit"
     assert result["algorithms"]["baseline"] | {
         "matching_method": "epipolar", "kalman_filter": False,
-        "track_pair_hold": False, "ankle_pairing": False,
+        "track_pair_hold": False, "ankle_pairing": False, "floor_tracking": False,
     } == result["algorithms"]["baseline"]
     assert result["algorithms"]["improved"] | {
         "matching_method": "ground-plane", "kalman_filter": True,
-        "track_pair_hold": True, "ankle_pairing": True,
+        "track_pair_hold": True, "ankle_pairing": True, "floor_tracking": False,
     } == result["algorithms"]["improved"]
 
 
@@ -80,13 +80,13 @@ def test_improved_features_can_be_disabled_individually(monkeypatch):
     monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", False)
     assert api_module._algorithm_settings("improved") == {
         "matching_method": "ground-plane", "kalman_filter": False,
-        "track_pair_hold": True, "ankle_pairing": True,
+        "track_pair_hold": True, "ankle_pairing": True, "floor_tracking": False,
     }
     monkeypatch.setattr(api_module, "ENABLE_KALMAN_FILTER", True)
     monkeypatch.setattr(api_module, "ENABLE_TRACK_PAIR_HOLD", False)
     assert api_module._algorithm_settings("improved") == {
         "matching_method": "ground-plane", "kalman_filter": True,
-        "track_pair_hold": False, "ankle_pairing": True,
+        "track_pair_hold": False, "ankle_pairing": True, "floor_tracking": False,
     }
 
 
@@ -737,11 +737,11 @@ def test_ground_truth_is_stored_and_duplicate_is_rejected():
 def test_feature_labels_turn_on_single_features():
     assert api_module._algorithm_settings("f-g") == {
         "matching_method": "ground-plane", "kalman_filter": False,
-        "track_pair_hold": False, "ankle_pairing": False,
+        "track_pair_hold": False, "ankle_pairing": False, "floor_tracking": False,
     }
     assert api_module._algorithm_settings("f-hk") == {
         "matching_method": "epipolar", "kalman_filter": True,
-        "track_pair_hold": True, "ankle_pairing": False,
+        "track_pair_hold": True, "ankle_pairing": False, "floor_tracking": False,
     }
     assert api_module.algorithm_features("baseline") == frozenset()
     for bad in ("f-gg", "f-ga", "f-x", "fast"):
@@ -757,7 +757,8 @@ def test_feature_conditions_recompute_from_one_upload():
     put_camera("cam1", [0, 0, 0], session_id)
     put_camera("cam2", [-1, 0, 0], session_id)
     assert client.post("/detections", json=detection_payload(pair_id=1, session_id=session_id)).status_code == 201
-    for algorithm, features in (("f-g", ["ground"]), ("f-k", ["kalman"]), ("f-agk", ["ankle", "ground", "kalman"])):
+    for algorithm, features in (("f-g", ["ground"]), ("f-k", ["kalman"]), ("f-agk", ["ankle", "ground", "kalman"]),
+                                ("f-c", ["floor"]), ("f-cg", ["floor", "ground"])):
         response = client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm={algorithm}")
         assert response.status_code == 200, response.text
         assert response.json()["algorithm"] == algorithm
@@ -775,4 +776,34 @@ def test_feature_conditions_recompute_from_one_upload():
 
 def test_health_lists_feature_codes():
     codes = client.get("/health").json()["feature_codes"]
-    assert codes == {"a": "ankle", "g": "ground", "h": "hold", "k": "kalman"}
+    assert codes == {"a": "ankle", "c": "floor", "g": "ground", "h": "hold", "k": "kalman"}
+
+
+def test_floor_tracking_keeps_person_id_when_camera_tracks_change():
+    # 같은 자리에 있는 사람인데 두 카메라 트랙 번호가 모두 바뀜 (7·9 → 8·10)
+    # 기존: 카메라 번호 짝이 처음 보는 짝이라 새 사람 번호 / C: 바닥 위치가 같으니 같은 사람 번호
+    session_id = "floor-tracking"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    for pair_id, (track1, track2) in enumerate(((7, 9), (8, 10)), start=1):
+        payload = detection_payload(pair_id=pair_id, session_id=session_id)
+        payload["frames"][0]["ts"], payload["frames"][1]["ts"] = 1000 * pair_id, 1000 * pair_id + 20
+        payload["frames"][0]["detections"][0]["track_id"] = track1
+        payload["frames"][1]["detections"][0]["track_id"] = track2
+        assert client.post("/detections", json=payload).status_code == 201
+
+    def person_ids(algorithm):
+        csv_text = client.get(f"/sessions/{session_id}/results.csv?profile=basic&algorithm={algorithm}").text
+        rows = [r for r in csv.DictReader(io.StringIO(csv_text)) if r["record_type"] == "position"]
+        return [r["object_id"] for r in sorted(rows, key=lambda r: int(r["pair_id"]))]
+
+    baseline = person_ids("baseline")
+    assert len(baseline) == 2 and baseline[0] != baseline[1]
+    response = client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm=f-c")
+    assert response.status_code == 200, response.text
+    floor = person_ids("f-c")
+    assert len(floor) == 2 and floor[0] == floor[1]
+    # 다시 계산해도 트랙이 남지 않고 같은 결과
+    assert client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm=f-c").status_code == 200
+    again = person_ids("f-c")
+    assert len(again) == 2 and again[0] == again[1]

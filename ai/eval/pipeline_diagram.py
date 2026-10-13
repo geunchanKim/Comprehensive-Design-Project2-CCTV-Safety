@@ -17,8 +17,8 @@ FOOT_NAMES = {"ankle": "발목", "box": "박스 아래"}
 BASE = "basic/baseline"
 COND_NAMES = {"basic/baseline": "기존", "basic/improved": "개선", "precise/baseline": "정밀·기존",
               "precise/improved": "정밀·개선"}
-FEATURE_NAMES = {"a": "발목", "g": "바닥", "h": "짝유지", "k": "칼만", "ankle": "같은 쪽 발목",
-                 "ground": "바닥 짝짓기", "hold": "짝 유지", "kalman": "칼만"}
+FEATURE_NAMES = {"a": "발목", "c": "바닥추적", "g": "바닥", "h": "짝유지", "k": "칼만", "ankle": "같은 쪽 발목",
+                 "floor": "바닥 좌표 추적", "ground": "바닥 짝짓기", "hold": "짝 유지", "kalman": "칼만"}
 
 
 def cond_name(cond: str) -> str:
