@@ -94,7 +94,18 @@ POST /sessions/{session_id}/recompute?profile=basic&algorithm=improved
 POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 ```
 
-`GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다. 두 query parameter의 기본값은 각각 `basic`, `baseline`이다.
+`GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다.
+
+기능별 효과를 따로 재려면 `algorithm`에 기능 조합을 넣는다. `f-` 뒤에 기능 글자를 알파벳 순서로, 중복 없이 붙인다.
+
+| 글자 | 기능 |
+|---|---|
+| `a` | 같은 쪽 발목끼리 삼각측량 |
+| `g` | 바닥 위치로 짝짓기 (없으면 에피폴라) |
+| `h` | 카메라 짝 유지 |
+| `k` | 칼만 필터 |
+
+예: `recompute?profile=basic&algorithm=f-g`(기존 + 바닥 짝짓기), `algorithm=f-gk`(기존 + 바닥 짝짓기 + 칼만). `baseline`은 기능 없음, `improved`는 서버 환경 변수로 켠 기능 전부다. 잘못된 이름(`f-gg`, `f-ga`, 모르는 글자)은 422로 거절한다. 결과 csv의 `settings.features`에 실제로 켠 기능이 남고, `/health`의 `feature_codes`에서 글자 목록을 확인할 수 있다. 두 query parameter의 기본값은 각각 `basic`, `baseline`이다.
 위치 행에는 원본 묶음과 카메라 프레임을 추적할 수 있도록 `pair_id`, `frame_id`가 포함된다. 한 묶음의 위치 행은 대표 카메라의 `(camera_id, track_id)`를 기준으로 구분하므로, 잘못된 전역 `object_id` 충돌이 있더라도 서로 다른 사람의 행이 합쳐지지 않는다.
 
 높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.

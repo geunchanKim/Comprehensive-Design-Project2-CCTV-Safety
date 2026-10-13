@@ -264,3 +264,32 @@ def test_crossing_metrics_counts_close_frames():
     assert m["dist_err_cm"] == 5.0                            # (0 + 10) / 2
     one = {1: {"objects": [{"object_id": "a", "cls": "person", "world": [0, 0, 0]}]}}
     assert crossing.crossing_metrics([], one) is None          # 사람 한 명이면 계산 안 함
+
+
+def test_experiment_conditions_and_feature_labels():
+    import run_experiment as rx
+    assert rx.build_conditions("basic", "baseline,improved", None) == ["basic/baseline", "basic/improved"]
+    assert rx.build_conditions("basic", "ablation", None) == [f"basic/{a}" for a in rx.ABLATION]
+    both = rx.build_conditions("all", "baseline,f-g", None)
+    assert both == ["basic/baseline", "basic/f-g", "precise/baseline", "precise/f-g"]
+    assert rx.build_conditions("basic", "f-g", None)[0] == "basic/baseline"     # 탐지를 보내는 조건은 항상 포함
+    assert rx.build_conditions("basic", "x", "all") == rx.ALL_CONDITIONS         # 예전 --conditions 가 우선
+    with pytest.raises(SystemExit):
+        rx.build_conditions("basic", "fast", None)
+    assert rx.cond_label("basic/f-gk") == "+바닥+칼만"
+    assert rx.cond_label("precise/improved") == "정밀 · 개선(전체)"
+
+
+def test_results_csv_with_pair_id_keeps_every_person(tmp_path):
+    """#58 이후 csv 는 pair_id 가 있고 한 사람당 한 줄 → 번호가 겹쳐도 사람을 빼지 않는다"""
+    import gzip
+    import run_experiment as rx
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    with gzip.open(pack / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"pair_id": 3, "frames": [{"camera_id": "cam1", "ts": 1}, {"camera_id": "cam2", "ts": 2}]}) + "\n")
+    text = "\n".join(["record_type,pair_id,frame_id,timestamp_ms,object_id,object2_id,cls,x,y,z,distance_m,ttc_s,level,settings",
+                      "position,3,3,1,5,,person,1.0,2.0,0.1,,,,{}",
+                      "position,3,3,1,5,,person,4.0,2.0,0.1,,,,{}"])
+    resp = rx.results_to_responses(text, pack)
+    assert len(resp[0]["matches"]) == 2

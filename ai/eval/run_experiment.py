@@ -25,7 +25,14 @@ pack 구조: ai/eval/packs/<이름>/
     python eval/run_experiment.py run --server URL --packs s1,s4 --label after-pr42 --compare runs/experiments/before
     python eval/run_experiment.py run --server URL --out ~/cctv-experiments --compare latest   (배포 후 자동 실행용)
 
-실험 조건 (--conditions, 논문 2×2 = 캘리브레이션 basic·precise × 알고리즘 baseline·improved)
+실험 조건 = 캘리브레이션(--profiles) × 알고리즘(--algorithms)
+  --profiles   basic (기본) / all = basic, precise
+  --algorithms baseline,improved (기본) / ablation = 기능별 실험 (아래) / 직접 나열 (예: baseline,f-g,f-gk)
+  --conditions 예전 방식: all = 2×2, 또는 basic/baseline,precise/improved 처럼 직접 (주면 위 둘보다 우선)
+  기능별 실험: 알고리즘 이름 "f-<글자>" 로 기능만 골라 켠다 (서버 /health 의 feature_codes)
+    a 같은 쪽 발목, g 바닥 짝짓기, h 짝 유지, k 칼만. 예: f-g = 기존 + 바닥 짝짓기
+    ablation = baseline, f-g, f-a, f-k, f-h, improved → 각 기능 혼자 켰을 때의 효과와 전체를 한 표로 비교
+논문 2×2 = 캘리브레이션 basic·precise × 알고리즘 baseline·improved
   - 탐지는 basic/baseline 으로 한 번만 보내고, 나머지 조건은 서버 recompute 로 다시 계산한 뒤
     GET /sessions/{id}/results.csv 로 받아 같은 1:1 평가를 한다
   - 기본: basic/baseline, basic/improved (Unity pack 은 정답 캘리브레이션 하나라 basic·precise 결과가 같음)
@@ -67,7 +74,28 @@ EXP_DIR = AI_DIR / "runs" / "experiments"
 REPORT_CLASSES = ("person", "chair", "suitcase", "backpack")   # 표에 넣을 클래스 (책상·카트는 COCO로 못 잡음)
 BASE = "basic/baseline"                                      # 엣지가 탐지를 보내는 조건
 ALL_CONDITIONS = ["basic/baseline", "basic/improved", "precise/baseline", "precise/improved"]
-DEFAULT_CONDITIONS = ["basic/baseline", "basic/improved"]
+PROFILES = ["basic", "precise"]
+DEFAULT_ALGORITHMS = ["baseline", "improved"]
+ABLATION = ["baseline", "f-g", "f-a", "f-k", "f-h", "improved"]   # 기능 하나씩 + 전체
+ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
+
+
+def build_conditions(profiles: str, algorithms: str, conditions: str | None) -> list[str]:
+    """--profiles × --algorithms (또는 --conditions) → ["basic/baseline", ...] (basic/baseline 이 맨 앞)"""
+    if conditions:
+        conds = ALL_CONDITIONS if conditions == "all" else [c.strip() for c in conditions.split(",") if c.strip()]
+    else:
+        profs = PROFILES if profiles == "all" else [p.strip() for p in profiles.split(",") if p.strip()]
+        algs = ABLATION if algorithms == "ablation" else [a.strip() for a in algorithms.split(",") if a.strip()]
+        conds = [f"{p}/{a}" for p in profs for a in algs]
+    bad = [c for c in conds if c.count("/") != 1 or c.split("/")[0] not in PROFILES
+           or not ALGORITHM_RE.fullmatch(c.split("/")[1])]
+    if bad:
+        raise SystemExit(f"잘못된 조건: {', '.join(bad)} (캘리브레이션 basic|precise, 알고리즘 baseline|improved|f-<글자>)")
+    conds = list(dict.fromkeys(conds))                  # 중복 제거, 순서 유지
+    if BASE not in conds:
+        conds.insert(0, BASE)                           # 탐지를 보내는 조건은 항상 채점
+    return [BASE] + [c for c in conds if c != BASE]
 COLUMNS = ["pack", "cls", "cond", "ok", "chance", "results", "mean_cm", "median_cm", "p90_cm", "max_cm",
            "mismatch_rate", "miss_rate", "id_switches", "bias_x_cm", "bias_y_cm", "mean_z_cm"]
 
@@ -213,7 +241,8 @@ def replay(server: str, pack: Path, session_id: str, out: Path, send_gt: bool,
 
 def results_to_responses(csv_text: str, pack: Path) -> list[dict]:
     """서버 results.csv(위치 한 줄씩)를 /detections 응답 형식 {pair_id, matches: [...]} 으로 바꾼다.
-    csv 에는 pair_id 가 없어서 탐지 묶음의 카메라별 ts 로 짝 번호를 찾는다."""
+    csv 에 pair_id 가 있으면(#58 이후) 그대로 쓰고, 없으면 탐지 묶음의 카메라별 ts 로 짝 번호를 찾는다.
+    pair_id 가 있는 csv 는 서버가 한 사람당 한 줄만 주므로 줄마다 하나씩 넣는다."""
     ts_pair, pairs = {}, []
     for b in read_jsonl(pack / "detections.jsonl.gz"):
         pairs.append(b["pair_id"])
@@ -223,12 +252,17 @@ def results_to_responses(csv_text: str, pack: Path) -> list[dict]:
     for r in csv.DictReader(csv_text.splitlines()):
         if r["record_type"] != "position" or not r["object_id"]:
             continue
+        item = {"object_id": int(r["object_id"]), "cls": r["cls"],
+                "world": {"x": float(r["x"]), "y": float(r["y"]), "z": float(r["z"])}}
+        if r.get("pair_id"):
+            pair = int(r["pair_id"])
+            if pair in matches:
+                matches[pair][len(matches[pair])] = item
+            continue
         pair = ts_pair.get(int(float(r["timestamp_ms"])))
         if pair is None:
             continue
-        matches[pair].setdefault(int(r["object_id"]), {          # 카메라 두 줄 중 하나만
-            "object_id": int(r["object_id"]), "cls": r["cls"],
-            "world": {"x": float(r["x"]), "y": float(r["y"]), "z": float(r["z"])}})
+        matches[pair].setdefault(item["object_id"], item)          # 예전 csv: 카메라 두 줄 중 하나만
     return [{"pair_id": p, "matches": list(matches[p].values())} for p in pairs]
 
 
@@ -271,6 +305,63 @@ def fmt(v, kind):
     return f"{v * 100:.1f}%" if kind == "rate" else (f"{v:.1f}" if isinstance(v, float) else str(v))
 
 
+FEATURE_NAMES = {"a": "발목", "g": "바닥", "h": "짝유지", "k": "칼만"}
+
+
+def cond_label(cond: str) -> str:
+    """basic/f-gk → 기본 · +바닥+칼만"""
+    profile, alg = cond.split("/")
+    name = {"baseline": "기존", "improved": "개선(전체)"}.get(alg)
+    if name is None:
+        name = "+" + "+".join(FEATURE_NAMES.get(c, c) for c in alg[2:])
+    return ("" if profile == "basic" else "정밀 · ") + name
+
+
+def ablation_markdown(rows: list[dict], cross_rows: list[dict], conditions: list[str]) -> str:
+    """사람 기준 조건별 핵심 지표를 한 표로. 기존 대비 차이를 괄호로 (조건이 3개 이상일 때만)"""
+    if len(conditions) < 3:
+        return ""
+    person = {(r["pack"], r["cond"]): r for r in rows if r["cls"] == "person"}
+    cross = {(r["pack"], r["cond"]): r for r in cross_rows}
+    packs = sorted({p for p, _ in person})
+
+    def cell(v, base, kind, lower_better=True):
+        if v is None:
+            return "-"
+        text = f"{v * 100:.1f}%" if kind == "rate" else (f"{v:.1f}" if isinstance(v, float) else str(v))
+        if base is None or v == base:
+            return text
+        d = v - base
+        better = (d < 0) == lower_better
+        sign = "+" if d > 0 else ""
+        dtxt = f"{d * 100:+.1f}%p" if kind == "rate" else (f"{sign}{d:.1f}" if isinstance(d, float) else f"{sign}{d}")
+        return f"{text} ({dtxt} {'✅' if better else '❌'})"
+
+    lines = ["### 기능별 효과 (사람, 기존 대비)", "",
+             "| pack | 조건 | 평균(cm) | 90%(cm) | 오매칭 | 놓침 | ID 바뀜 | 교차 둘 다 추적 | 교차 ID 바뀜 | 경고 놓침 | 경고 오경보 |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for pack in packs:
+        base, cbase = person.get((pack, BASE)), cross.get((pack, BASE))
+        for cond in conditions:
+            r = person.get((pack, cond))
+            if r is None:
+                continue
+            c = cross.get((pack, cond))
+            b = (lambda k: None if cond == BASE or base is None else base.get(k))
+            cb = (lambda k: None if cond == BASE or cbase is None else cbase.get(k))
+            cells = [cell(r["mean_cm"], b("mean_cm"), "num"), cell(r["p90_cm"], b("p90_cm"), "num"),
+                     cell(r["mismatch_rate"], b("mismatch_rate"), "rate"), cell(r["miss_rate"], b("miss_rate"), "rate"),
+                     cell(r["id_switches"], b("id_switches"), "num")]
+            if c:
+                cells += [cell(c["both_1m"], cb("both_1m"), "rate", lower_better=False),
+                          cell(c["id_switches_near"], cb("id_switches_near"), "num"),
+                          cell(c["warn_fn"], cb("warn_fn"), "num"), cell(c["warn_fp"], cb("warn_fp"), "num")]
+            else:
+                cells += ["-"] * 4
+            lines.append(f"| {pack} | {cond_label(cond)} | " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n\n"
+
+
 def summary_markdown(rows: list[dict], meta: dict, before: dict | None) -> str:
     h = meta.get("health", {})
     lines = [f"### 실험 결과 `{meta['label']}`", "",
@@ -280,7 +371,8 @@ def summary_markdown(rows: list[dict], meta: dict, before: dict | None) -> str:
             ("오매칭", "mismatch_rate"), ("놓침", "miss_rate"), ("ID 바뀜", "id_switches")]
     lines.append("| pack | 클래스 | 조건 | " + " | ".join(c for c, _ in cols) + " |")
     lines.append("|---|---|---|" + "---|" * len(cols))
-    for r in sorted(rows, key=lambda r: (r["pack"], REPORT_CLASSES.index(r["cls"]), ALL_CONDITIONS.index(r["cond"]))):
+    order = {c: i for i, c in enumerate(meta.get("conditions") or ALL_CONDITIONS)}
+    for r in sorted(rows, key=lambda r: (r["pack"], REPORT_CLASSES.index(r["cls"]), order.get(r["cond"], 99))):
         b = (before or {}).get((r["pack"], r["cls"], r["cond"]))
         cells = []
         for name, key in cols:
@@ -341,10 +433,9 @@ def run_experiment(args):
     stamp = datetime.now().strftime("%m%d%H%M%S")
     print(f"서버 {server} | 커밋 {health.get('commit')} | pack {', '.join(names)} | 결과 {exp}")
 
-    conditions = ALL_CONDITIONS if args.conditions == "all" else [c.strip() for c in args.conditions.split(",")]
-    if BASE not in conditions or any(c not in ALL_CONDITIONS for c in conditions):
-        raise SystemExit(f"--conditions 는 {BASE} 를 포함하고 {', '.join(ALL_CONDITIONS)} 중에서 골라야 해요")
-    profiles = tuple(sorted({c.split("/")[0] for c in conditions}))
+    conditions = build_conditions(args.profiles, args.algorithms, args.conditions)
+    profiles = tuple(p for p in PROFILES if any(c.startswith(p + "/") for c in conditions))
+    print(f"채점 조건 {len(conditions)}개: {', '.join(conditions)}")
 
     rows, cross_rows, packs_meta, skipped = [], [], {}, {}
     for p in packs:
@@ -395,6 +486,7 @@ def run_experiment(args):
     now_view = pipeline_diagram.describe(meta, rows)
     (exp / "diagram.mmd").write_text(pipeline_diagram.mermaid(now_view, before_view), encoding="utf-8")
     md = (pipeline_diagram.markdown(now_view, before_view, health.get("commit", "?"), compare.name if compare else None)
+          + ablation_markdown(rows, cross_rows, conditions)
           + summary_markdown(rows, meta, before) + crossing.markdown(cross_rows))
     (exp / "summary.md").write_text(md, encoding="utf-8")
     print("\n" + md)
@@ -423,8 +515,11 @@ def main():
     r.add_argument("--out", default=None, help="결과를 모을 상위 폴더. 기본: ai/runs/experiments")
     r.add_argument("--thr", type=float, default=50.0, help="맞음 기준 바닥 오차 cm")
     r.add_argument("--send-gt", action="store_true", help="정답도 서버에 보내기 (서버 DB에 남길 때)")
-    r.add_argument("--conditions", default=",".join(DEFAULT_CONDITIONS),
-                   help="채점할 조건. 예: basic/baseline,basic/improved (기본) 또는 all (네 조건)")
+    r.add_argument("--profiles", default="basic", help="캘리브레이션: basic (기본), all = basic,precise")
+    r.add_argument("--algorithms", default=",".join(DEFAULT_ALGORITHMS),
+                   help="알고리즘: baseline,improved (기본), ablation = 기능별 실험, 또는 f-<글자> 직접 나열")
+    r.add_argument("--conditions", default=None,
+                   help="예전 방식 (주면 위 둘보다 우선): all = 2×2, 또는 basic/baseline,precise/improved")
 
     args, extra = parser.parse_known_args()
     if args.cmd == "pack":

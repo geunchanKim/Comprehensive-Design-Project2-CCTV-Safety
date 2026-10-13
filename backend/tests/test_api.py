@@ -14,7 +14,8 @@ from sqlalchemy import select
 import backend.api as api_module
 from backend.database import Base, SessionLocal, engine
 from backend.main import app
-from backend.models import Camera, Detection, FrameBundle, ObjectMotionState, TrackPairState
+from backend.models import (Camera, Detection, FrameBundle, ObjectMotionState, SessionSettings,
+                            TrackPairState)
 from backend.schemas import DetectionBundleIn
 
 
@@ -731,3 +732,47 @@ def test_ground_truth_is_stored_and_duplicate_is_rejected():
     assert response.status_code == 201, response.text
     assert response.json()["object_count"] == 1
     assert client.post("/ground-truth", json=payload).status_code == 409
+
+
+def test_feature_labels_turn_on_single_features():
+    assert api_module._algorithm_settings("f-g") == {
+        "matching_method": "ground-plane", "kalman_filter": False,
+        "track_pair_hold": False, "ankle_pairing": False,
+    }
+    assert api_module._algorithm_settings("f-hk") == {
+        "matching_method": "epipolar", "kalman_filter": True,
+        "track_pair_hold": True, "ankle_pairing": False,
+    }
+    assert api_module.algorithm_features("baseline") == frozenset()
+    for bad in ("f-gg", "f-ga", "f-x", "fast"):
+        try:
+            api_module.algorithm_features(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"{bad} should be rejected")
+
+
+def test_feature_conditions_recompute_from_one_upload():
+    session_id = "feature-conditions"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    assert client.post("/detections", json=detection_payload(pair_id=1, session_id=session_id)).status_code == 201
+    for algorithm, features in (("f-g", ["ground"]), ("f-k", ["kalman"]), ("f-agk", ["ankle", "ground", "kalman"])):
+        response = client.post(f"/sessions/{session_id}/recompute?profile=basic&algorithm={algorithm}")
+        assert response.status_code == 200, response.text
+        assert response.json()["algorithm"] == algorithm
+        csv_response = client.get(f"/sessions/{session_id}/results.csv?profile=basic&algorithm={algorithm}")
+        assert csv_response.status_code == 200
+        with SessionLocal() as db:
+            stored = db.get(SessionSettings, (session_id, "basic", algorithm))
+        assert stored.settings["features"] == features
+        assert stored.settings["algorithm"] == algorithm
+    for path in (f"/sessions/{session_id}/recompute?profile=basic&algorithm=f-gg",
+                 f"/sessions/{session_id}/results.csv?profile=basic&algorithm=bogus"):
+        response = client.post(path) if "recompute" in path else client.get(path)
+        assert response.status_code == 422, response.text
+
+
+def test_health_lists_feature_codes():
+    codes = client.get("/health").json()["feature_codes"]
+    assert codes == {"a": "ankle", "g": "ground", "h": "hold", "k": "kalman"}

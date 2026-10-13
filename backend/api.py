@@ -2,6 +2,7 @@ import os
 import csv
 import io
 import json
+import re
 from itertools import combinations
 from typing import get_args
 
@@ -119,20 +120,59 @@ def _filter_motion(db: Session, session_id: str, profile: str, algorithm: str,
     return state.mean[:3], state.mean[3:]
 
 
+# 기능별 실험(ablation)용 알고리즘 이름: baseline, improved, 또는 "f-" + 기능 글자 (알파벳 순, 중복 없이)
+#   예) f-g = 기존 + 바닥 짝짓기, f-gk = 기존 + 바닥 짝짓기 + 칼만
+FEATURE_CODES = {
+    "a": "ankle",    # 같은 쪽 발목끼리 삼각측량
+    "g": "ground",   # 바닥 위치로 짝짓기
+    "h": "hold",     # 카메라 짝 유지
+    "k": "kalman",   # 칼만 필터
+}
+ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
+
+
+def algorithm_features(algorithm: str) -> frozenset[str]:
+    """알고리즘 이름 → 켜진 기능 이름들. 잘못된 이름이면 ValueError"""
+    if not isinstance(algorithm, str) or not ALGORITHM_RE.fullmatch(algorithm):
+        raise ValueError(f"algorithm must be baseline, improved, or f-<codes> ({', '.join(FEATURE_CODES)})")
+    if algorithm == "baseline":
+        return frozenset()
+    if algorithm == "improved":
+        return frozenset(name for name, enabled in (
+            ("ground", True), ("kalman", ENABLE_KALMAN_FILTER),
+            ("hold", ENABLE_TRACK_PAIR_HOLD), ("ankle", ENABLE_ANKLE_PAIRING)) if enabled)
+    codes = algorithm[2:]
+    unknown = sorted(set(codes) - set(FEATURE_CODES))
+    if unknown:
+        raise ValueError(f"unknown feature code(s): {', '.join(unknown)} (available: {FEATURE_CODES})")
+    if codes != "".join(sorted(set(codes))):
+        raise ValueError(f"feature codes must be sorted and unique: use f-{''.join(sorted(set(codes)))}")
+    return frozenset(FEATURE_CODES[code] for code in codes)
+
+
+def _checked_algorithm(algorithm: str) -> str:
+    try:
+        algorithm_features(algorithm)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return algorithm
+
+
 def _algorithm_settings(algorithm: Algorithm):
     """Return the features that are actually active for an algorithm condition."""
-    improved = algorithm == "improved"
+    features = algorithm_features(algorithm)
     return {
-        "matching_method": "ground-plane" if improved else "epipolar",
-        "kalman_filter": improved and ENABLE_KALMAN_FILTER,
-        "track_pair_hold": improved and ENABLE_TRACK_PAIR_HOLD,
-        "ankle_pairing": improved and ENABLE_ANKLE_PAIRING,
+        "matching_method": "ground-plane" if "ground" in features else "epipolar",
+        "kalman_filter": "kalman" in features,
+        "track_pair_hold": "hold" in features,
+        "ankle_pairing": "ankle" in features,
     }
 
 
 def _experiment_settings(algorithm: Algorithm):
     return {
         **_algorithm_settings(algorithm),
+        "features": sorted(algorithm_features(algorithm)),
         "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
         "bbox_position_method": BBOX_POSITION_METHOD,
         "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
@@ -148,6 +188,7 @@ def _experiment_settings(algorithm: Algorithm):
 def download_session_results(session_id: str, profile: CalibrationProfile = "basic",
                              algorithm: Algorithm = "baseline",
                              db: Session = Depends(get_db)):
+    _checked_algorithm(algorithm)
     stored_settings = db.get(SessionSettings, (session_id, profile, algorithm))
     if stored_settings is None:
         raise HTTPException(404, "session results not found")
@@ -711,6 +752,7 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
 def recompute_session(session_id: str, profile: CalibrationProfile,
                       algorithm: Algorithm = "baseline", db: Session = Depends(get_db)):
     """Re-run the original edge observations for one experiment condition."""
+    _checked_algorithm(algorithm)
     source_profile, source_algorithm = "basic", "baseline"
     if (profile, algorithm) == (source_profile, source_algorithm):
         source_profile = "precise"
