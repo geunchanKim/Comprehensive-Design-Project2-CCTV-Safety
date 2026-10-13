@@ -1,6 +1,6 @@
 import pytest
 
-from backend.risk import calculate_pair_risk
+from backend.risk import calculate_pair_risk, hysteresis_level
 
 
 def test_risk_levels_follow_distance_thresholds():
@@ -31,3 +31,13 @@ def test_risk_ignores_height_difference():
     assert risk.distance_m == pytest.approx(0.4)
     assert risk.level == "danger"
     assert risk.ttc_s == 0.0
+
+
+def test_hysteresis_keeps_warning_until_release_margin():
+    # 1.0m 안으로 들어오면 켜지고, 1.05m로 살짝 멀어져도 유지, 1.1m를 넘어야 꺼진다
+    assert hysteresis_level(1.05, "safe") == "safe"
+    assert hysteresis_level(0.95, "safe") == "warning"
+    assert hysteresis_level(1.05, "warning") == "warning"
+    assert hysteresis_level(1.12, "warning") == "safe"
+    assert hysteresis_level(0.55, "danger") == "danger"
+    assert hysteresis_level(0.65, "danger") == "warning"

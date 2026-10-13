@@ -278,6 +278,7 @@ def test_experiment_conditions_and_feature_labels():
         rx.build_conditions("basic", "fast", None)
     assert rx.cond_label("basic/f-gk") == "+바닥+칼만"
     assert rx.cond_label("precise/improved") == "정밀 · 개선(전체)"
+    assert rx.cond_label("basic/f-cdef") == "+바닥추적+한카메라+시간보정+경고유지"
 
 
 def test_results_csv_with_pair_id_keeps_every_person(tmp_path):
@@ -293,3 +294,64 @@ def test_results_csv_with_pair_id_keeps_every_person(tmp_path):
                       "position,3,3,1,5,,person,4.0,2.0,0.1,,,,{}"])
     resp = rx.results_to_responses(text, pack)
     assert len(resp[0]["matches"]) == 2
+
+
+def test_crossing_uses_server_warning_levels_and_band():
+    """서버가 경고 단계(F)를 주면 그걸로 채점하고, 0.9~1.1m 여유 구간은 따로 뺀 개수도 센다"""
+    import crossing
+    gt = {f: {"objects": [{"object_id": "a", "cls": "person", "world": [0.0, 0, 0.0]},
+                          {"object_id": "b", "cls": "person", "world": [d, 0, 0.0]}]}
+          for f, d in ((1, 0.95), (2, 1.05), (3, 2.0))}
+    ok = lambda f, o, x, sid: {"frame": f, "cls": "person", "status": "ok", "object_id": o,
+                               "server_object_id": sid, "est_x": x, "est_y": 0.0}
+    rows = [ok(1, "a", 0.0, 1), ok(1, "b", 1.02, 2),      # 정답 0.95m, 서버 1.02m → 거리로는 놓침
+            ok(2, "a", 0.0, 1), ok(2, "b", 1.05, 2),      # 정답 1.05m, 서버 1.05m → 맞게 경고 없음
+            ok(3, "a", 0.0, 1), ok(3, "b", 1.9, 2)]
+    plain = crossing.crossing_metrics(rows, gt)
+    assert (plain["warn_tp"], plain["warn_fn"], plain["warn_fp"]) == (0, 1, 0)
+    assert (plain["warn_fn_band"], plain["warn_fp_band"]) == (0, 0)       # 놓친 1개는 여유 구간 안
+    # 서버 경고 유지(F): 1번 프레임은 경고, 2번 프레임도 아직 경고 유지 → 맞음 1, 오경보 1 (여유 구간 안)
+    risks = crossing.risk_levels([{"pair_id": 1, "risks": [{"object1_id": 1, "object2_id": 2, "level": "warning"}]},
+                                  {"pair_id": 2, "risks": [{"object1_id": 1, "object2_id": 2, "level": "warning"}]},
+                                  {"pair_id": 3, "risks": [{"object1_id": 1, "object2_id": 2, "level": "safe"}]}])
+    held = crossing.crossing_metrics(rows, gt, risks)
+    assert (held["warn_tp"], held["warn_fn"], held["warn_fp"]) == (1, 0, 1)
+    assert (held["warn_fn_band"], held["warn_fp_band"]) == (0, 0)
+
+
+def test_results_csv_risk_rows_become_response_risks(tmp_path):
+    import gzip
+    import run_experiment as rx
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    with gzip.open(pack / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"pair_id": 3, "frames": [{"camera_id": "cam1", "ts": 1}, {"camera_id": "cam2", "ts": 2}]}) + "\n")
+    text = "\n".join(["record_type,pair_id,frame_id,timestamp_ms,object_id,object2_id,cls,x,y,z,distance_m,ttc_s,level,settings",
+                      "position,3,3,1,5,,person,1.0,2.0,0.1,,,,{}",
+                      "risk,3,,2,5,6,,,,,1.04,,warning,{}"])
+    resp = rx.results_to_responses(text, pack)
+    assert resp[0]["risks"] == [{"object1_id": 5, "object2_id": 6, "level": "warning", "distance_m": 1.04}]
+
+
+def test_shift_pack_makes_cam2_late(tmp_path, monkeypatch):
+    """E 실험용 pack: 묶음 k 에 cam2 의 k-1 번째 사진을 붙이고, 서버 시간차 허용을 넓힌다"""
+    import gzip
+    import types
+    import run_experiment as rx
+    monkeypatch.setattr(rx, "PACK_DIR", tmp_path)
+    src = tmp_path / "base"
+    src.mkdir()
+    bundles = [{"pair_id": k, "frames": [{"camera_id": "cam1", "ts": 100 * k, "detections": []},
+                                         {"camera_id": "cam2", "ts": 100 * k, "detections": [{"track_id": k}]}]}
+               for k in range(1, 4)]
+    with gzip.open(src / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.writelines(json.dumps(b) + "\n" for b in bundles)
+    (src / "meta.json").write_text(json.dumps({"name": "base"}), encoding="utf-8")
+    (src / "calibration.json").write_text("{}", encoding="utf-8")
+    rx.shift_pack(types.SimpleNamespace(source="base", name="late", cam2_frames=1, force=False))
+    shifted = rx.read_jsonl(tmp_path / "late" / "detections.jsonl.gz")
+    assert [b["pair_id"] for b in shifted] == [2, 3]
+    assert [(b["frames"][0]["ts"], b["frames"][1]["ts"]) for b in shifted] == [(200, 100), (300, 200)]
+    assert shifted[0]["frames"][1]["detections"] == [{"track_id": 1}]
+    meta = json.loads((tmp_path / "late" / "meta.json").read_text(encoding="utf-8"))
+    assert meta["max_sync_delta_ms"] == 150 and meta["cam2_late_frames"] == 1

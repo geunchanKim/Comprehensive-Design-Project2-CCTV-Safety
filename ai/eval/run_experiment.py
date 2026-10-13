@@ -20,6 +20,8 @@ pack 구조: ai/eval/packs/<이름>/
         --gt runs/unity/unity-classroom-04/unity-classroom-03-s4 --note "coco 1280, foot box"
   pack 만들기 — Unity 폴더에서 (unity_reader --dry-run 으로 탐지부터)
     python eval/run_experiment.py pack runs/unity/unity-classroom-03-s1 --name s1-ankle -- --foot ankle
+  시간차 pack 만들기 (E 실험용, cam2 를 1프레임 = 100ms 늦게)
+    python eval/run_experiment.py shift s4-lr --name s4-lr-late1 --cam2-frames 1
   실험
     python eval/run_experiment.py run --server http://121.182.60.2:32130
     python eval/run_experiment.py run --server URL --packs s1,s4 --label after-pr42 --compare runs/experiments/before
@@ -76,7 +78,8 @@ BASE = "basic/baseline"                                      # 엣지가 탐지�
 ALL_CONDITIONS = ["basic/baseline", "basic/improved", "precise/baseline", "precise/improved"]
 PROFILES = ["basic", "precise"]
 DEFAULT_ALGORITHMS = ["baseline", "improved"]
-ABLATION = ["baseline", "f-g", "f-a", "f-k", "f-h", "f-c", "improved"]   # 기능 하나씩 + 전체
+# 기능 하나씩 + 전체. D(한 카메라 보완)·E(시간차 보정)는 C(바닥추적) 위에서만 동작해서 C와 함께 본다
+ABLATION = ["baseline", "f-g", "f-a", "f-k", "f-h", "f-c", "f-cd", "f-ce", "f-f", "improved"]
 ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
 
 
@@ -182,6 +185,35 @@ def make_pack(args, extra: list[str]):
     print(f"pack 저장: {pack} ({len(dets)}묶음, {size:.1f}MB)")
 
 
+def shift_pack(args):
+    """E(시간차 보정) 실험용: cam2 사진을 N 프레임 늦은 것처럼 만든 pack.
+    묶음 i 에 cam2 의 i-N 번째 사진(ts 도 그 시각)을 붙인다. 정답은 cam1 시각(= 더 늦은 시각) 그대로라서
+    서버가 두 사진 시간차를 보정하지 못하면 걷는 사람 위치가 늦은 카메라 쪽으로 끌려간다."""
+    src = PACK_DIR / args.source
+    pack = PACK_DIR / args.name
+    if pack.exists() and not args.force:
+        raise SystemExit(f"이미 있는 pack 이에요: {pack} (덮어쓰려면 --force)")
+    pack.mkdir(parents=True, exist_ok=True)
+    bundles = read_jsonl(src / "detections.jsonl.gz")
+    n = args.cam2_frames
+    shifted, deltas = [], []
+    for k in range(n, len(bundles)):
+        cam1 = next(f for f in bundles[k]["frames"] if f["camera_id"] == "cam1")
+        cam2 = next(f for f in bundles[k - n]["frames"] if f["camera_id"] == "cam2")
+        deltas.append(abs(int(cam1["ts"]) - int(cam2["ts"])))
+        shifted.append({**bundles[k], "frames": [cam1, cam2]})
+    write_jsonl(pack / "detections.jsonl.gz", shifted)
+    for name in ("calibration.json", "frames.jsonl.gz", "ground_truth.jsonl.gz"):
+        if (src / name).exists():
+            shutil.copy(src / name, pack / name)
+    meta = json.loads((src / "meta.json").read_text(encoding="utf-8"))
+    meta.update({"name": args.name, "shifted_from": args.source, "cam2_late_frames": n,
+                 "max_sync_delta_ms": max(deltas) + 50 if deltas else None,
+                 "pairs": len(shifted), "created": datetime.now().isoformat(timespec="seconds")})
+    (pack / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"pack 저장: {pack} ({len(shifted)}묶음, cam2 {n}프레임 늦음, 시간차 최대 {max(deltas) if deltas else 0}ms)")
+
+
 # ---------- 실험 ----------
 
 def calibrations(pack: Path) -> dict:
@@ -204,6 +236,8 @@ def replay(server: str, pack: Path, session_id: str, out: Path, send_gt: bool,
     failed = []
     stats = {"sent": 0, "failed": 0, "seconds": 0.0}
 
+    pack_meta = json.loads((pack / "meta.json").read_text(encoding="utf-8")) if (pack / "meta.json").exists() else {}
+    max_sync = pack_meta.get("max_sync_delta_ms")       # 시간차를 일부러 넣은 pack (shift)
     calib = calibrations(pack)
     for profile in profiles:
         for cam, body in calib[profile].items():
@@ -222,7 +256,10 @@ def replay(server: str, pack: Path, session_id: str, out: Path, send_gt: bool,
     with open(out / "responses_detections.jsonl", "w", encoding="utf-8") as f:
         for b in read_jsonl(pack / "detections.jsonl.gz"):
             try:
-                r = http.post(f"{server}/detections", json={**b, "session_id": session_id}, timeout=30)
+                body = {**b, "session_id": session_id}
+                if max_sync is not None:
+                    body["max_sync_delta_ms"] = max_sync
+                r = http.post(f"{server}/detections", json=body, timeout=30)
             except requests.RequestException as e:
                 failed.append({"path": "/detections", "pair_id": b["pair_id"], "error": str(e)})
                 stats["failed"] += 1
@@ -249,7 +286,14 @@ def results_to_responses(csv_text: str, pack: Path) -> list[dict]:
         for f in b["frames"]:
             ts_pair[int(f["ts"])] = b["pair_id"]
     matches = {p: {} for p in pairs}
+    risks = {p: [] for p in pairs}
     for r in csv.DictReader(csv_text.splitlines()):
+        if r["record_type"] == "risk" and r["object_id"] and r.get("object2_id"):
+            pair = int(r["pair_id"]) if r.get("pair_id") else ts_pair.get(int(float(r["timestamp_ms"])))
+            if pair in risks:
+                risks[pair].append({"object1_id": int(r["object_id"]), "object2_id": int(r["object2_id"]),
+                                    "level": r["level"], "distance_m": float(r["distance_m"] or "nan")})
+            continue
         if r["record_type"] != "position" or not r["object_id"]:
             continue
         item = {"object_id": int(r["object_id"]), "cls": r["cls"],
@@ -263,7 +307,7 @@ def results_to_responses(csv_text: str, pack: Path) -> list[dict]:
         if pair is None:
             continue
         matches[pair].setdefault(item["object_id"], item)          # 예전 csv: 카메라 두 줄 중 하나만
-    return [{"pair_id": p, "matches": list(matches[p].values())} for p in pairs]
+    return [{"pair_id": p, "matches": list(matches[p].values()), "risks": risks[p]} for p in pairs]
 
 
 def recompute(server: str, session_id: str, cond: str, pack: Path, out: Path) -> str | None:
@@ -305,7 +349,8 @@ def fmt(v, kind):
     return f"{v * 100:.1f}%" if kind == "rate" else (f"{v:.1f}" if isinstance(v, float) else str(v))
 
 
-FEATURE_NAMES = {"a": "발목", "c": "바닥추적", "g": "바닥", "h": "짝유지", "k": "칼만"}
+FEATURE_NAMES = {"a": "발목", "c": "바닥추적", "d": "한카메라", "e": "시간보정", "f": "경고유지",
+                 "g": "바닥", "h": "짝유지", "k": "칼만"}
 
 
 def cond_label(cond: str) -> str:
@@ -338,8 +383,8 @@ def ablation_markdown(rows: list[dict], cross_rows: list[dict], conditions: list
         return f"{text} ({dtxt} {'✅' if better else '❌'})"
 
     lines = ["### 기능별 효과 (사람, 기존 대비)", "",
-             "| pack | 조건 | 평균(cm) | 90%(cm) | 오매칭 | 놓침 | ID 바뀜 | 교차 둘 다 추적 | 교차 ID 바뀜 | 경고 놓침 | 경고 오경보 |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| pack | 조건 | 평균(cm) | 90%(cm) | 오매칭 | 놓침 | ID 바뀜 | 교차 둘 다 추적 | 교차 ID 바뀜 | 경고 놓침 | 경고 오경보 | 놓침 (여유 빼고) | 오경보 (여유 빼고) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for pack in packs:
         base, cbase = person.get((pack, BASE)), cross.get((pack, BASE))
         for cond in conditions:
@@ -355,9 +400,11 @@ def ablation_markdown(rows: list[dict], cross_rows: list[dict], conditions: list
             if c:
                 cells += [cell(c["both_1m"], cb("both_1m"), "rate", lower_better=False),
                           cell(c["id_switches_near"], cb("id_switches_near"), "num"),
-                          cell(c["warn_fn"], cb("warn_fn"), "num"), cell(c["warn_fp"], cb("warn_fp"), "num")]
+                          cell(c["warn_fn"], cb("warn_fn"), "num"), cell(c["warn_fp"], cb("warn_fp"), "num"),
+                          cell(c.get("warn_fn_band"), cb("warn_fn_band"), "num"),
+                          cell(c.get("warn_fp_band"), cb("warn_fp_band"), "num")]
             else:
-                cells += ["-"] * 4
+                cells += ["-"] * 6
             lines.append(f"| {pack} | {cond_label(cond)} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n\n"
 
@@ -457,7 +504,8 @@ def run_experiment(args):
             for cls, s in summarize(pos_rows, visible).items():
                 if cls in REPORT_CLASSES:
                     rows.append({"pack": p.name, "cls": cls, "cond": cond, **s})
-            c = crossing.crossing_metrics(pos_rows, gt)
+            c = crossing.crossing_metrics(pos_rows, gt,
+                                          crossing.risk_levels(read_jsonl(cond_out / "responses_detections.jsonl")))
             if c:
                 cross_rows.append({"pack": p.name, "cond": cond, **c})
         packs_meta[p.name] = {"session_id": session_id, **stats,
@@ -507,6 +555,12 @@ def main():
     p.add_argument("--force", action="store_true", help="같은 이름 pack 덮어쓰기")
     p.add_argument("--edge", default=None, help="엣지 설정 직접 지정. 예: model=coco,imgsz=1280,foot=box")
 
+    sh = sub.add_parser("shift", help="cam2 사진을 늦게 붙인 pack 만들기 (E 시간차 보정 실험용)")
+    sh.add_argument("source", help="원래 pack 이름. 예: s4-lr")
+    sh.add_argument("--name", required=True, help="새 pack 이름. 예: s4-lr-late1")
+    sh.add_argument("--cam2-frames", type=int, default=1, help="cam2 를 몇 프레임 늦출지 (Unity 1프레임 = 100ms)")
+    sh.add_argument("--force", action="store_true", help="같은 이름 pack 덮어쓰기")
+
     r = sub.add_parser("run", help="pack 들을 서버에 보내고 평가")
     r.add_argument("--server", required=True, help="예: http://121.182.60.2:32130")
     r.add_argument("--packs", default=None, help="쉼표로 구분. 기본: ai/eval/packs 전체")
@@ -524,6 +578,10 @@ def main():
     args, extra = parser.parse_known_args()
     if args.cmd == "pack":
         make_pack(args, [x for x in extra if x != "--"])
+    elif args.cmd == "shift":
+        if extra:
+            parser.error(f"알 수 없는 옵션: {extra}")
+        shift_pack(args)
     else:
         if extra:
             parser.error(f"알 수 없는 옵션: {extra}")
