@@ -2,6 +2,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# 칼만 잡음 값 (Unity s2·s4 오프라인 시뮬로 정함, 2026-10-13)
+#   측정 잡음 0.005 m² ≈ 위치 측정 오차 7cm (실제 측정 오차 수준)
+#   과정 잡음 30 → 사람이 방향을 틀어도 늦지 않게 따라감
+#   예전 값(1.0, 0.04)은 측정을 20cm 오차로 봐서 실제 위치보다 늦게 따라갔다
+KALMAN_PROCESS_NOISE = 30.0
+KALMAN_MEASUREMENT_NOISE = 0.005
+
 
 @dataclass
 class KalmanState:
@@ -49,7 +56,8 @@ def initialize_kalman(position, timestamp_ms: int) -> KalmanState:
 
 
 def update_kalman(state: KalmanState, position, timestamp_ms: int,
-                  process_noise: float = 1.0, measurement_noise: float = 0.04) -> KalmanState:
+                  process_noise: float = KALMAN_PROCESS_NOISE,
+                  measurement_noise: float = KALMAN_MEASUREMENT_NOISE) -> KalmanState:
     dt = (int(timestamp_ms) - state.timestamp_ms) / 1000.0
     if dt <= 0:
         return state

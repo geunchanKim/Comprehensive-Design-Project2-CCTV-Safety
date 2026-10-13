@@ -6,11 +6,23 @@ from backend.tracking import PairHysteresis, initialize_kalman, update_kalman, u
 def test_kalman_estimates_constant_velocity():
     state = initialize_kalman([0.0, 0.0, 0.0], timestamp_ms=0)
 
-    for second in range(1, 6):
-        state = update_kalman(state, [float(second), 0.0, 0.0], timestamp_ms=second * 1000)
+    # 실제 프레임 간격(약 100ms)으로 1초 동안 1m/s 이동
+    for step in range(1, 11):
+        state = update_kalman(state, [step * 0.1, 0.0, 0.0], timestamp_ms=step * 100)
 
-    assert np.allclose(state.mean[:3], [5.0, 0.0, 0.0], atol=0.1)
+    assert np.allclose(state.mean[:3], [1.0, 0.0, 0.0], atol=0.1)
     assert np.allclose(state.mean[3:], [1.0, 0.0, 0.0], atol=0.1)
+
+
+def test_kalman_follows_turn_without_lag():
+    # 1.2m/s로 걷다가 90도 꺾는 사람 (10fps). 꺾고 0.5초 뒤 측정 위치를 5cm 안으로 따라가야 한다.
+    # 예전 잡음 값(1.0, 0.04)은 여기서 약 26cm 뒤처졌다.
+    points = [(0.12 * i, 0.0) for i in range(11)] + [(1.2, 0.12 * i) for i in range(1, 6)]
+    state = initialize_kalman([*points[0], 0.0], timestamp_ms=0)
+    for i, (x, y) in enumerate(points[1:], start=1):
+        state = update_kalman(state, [x, y, 0.0], timestamp_ms=i * 100)
+
+    assert np.linalg.norm(state.mean[:2] - np.array(points[-1])) < 0.05
 
 
 def test_kalman_skips_non_increasing_timestamp():

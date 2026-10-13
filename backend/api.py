@@ -25,7 +25,8 @@ try:
     from .schemas import (Algorithm, CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                           GroundTruthIn, GroundTruthOut, ObjectClass)
     from .schemas import PnPCalibrationIn
-    from .tracking import (KalmanState, PairHysteresis, initialize_kalman,
+    from .tracking import (KALMAN_MEASUREMENT_NOISE, KALMAN_PROCESS_NOISE, KalmanState,
+                           PairHysteresis, initialize_kalman,
                            update_kalman, update_pair_hysteresis)
     from .risk import calculate_pair_risk
 except ImportError:  # Docker runs this directory as the import root.
@@ -39,7 +40,8 @@ except ImportError:  # Docker runs this directory as the import root.
     from schemas import (Algorithm, CalibrationProfile, CameraCalibrationIn, DetectionBundleIn, DetectionBundleOut,
                          GroundTruthIn, GroundTruthOut, ObjectClass)
     from schemas import PnPCalibrationIn
-    from tracking import (KalmanState, PairHysteresis, initialize_kalman,
+    from tracking import (KALMAN_MEASUREMENT_NOISE, KALMAN_PROCESS_NOISE, KalmanState,
+                          PairHysteresis, initialize_kalman,
                           update_kalman, update_pair_hysteresis)
     from risk import calculate_pair_risk
 
@@ -174,6 +176,8 @@ def _experiment_settings(algorithm: Algorithm):
         **_algorithm_settings(algorithm),
         "features": sorted(algorithm_features(algorithm)),
         "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
+        "kalman_process_noise": KALMAN_PROCESS_NOISE,
+        "kalman_measurement_noise": KALMAN_MEASUREMENT_NOISE,
         "bbox_position_method": BBOX_POSITION_METHOD,
         "track_pair_confirm_frames": TRACK_PAIR_CONFIRM_FRAMES,
         "track_pair_improvement_ratio": TRACK_PAIR_IMPROVEMENT_RATIO,
