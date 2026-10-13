@@ -781,6 +781,19 @@ def test_feature_conditions_recompute_from_one_upload():
         assert response.status_code == 422, response.text
 
 
+def test_improved_features_env_picks_feature_codes(monkeypatch):
+    monkeypatch.setattr(api_module, "IMPROVED_FEATURES", "gcfd")
+    assert api_module.algorithm_features("improved") == frozenset({"fallback", "floor", "ground", "hysteresis"})
+    assert api_module._algorithm_settings("improved")["floor_tracking"] is True
+    assert api_module._algorithm_settings("improved")["kalman_filter"] is False
+    monkeypatch.setattr(api_module, "IMPROVED_FEATURES", "d")      # c 없는 d는 거절
+    try:
+        api_module.algorithm_features("improved")
+    except ValueError:
+        return
+    raise AssertionError("improved without c should be rejected")
+
+
 def test_health_lists_feature_codes():
     codes = client.get("/health").json()["feature_codes"]
     assert codes == {"a": "ankle", "c": "floor", "d": "fallback", "e": "timesync", "f": "hysteresis",

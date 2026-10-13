@@ -78,7 +78,9 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 `algorithm=improved`는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. `baseline`은 에피폴라 매칭을 사용한다. 발목은 `Z=0.1m`, bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=2.0`이다. S4 자동 실험에서 1.0m는 놓침이 증가했지만 2.0m는 정상 추적 95.4%, 놓침 4.6%, ID 변경 1회로 기존 에피폴라 방식(93.6%, 6.4%, 7회)보다 개선됐다. 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
 
-`algorithm=improved`에서는 기본적으로 칼만 필터와 트랙 쌍 유지가 함께 적용된다. `ENABLE_KALMAN_FILTER=false`로 칼만 필터만 끌 수 있다. 활성화되면 객체별 `[x, y, z, vx, vy, vz]` 상태를 DB에 저장하고 다음 프레임에서 이어서 보정한다. 이때 `world`는 보정 위치, `raw_world`는 보정 전 위치, `velocity`는 초당 월드 좌표 속도다. `baseline`에서는 환경변수와 관계없이 적용하지 않는다.
+`improved`에 켤 기능은 `IMPROVED_FEATURES`(기능 글자, 배포 기본값 `cdfg` = 바닥추적 + 한 카메라 보완 + 경고 유지 + 바닥 짝짓기)로 정한다. Unity 기능별 실험(2026-10-13)에서 효과가 확인된 것만 넣었고, `e`(시간차 보정)는 교차 구간 ID 바뀜이 늘어 빠졌다. `IMPROVED_FEATURES`를 비우면 아래 예전 방식(`ENABLE_*`)을 쓴다.
+
+예전 방식의 `algorithm=improved`에서는 기본적으로 칼만 필터와 트랙 쌍 유지가 함께 적용된다. `ENABLE_KALMAN_FILTER=false`로 칼만 필터만 끌 수 있다. 활성화되면 객체별 `[x, y, z, vx, vy, vz]` 상태를 DB에 저장하고 다음 프레임에서 이어서 보정한다. 이때 `world`는 보정 위치, `raw_world`는 보정 전 위치, `velocity`는 초당 월드 좌표 속도다. `baseline`에서는 환경변수와 관계없이 적용하지 않는다.
 
 트랙 쌍 유지는 `improved`에서 기본 활성화되며 `ENABLE_TRACK_PAIR_HOLD=false`로 이것만 끌 수 있다. 기존 카메라 간 트랙 쌍을 우선 유지하고, 새 상대의 비용이 기존 상대의 `TRACK_PAIR_IMPROVEMENT_RATIO` 배 이하인 상태가 `TRACK_PAIR_CONFIRM_FRAMES`번 연속되어야 교체를 허용한다. 기본값은 각각 `0.9`, `3`이다. 현재 상대와 도전자 연속 횟수는 `track_pair_states`에 저장된다.
 
