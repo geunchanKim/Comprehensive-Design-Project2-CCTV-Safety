@@ -1,0 +1,21 @@
+{
+  "mode": "degraded-common-marker",
+  "reference_marker_id": 1,
+  "reference_marker_size_m": 0.27,
+  "reference_marker_world_center_m": [2.0, 0.0, 0.0],
+  "reference_axes": "ID 1 printed marker axes; marker center translated to the supplied (2, 0, 0) coordinate",
+  "reason": "CAM2 consistently detected only IDs 1, 5, and 7; ID 1 was the nearest marker detected by both cameras.",
+  "cam1": {
+    "used_images": 15,
+    "detected_ids": [0, 1, 3, 4, 6, 7],
+    "reprojection_rmse_px": 0.39351069927215576,
+    "camera_center_world_m": [-5.327335446250007, -2.594417961185731, 2.9496963443911772]
+  },
+  "cam2": {
+    "used_images": 15,
+    "detected_ids": [1, 5, 7],
+    "reprojection_rmse_px": 0.5104726552963257,
+    "camera_center_world_m": [10.208663913166614, -3.1812947855136935, 2.3720594960836148]
+  },
+  "warning": "The precise profile intentionally duplicates the basic common-marker solution because the available CAM2 frames do not contain enough reliably detected floor markers for an independently validated multi-point solution."
+}
