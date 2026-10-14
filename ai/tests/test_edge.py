@@ -358,3 +358,70 @@ def test_shift_pack_makes_cam2_late(tmp_path, monkeypatch):
     assert shifted[0]["frames"][1]["detections"] == [{"track_id": 1}]
     meta = json.loads((tmp_path / "late" / "meta.json").read_text(encoding="utf-8"))
     assert meta["max_sync_delta_ms"] == 150 and meta["cam2_late_frames"] == 1
+
+
+def _down_looking_calib():
+    """(0, -3, 2)에서 바닥 원점을 내려다보는 카메라 두 대 (cam2는 x로 1m 옆)"""
+    out = {}
+    for cam, cx in (("cam1", 0.0), ("cam2", 1.0)):
+        center, target = np.array([cx, -3.0, 2.0]), np.array([cx, 0.0, 0.0])
+        forward = (target - center) / np.linalg.norm(target - center)
+        right = np.cross(forward, [0.0, 0.0, 1.0])
+        right /= np.linalg.norm(right)
+        rotation = np.vstack([right, np.cross(forward, right), forward])
+        rvec, _ = cv2.Rodrigues(rotation)
+        body = {"method": "test", "image_size": [1920, 1080], "K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]],
+                "dist": [0, 0, 0, 0, 0], "rvec": rvec.reshape(3).tolist(), "tvec": (-rotation @ center).tolist(),
+                "reproj_error_px": 0}
+        out[cam] = {"basic": body, "precise": body}
+    return out
+
+
+def test_real_pack_keeps_all_detections_and_scores_only_gt_frames(tmp_path):
+    """실측 pack: 탐지는 전부 넣고 정답은 일부 프레임만. 채점은 정답 프레임만 한다"""
+    import run_experiment as rx
+    import real_pack
+    edge = tmp_path / "edge"
+    edge.mkdir()
+    rx.write_jsonl(edge / "sent_detections.jsonl",
+                   [{"session_id": "s", "pair_id": p, "frames": []} for p in (1, 2, 3)])
+    (tmp_path / "calib.json").write_text(json.dumps(_down_looking_calib()), encoding="utf-8")
+    rx.write_jsonl(tmp_path / "gt.jsonl", [{"frame": 2, "objects": [
+        {"object_id": "person_1", "cls": "person", "rel": [0.5, 0.5, 0]},
+        {"object_id": "person_2", "cls": "person", "rel": [0.0, -10.0, 0]},    # 카메라 뒤
+        {"object_id": "chair_1", "cls": "chair", "rel": [1.0, 0.0, 0]}]}])
+    pack = real_pack.make_real_pack(edge, tmp_path / "gt.jsonl", tmp_path / "calib.json", "real-x",
+                                    real_pack.parse_exclude("2:chair_1"), pack_root=tmp_path / "packs")
+    assert len(rx.read_jsonl(pack / "detections.jsonl.gz")) == 3
+    assert "session_id" not in rx.read_jsonl(pack / "detections.jsonl.gz")[0]
+    frames = rx.read_jsonl(pack / "frames.jsonl.gz")
+    objects = {o["object_id"]: o for o in frames[0]["objects"]}
+    assert set(objects) == {"person_1", "person_2"}                          # 뺀 의자 없음
+    assert objects["person_1"]["world"] == [0.5, 0, 0.5]                     # 바닥 (x, y) → Unity [x, 0, y]
+    assert set(objects["person_1"]["bbox"]) == {"cam1", "cam2"}
+    assert objects["person_2"]["bbox"] == {}
+    meta = json.loads((pack / "meta.json").read_text(encoding="utf-8"))
+    assert meta["sparse_gt"] and meta["gt_frames"] == [2] and meta["excluded_count"] == 1
+
+    out = tmp_path / "out"
+    out.mkdir()
+    hit = {"object_id": 7, "cls": "person", "world": {"x": 0.52, "y": 0.5, "z": 0.1}}
+    rx.write_jsonl(out / "responses_detections.jsonl",
+                   [{"pair_id": 1, "matches": [hit]}, {"pair_id": 2, "matches": [hit]}, {"pair_id": 3, "matches": [hit]}])
+    rows, visible = rx.score(out, pack, 50.0)
+    assert [(r["frame"], r["status"]) for r in rows] == [(2, "ok")]          # 정답 없는 1·3 프레임은 채점 안 함
+    assert visible == {"person": 1}
+    assert not (out / "gt_only").exists()
+
+
+def test_real_pack_refuses_gt_frame_missing_from_detections(tmp_path):
+    import run_experiment as rx
+    import real_pack
+    edge = tmp_path / "edge"
+    edge.mkdir()
+    rx.write_jsonl(edge / "sent_detections.jsonl", [{"pair_id": 1, "frames": []}])
+    (tmp_path / "calib.json").write_text(json.dumps(_down_looking_calib()), encoding="utf-8")
+    rx.write_jsonl(tmp_path / "gt.jsonl", [{"frame": 5, "objects": []}])
+    with pytest.raises(SystemExit):
+        real_pack.make_real_pack(edge, tmp_path / "gt.jsonl", tmp_path / "calib.json", "real-y", set(),
+                                 pack_root=tmp_path / "packs")
