@@ -2,7 +2,7 @@
 실시간 녹화·전송: 카메라 두 대 영상을 받아 "같은 순간" 프레임끼리 짝짓고, 저장하고(기본), 탐지해서 서버로 보낸다(--send).
 
 저장 형식은 Unity 폴더와 같다. 그래서 녹화한 폴더를 unity_reader.py에 그대로 넣어 탐지·서버 전송을 다시 할 수 있다.
-  runs/real/<이름>-<시각>/
+  runs/real/<이름>-<시각>/   (--name 을 주면 --out/<이름>/ 그대로, 예: --out runs/real/s1 --name t1 → runs/real/s1/t1/)
     cam1/000001.jpg, cam2/000001.jpg   짝지은 프레임 (같은 번호 = 같은 순간)
     frames.jsonl                       짝마다 한 줄: frame, ts, objects(빈 목록), cam1·cam2 시각, dt_ms
     stamps.jsonl                       받은 프레임 전부의 시각 (짝 못 지은 것 포함, 끊김·지연 분석용)
@@ -247,7 +247,8 @@ def main():
     parser = argparse.ArgumentParser(description="카메라 두 대 동시 녹화·실시간 전송")
     parser.add_argument("--cam1", required=True, help="웹캠 번호, 영상 파일, tapo:IP, rtsp://...")
     parser.add_argument("--cam2", required=True)
-    parser.add_argument("--name", default=None, help="녹화 폴더 이름 앞부분 (기본: session_id, 없으면 rec)")
+    parser.add_argument("--name", default=None,
+                        help="녹화 폴더 이름 그대로 (예: t1). 안 주면 session_id(없으면 rec)-시각. 이미 있으면 멈춤")
     parser.add_argument("--out", default=str(OUT_ROOT))
     parser.add_argument("--seconds", type=float, default=0, help="녹화 시간 (0 = q나 Ctrl+C로 끝낼 때까지)")
     parser.add_argument("--tol-ms", type=float, default=MAX_SYNC_DELTA_MS, help="짝으로 인정할 최대 시각 차이")
@@ -278,8 +279,12 @@ def main():
         if not args.dry_run and not args.server:
             raise SystemExit("--server 주소를 주거나 --dry-run 으로 실행하세요")
 
-    name = args.name or args.session or "rec"
-    out_dir = Path(args.out).expanduser() / f"{name}-{datetime.now():%Y%m%d-%H%M%S}"
+    if args.name:   # --name 을 주면 그 이름 그대로 (예: --out runs/real/s1 --name t1 → runs/real/s1/t1)
+        out_dir = Path(args.out).expanduser() / args.name
+        if out_dir.exists() and any(out_dir.iterdir()):
+            raise SystemExit(f"이미 녹화가 있어요: {out_dir}\n  덮어쓰지 않으려고 멈춰요. 회차 번호를 올리세요 (예: t2)")
+    else:           # 안 주면 session_id(없으면 rec) + 시각
+        out_dir = Path(args.out).expanduser() / f"{args.session or 'rec'}-{datetime.now():%Y%m%d-%H%M%S}"
     rec = Recorder(out_dir, args.tol_ms, args.cam2_offset_ms, args.jpeg_quality, save=not args.no_save)
     sender = make_sender(args, rec) if args.send else None   # 모델을 먼저 불러온 뒤 카메라를 연다
     if sender:
