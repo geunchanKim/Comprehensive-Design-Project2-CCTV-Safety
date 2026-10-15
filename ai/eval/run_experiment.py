@@ -20,6 +20,9 @@ pack 구조: ai/eval/packs/<이름>/
         --gt runs/unity/unity-classroom-04/unity-classroom-03-s4 --note "coco 1280, foot box"
   pack 만들기 — Unity 폴더에서 (unity_reader --dry-run 으로 탐지부터)
     python eval/run_experiment.py pack runs/unity/unity-classroom-03-s1 --name s1-ankle -- --foot ankle
+  실측 정지 프레임 pack 만들기 (전체 탐지 + 일부 프레임 정답, 정답 프레임만 채점) → eval/real_pack.py
+    python eval/real_pack.py --edge runs/edge/classroom-1014-s1-t1-v5 --gt <정답 frames.jsonl> \\
+        --calib calibration/output/calib-classroom-1014-floorcross.json --name real-s1-t1
   시간차 pack 만들기 (E 실험용, cam2 를 1프레임 = 100ms 늦게)
     python eval/run_experiment.py shift s4-lr --name s4-lr-late1 --cam2-frames 1
   실험
@@ -330,12 +333,25 @@ def recompute(server: str, session_id: str, cond: str, pack: Path, out: Path) ->
 
 
 def score(out: Path, pack: Path, thr: float) -> tuple[list[dict], dict]:
-    """out/responses_detections.jsonl 을 pack 정답과 1:1 평가 → (위치 줄, 클래스별 기회)"""
+    """out/responses_detections.jsonl 을 pack 정답과 1:1 평가 → (위치 줄, 클래스별 기회)
+    실측 pack(meta.json 의 sparse_gt)은 정답이 일부 프레임에만 있어서 그 프레임의 응답만 채점한다.
+    (정답 없는 프레임의 결과를 "오매칭"으로 세지 않도록)"""
+    gt_rows = read_jsonl(pack / "frames.jsonl.gz")
+    meta = json.loads((pack / "meta.json").read_text(encoding="utf-8")) if (pack / "meta.json").exists() else {}
+    src = out
+    if meta.get("sparse_gt"):
+        gt_frames = {int(g["frame"]) for g in gt_rows}
+        src = out / "gt_only"
+        src.mkdir(exist_ok=True)
+        write_jsonl(src / "responses_detections.jsonl",
+                    [r for r in read_jsonl(out / "responses_detections.jsonl") if int(r["pair_id"]) in gt_frames])
     gt_dir = out / "gt"
     gt_dir.mkdir(exist_ok=True)
-    write_jsonl(gt_dir / "frames.jsonl", read_jsonl(pack / "frames.jsonl.gz"))
-    pos_rows, visible = evaluate(out, gt_dir, thr)
+    write_jsonl(gt_dir / "frames.jsonl", gt_rows)
+    pos_rows, visible = evaluate(src, gt_dir, thr)
     shutil.rmtree(gt_dir)
+    if src != out:
+        shutil.rmtree(src)
     with open(out / "position_errors.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=sorted({k for r in pos_rows for k in r}))
         w.writeheader()
