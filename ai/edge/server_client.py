@@ -40,6 +40,7 @@ class ServerClient:
         self.failed_path = out_dir / "failed.jsonl"
         self.stats = {"sent": 0, "failed": 0, "dropped": 0}
         self.status_counts: Counter = Counter()      # (경로, 상태 코드) → 개수
+        self.last_failure = None                     # (경로, 상태 코드, 응답) 가장 최근 실패. 실시간에서 멈출지 판단용
 
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._session = requests.Session()
@@ -153,6 +154,7 @@ class ServerClient:
                 except (TypeError, ValueError):
                     pass
                 self._append(self.failed_path, {"path": path, "status": status, "response": body, "message": message})
+                self.last_failure = (path, status, body)
                 if self.status_counts[(path, status)] in (1, 10) or self.status_counts[(path, status)] % 100 == 0:
                     print(f"[전송 실패] {path} → {status} {str(body)[:200]}")
             finally:

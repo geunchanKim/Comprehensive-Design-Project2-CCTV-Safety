@@ -1,0 +1,2 @@
+{"frame": 127, "objects": [{"object_id": "person_1", "cls": "person", "rel": [0, 1, 0]}, {"object_id": "person_2", "cls": "person", "rel": [5, 1, 0]}], "source": "claude-verified-1015"}
+{"frame": 171, "objects": [{"object_id": "person_1", "cls": "person", "rel": [4, 1, 0]}], "source": "claude-verified-1015"}

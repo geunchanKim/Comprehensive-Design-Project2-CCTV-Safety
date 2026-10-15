@@ -1,0 +1,43 @@
+{
+  "name": "real-s5-t1",
+  "source": "runs/edge/classroom-1014-s5-t1-v5",
+  "gt": "runs/gt/classroom-1014-v2/diy-1014-s5-t1/frames.jsonl",
+  "calibration": "calibration/output/calib-classroom-1014-2x2b.json",
+  "note": "실측 정지 프레임: 전체 탐지 + 정답 프레임만 채점",
+  "sparse_gt": true,
+  "edge": {
+    "model": "coco",
+    "imgsz": 1280,
+    "foot": "ankle",
+    "classes": [
+      "person",
+      "chair",
+      "suitcase",
+      "backpack"
+    ],
+    "conf": 0.4,
+    "class_conf": {
+      "person": 0.5,
+      "chair": 0.4,
+      "suitcase": 0.4,
+      "backpack": 0.4
+    },
+    "tracker": "bytetrack.yaml"
+  },
+  "pairs": 386,
+  "gt_frames": [
+    111,
+    163
+  ],
+  "gt_objects": {
+    "person": 5,
+    "chair": 0
+  },
+  "gt_visible_both": {
+    "person": 5,
+    "chair": 0
+  },
+  "excluded": [],
+  "excluded_count": 0,
+  "created": "2026-10-15T16:35:34"
+}

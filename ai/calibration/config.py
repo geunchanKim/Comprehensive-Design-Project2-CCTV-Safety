@@ -36,8 +36,10 @@ ARUCO_DICTIONARY_ID = cv2.aruco.DICT_4X4_50
 # 생성할 마커 ID
 ARUCO_MARKER_IDS = list(range(8))
 
-# 실제 출력 규격: 180 × 180mm (검은 마커 영역 기준)
-ARUCO_MARKER_LENGTH_M = 0.180
+# 실제 실험 출력물 실측 규격: 176 × 176mm (검은 마커 영역 기준)
+ARUCO_MARKER_LENGTH_M = 0.176
+# 다점 PnP는 중심만 사용하므로 ID 1~7은 원거리 검출을 위해 크게 출력한다.
+ARUCO_GRID_MARKER_LENGTH_M = 0.270
 
 
 # ─────────────────────────────────────────────
@@ -48,6 +50,8 @@ DPI = 300
 
 A4_WIDTH_MM = 210
 A4_HEIGHT_MM = 297
+A3_WIDTH_MM = 297
+A3_HEIGHT_MM = 420
 
 CAMERA_INDEX = 0
 CAMERA_WIDTH = 1920

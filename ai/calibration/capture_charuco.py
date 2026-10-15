@@ -1,6 +1,4 @@
 import argparse
-import getpass
-import os
 import time
 
 import cv2
@@ -16,6 +14,7 @@ from config import (
     CHARUCO_SQUARES_X,
     CHARUCO_SQUARES_Y,
 )
+from capture_source import add_camera_args, next_image, open_camera
 
 
 def create_detector():
@@ -38,41 +37,15 @@ def create_detector():
 def main() -> None:
     parser = argparse.ArgumentParser(description="ChArUco 이미지 촬영")
     parser.add_argument("--camera-id", required=True)
-    parser.add_argument(
-        "--camera-ip",
-        help="Tapo 등 RTSP 카메라 IP 주소 (예: 192.168.0.25)",
-    )
+    add_camera_args(parser)
     args = parser.parse_args()
     captures_dir = CAPTURES_DIR / args.camera_id
     captures_dir.mkdir(parents=True, exist_ok=True)
 
     detector = create_detector()
 
-    camera_source = None
-    if args.camera_ip:
-        username = input("카메라 계정 사용자 이름: ").strip()
-        password = getpass.getpass("카메라 계정 비밀번호: ")
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-        camera_source = (
-            f"rtsp://{username}:{password}@"
-            f"{args.camera_ip}:554/stream1"
-        )
-        camera = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
-    else:
-        camera = cv2.VideoCapture(CAMERA_INDEX)
-
-    if not camera.isOpened():
-        raise RuntimeError("카메라를 열 수 없습니다.")
-
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-
-    actual_width = int(
-        camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-    )
-    actual_height = int(
-        camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    )
+    camera = open_camera(args, args.camera_id)
+    actual_width, actual_height = camera.size
 
     print(f"실제 해상도: {actual_width} × {actual_height}")
     print("SPACE: 저장")
@@ -81,18 +54,7 @@ def main() -> None:
     saved_count = len(list(captures_dir.glob("*.png")))
 
     while True:
-        success, frame = camera.read()
-
-        if not success:
-            if camera_source is None:
-                print("카메라 프레임을 읽지 못했습니다.")
-                break
-
-            print("RTSP 프레임이 끊겼습니다. 다시 연결합니다...")
-            camera.release()
-            time.sleep(1)
-            camera = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
-            continue
+        frame = next_image(camera)
 
         preview = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -198,7 +160,7 @@ def main() -> None:
         elif key == ord("q") or key == 27:
             break
 
-    camera.release()
+    camera.stop()
     cv2.destroyAllWindows()
 
 
