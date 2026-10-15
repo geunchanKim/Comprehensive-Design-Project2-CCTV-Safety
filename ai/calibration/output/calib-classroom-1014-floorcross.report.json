@@ -93,5 +93,6 @@
     }
   },
   "gt_check": "clroom 정답 23프레임을 두 카메라에 투영해 사람 발·의자 위치와 일치 확인 (s10-t1 510 chair_1 은 기록 오류로 보임)",
-  "replaces": "calib-classroom-1014.json (ID 1 단일 마커, 크기 0.27m 로 잘못 계산 → 거리 1.53배)"
+  "replaces": "calib-classroom-1014.json (ID 1 단일 마커, 크기 0.27m 로 잘못 계산 → 거리 1.53배)",
+  "server_method_field": "charuco-aruco (서버 스키마가 unity-gt/charuco-aruco만 받음. 내부 파라미터는 ChArUco, 외부 파라미터는 바닥 십자 PnP)"
 }

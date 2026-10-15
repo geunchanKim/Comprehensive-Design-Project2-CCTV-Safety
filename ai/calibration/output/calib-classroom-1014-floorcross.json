@@ -2,7 +2,7 @@
   "cam1": {
     "basic": {
       "calibration_profile": "basic",
-      "method": "floor-cross-pnp",
+      "method": "charuco-aruco",
       "image_size": [
         1920,
         1080
@@ -45,7 +45,7 @@
     },
     "precise": {
       "calibration_profile": "precise",
-      "method": "floor-cross-pnp",
+      "method": "charuco-aruco",
       "image_size": [
         1920,
         1080
@@ -91,7 +91,7 @@
   "cam2": {
     "basic": {
       "calibration_profile": "basic",
-      "method": "floor-cross-pnp",
+      "method": "charuco-aruco",
       "image_size": [
         1920,
         1080
@@ -134,7 +134,7 @@
     },
     "precise": {
       "calibration_profile": "precise",
-      "method": "floor-cross-pnp",
+      "method": "charuco-aruco",
       "image_size": [
         1920,
         1080
