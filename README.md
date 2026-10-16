@@ -1,74 +1,113 @@
 # CCTV Safety
 
-> 두 대의 CCTV 영상에서 객체를 탐지·추적하고, 멀티뷰 기하로 3D 위치를 복원하는 산업현장 안전 모니터링 프로젝트
+> 저가 IP 카메라 2대에서 작업자를 탐지·추적하고 바닥 위치를 추정하는 산업현장 안전 모니터링 프로젝트
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![YOLO](https://img.shields.io/badge/YOLO-11-111F68)
 ![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white)
-![Status](https://img.shields.io/badge/status-integration_testing-orange)
+![Status](https://img.shields.io/badge/status-paper_writing-blue)
 
 ## Overview
 
-CCTV Safety는 두 카메라의 2D 탐지 결과를 같은 객체끼리 연결하고 삼각측량하여 실제 공간의 3D 위치를 추정합니다. 실제 위험 상황을 반복 재현하기 어려운 문제를 해결하기 위해 Unity를 가상 CCTV 환경으로 사용하며, Unity 정답 좌표와 추정 좌표를 비교해 오차를 측정합니다.
+CCTV Safety는 TP-Link Tapo C200 두 대의 RTSP 영상에서 작업자를 검출하고, 서로 다른 카메라에 나타난 같은 작업자를 연결하여 실제 바닥 위치를 추정합니다. YOLO11n과 YOLO11n-pose로 사람과 발목을 찾고, ByteTrack으로 카메라별 궤적을 만든 뒤 렌즈 보정, 다중 카메라 대응, 바닥 추적을 적용합니다.
 
-현재 `person`, `chair`, `cart`, `desk` 탐지부터 카메라별 ByteTrack 추적, 서버 전송, 에피폴라 매칭, 3D 삼각측량, Ground Truth 저장까지 연결되어 있습니다. 실제 CCTV 전환을 위한 ChArUco·ArUco 캘리브레이션 도구도 제공합니다.
+연구의 핵심 질문은 다음 두 가지입니다.
 
-### 현재 검증 결과
+1. ChArUco 보드로 광각 렌즈를 캘리브레이션하는 수고가 실제 위치 추정에 도움이 되는가?
+2. 바닥 기반 대응·추적과 한 카메라 보완을 적용하면 가림과 혼잡 상황에서 무엇이 개선되는가?
+
+실제 촬영 실험과 분석을 완료했으며, 현재 결과를 바탕으로 논문을 작성하고 있습니다. Unity는 초기 파이프라인 개발, 반복 가능한 가상 데이터 생성, Ground Truth 기반 검증에 사용합니다.
+
+### 실제 카메라 실험 결과
 
 | 항목 | 결과 |
 | --- | --- |
-| Unity 샘플 | `unity-classroom-01`, 10프레임 |
-| 사람 탐지 | cam1 10/10, cam2 6/10 |
-| Unity 캘리브레이션 왕복 오차 | 0 mm |
-| 양쪽 카메라 탐지 쌍 | 6쌍 |
-| 탐지 쌍 에피폴라 거리 | 약 11–22 px |
-| 직접 삼각측량 바닥 오차 | 약 20 cm |
-| 실제 서버 연동 | calibration, detections, ground-truth HTTP 200/201 |
-| 백엔드 자동 테스트 | 8 passed |
+| 카메라 | Tapo C200 2대, 1920×1080, 30 fps |
+| 설치 높이 | 1.92 m, 1.83 m |
+| 실험 데이터 | 10개 시나리오, 15개 녹화, 정지 장면 50개 |
+| 평가 대상 | 사람 107명, 의자 52개 |
+| 렌즈 보정 재투영 오차 | cam1 13.6 → 5.9 px, cam2 6.6 → 5.0 px |
+| 화면 가장자리 사람 | 기본 방법 0/9 → 렌즈 보정 후 9/9 위치 추정 성공 |
+| 최종 사람 위치 추정 | 107명 중 99% 성공, 92.5%가 바닥 오차 15 cm 이내 |
+| 현장 기록 69명 평균 오차 | 개선 알고리즘만 9.0 cm → 렌즈 보정 병행 8.4 cm |
+| 현장 기록 69명 상위 10% 오차 | 16.2 cm → 13.7 cm |
 
-> 위 수치는 제한된 Unity 샘플의 중간 검증 결과이며 최종 성능 지표가 아닙니다.
+> 성공은 추정 위치가 정답 십자 좌표에서 50 cm 이내인 경우입니다. `99%`는 YOLO의 일반적인 분류 정확도가 아니라 최종 바닥 위치 추정 성공률입니다.
+
+렌즈 보정은 화면 중앙의 오차를 조금 줄이는 것보다 화면 가장자리에서 두 카메라의 작업자를 대응시키는 데 더 큰 효과가 있었습니다. 개선 알고리즘은 기존에 찾던 사람의 정확도를 유지하면서 기본 방법이 놓친 18명을 바닥 대응 12명, 한 카메라 보완 6명으로 추가 복원했습니다.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U[Unity 가상환경<br/>cam1 · cam2 · GT] --> E[Edge Pipeline]
-    C[실제 CCTV 2대] --> E
-    E --> Y[YOLO v2 탐지<br/>ByteTrack 추적]
-    Y --> D[POST /detections]
+    C[Tapo C200 2대<br/>RTSP] --> E
+    E --> Y[YOLO11n 탐지<br/>YOLO11n-pose 발목<br/>ByteTrack 추적]
+    Y --> D[동기 프레임<br/>POST /detections]
     U --> G[POST /ground-truth]
-    UC[Unity cameras.json] --> K[카메라 캘리브레이션]
-    RC[ChArUco · ArUco] --> K
-    K --> P[PUT /cameras/id/calibration]
+    UC[Unity cameras.json] --> CAL[카메라 캘리브레이션]
+    RC[ChArUco · ArUco] --> CAL
+    CAL --> P[PUT /cameras/id/calibration]
     D --> B[FastAPI Backend]
     G --> B
     P --> B
-    B --> M[에피폴라 매칭]
-    M --> T[3D 삼각측량]
-    T --> V[GT 오차 평가]
+    B --> M[렌즈 보정<br/>에피폴라·바닥 대응]
+    M --> T[삼각측량<br/>한 카메라 보완]
+    T --> S[바닥 추적<br/>거리·TTC·경고 유지]
+    S --> V[실측·GT 오차 평가]
 ```
 
-1. Unity 폴더 또는 실제 CCTV에서 두 카메라 영상을 가져옵니다.
-2. 카메라마다 독립적으로 YOLO 탐지와 ByteTrack 추적을 수행합니다.
-3. bbox 하단 중앙을 객체의 바닥 접점으로 사용합니다.
-4. 백엔드는 같은 클래스의 탐지를 에피폴라 거리와 헝가리안 알고리즘으로 연결합니다.
-5. 연결된 두 점을 삼각측량해 월드 좌표를 계산합니다.
-6. Unity 실험에서는 Ground Truth와 비교해 위치 오차를 평가합니다.
+1. Unity 폴더 또는 실제 CCTV에서 두 카메라 영상을 가져오고, 촬영 시각 차이가 50 ms 이내인 프레임을 묶습니다.
+2. 카메라마다 YOLO11n 탐지와 ByteTrack 추적을 수행합니다.
+3. 사람은 YOLO11n-pose의 좌우 발목 중간점을 바닥 접점으로 사용하고, 발목을 찾지 못하면 bbox 하단 중앙으로 대체합니다.
+4. 렌즈 왜곡을 보정한 뒤 에피폴라 제약과 바닥 평면상의 거리를 이용해 같은 작업자를 연결합니다.
+5. 양쪽 카메라에 보이면 삼각측량하고, 한쪽에만 보이면 카메라 시선과 발목 높이 평면의 교점으로 위치를 보완합니다.
+6. 바닥 좌표에 통합 추적 ID를 부여하고 거리·속도·TTC를 계산합니다.
+7. 실제 촬영은 테이프 십자 실측 좌표, Unity 실험은 Ground Truth와 비교해 위치 오차를 평가합니다.
 
 ## Features
 
 | 영역 | 구현 내용 | 상태 |
 | --- | --- | :---: |
-| AI | YOLO v2 `person`, `chair`, `cart`, `desk` 탐지 | ✅ |
-| Tracking | 카메라별 ByteTrack 객체 추적 | ✅ |
-| Edge | Unity 폴더 읽기, dry-run, 비동기 서버 전송 | ✅ |
-| Calibration | Unity `cameras.json` → `K`, `rvec`, `tvec` 변환 | ✅ |
-| Calibration | 실제 CCTV용 ChArUco·ArUco 도구 | ✅ |
-| Backend | 캘리브레이션·탐지·Ground Truth API | ✅ |
-| Geometry | 에피폴라 매칭과 3D 삼각측량 | ✅ |
-| Evaluation | Unity GT 저장과 좌표 오차 비교 기반 | 🚧 |
-| Safety | PPE 착용 판별과 3D TTC 위험 판단 | 📋 |
+| AI | YOLO11n 객체 탐지, YOLO11n-pose 발목 추출 | ✅ |
+| Tracking | 카메라별 ByteTrack 및 바닥 좌표 통합 추적 | ✅ |
+| Edge | Unity 폴더·영상·웹캠·Tapo RTSP 입력, 동시 녹화, 서버 전송 | ✅ |
+| Calibration | Unity 파라미터 변환, 실제 CCTV ChArUco·ArUco 캘리브레이션 | ✅ |
+| Matching | 렌즈 보정, 에피폴라 제약, 바닥 기반 1:1 대응 | ✅ |
+| Position | 발목 삼각측량 및 한 카메라 누락 보완 | ✅ |
+| Evaluation | 2×2 조건 실험, 위치 오차·놓침·오매칭·ID 전환 자동 평가 | ✅ |
+| Safety | Kalman 속도 추정, 거리·TTC, 위험 경고 유지 | ✅ |
+| UI | 실시간 관제 및 결과 시각화 | 🚧 |
+
+## Experiment
+
+실제 실험은 렌즈 캘리브레이션(`C`)과 개선 알고리즘(`A`)의 효과를 분리하기 위해 2×2 조건으로 비교했습니다.
+
+| 조건 | 렌즈 캘리브레이션 | 개선 알고리즘 |
+| --- | :---: | :---: |
+| 기본 | X | X |
+| C | O | X |
+| A | X | O |
+| C+A | O | O |
+
+`A`는 다음 네 기능의 묶음입니다.
+
+- **바닥 대응**: 각 발 위치를 바닥 평면에 투영하고 2 m 이내의 가장 가까운 사람을 두 카메라 사이에서 연결합니다.
+- **바닥 추적**: 카메라별 ID 대신 바닥 위 궤적에 통합 ID를 부여합니다.
+- **한 카메라 보완**: 한 카메라에만 보이면 시선과 높이 0.15 m 평면의 교점으로 위치를 추정합니다.
+- **경고 유지**: 거리가 1.0 m 미만이면 경고를 켜고 1.1 m 이상에서 꺼 경계 부근의 깜빡임을 줄입니다.
+
+사람 정답은 ArUco ID 0 중심을 원점으로 설치한 1 m 간격 테이프 십자의 실측 좌표입니다. 정답과 추정 결과를 1:1 배정하고 50 cm 이내면 성공으로 판정했습니다. 이미 찾던 사람의 위치 오차는 Wilcoxon 검정과 ±2 cm 동등성 검정(TOST)으로 비교했습니다.
+
+### 연구 결론과 한계
+
+- 렌즈 캘리브레이션은 특히 광각 화면 가장자리의 대응 실패를 해결했습니다.
+- 개선 알고리즘은 기존 위치 정확도를 유지하면서 가림·혼잡·단일 카메라 검출 상황의 재현율을 높였습니다.
+- 두 개선은 서로 다른 실패 원인을 해결하므로 함께 적용하는 것이 가장 효과적이었습니다.
+- 가장자리 평가는 9명과 두 위치에 한정되며, 현재 논문은 정지 장면을 중심으로 평가했습니다.
+- 의자는 카메라마다 bbox 하단이 서로 다른 다리를 가리켜 성공률 개선이 65%에서 69%로 제한적이었습니다.
+- 향후 걷는 장면의 추적·경고 평가와 한 카메라 보완의 고정 발목 높이 가정을 개선할 예정입니다.
 
 ## Repository
 
@@ -214,13 +253,13 @@ cam2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야
 
 ## API Summary
 
-| Method | Endpoint | 설명 |
-| --- | --- | --- |
-| `GET` | `/health` | 서버 상태 확인 |
-| `GET` | `/health/db` | 데이터베이스 연결 확인 |
-| `PUT` | `/cameras/{camera_id}/calibration` | 세션별 카메라 캘리브레이션 등록 |
-| `POST` | `/detections` | 동기화된 두 카메라 탐지 묶음 처리 |
-| `POST` | `/ground-truth` | Unity 정답 좌표 저장 |
+| Method | Endpoint                           | 설명                              |
+| ------ | ---------------------------------- | --------------------------------- |
+| `GET`  | `/health`                          | 서버 상태 확인                    |
+| `GET`  | `/health/db`                       | 데이터베이스 연결 확인            |
+| `PUT`  | `/cameras/{camera_id}/calibration` | 세션별 카메라 캘리브레이션 등록   |
+| `POST` | `/detections`                      | 동기화된 두 카메라 탐지 묶음 처리 |
+| `POST` | `/ground-truth`                    | Unity 정답 좌표 저장              |
 
 핵심 규칙:
 
@@ -238,7 +277,7 @@ cam2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야
 python -m pytest backend/tests -q
 ```
 
-현재 테스트는 bbox 하단 중앙 계산, 왜곡 보정, 에피폴라 매칭, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 Ground Truth 저장을 확인합니다.
+현재 테스트는 발목·bbox 바닥 접점, 왜곡 보정, 2단계 사람 대응, 바닥 평면 투영, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 Ground Truth 저장을 확인합니다.
 
 ## Roadmap
 
@@ -248,11 +287,17 @@ python -m pytest backend/tests -q
 - [x] 세션별 카메라 캘리브레이션 등록
 - [x] 에피폴라 매칭과 3D 삼각측량 API
 - [x] ChArUco·ArUco 실제 카메라 캘리브레이션 도구
-- [ ] S2 2인 데이터로 매칭 임계값 검증
-- [ ] Unity GT 대비 프레임별 3D 오차 자동 평가
-- [ ] 실제 Tapo CCTV 두 대 연동
-- [ ] 작업자별 PPE 착용 여부 판단
-- [ ] 3D 거리·속도 기반 TTC 위험 판단
+- [x] Unity GT 대비 프레임별 위치 오차 자동 평가
+- [x] 실제 Tapo CCTV 두 대 동시 녹화·연동
+- [x] 렌즈 보정 유무 × 개선 알고리즘 유무 2×2 실험
+- [x] 10개 시나리오·15개 녹화의 실측 위치 평가
+- [x] 바닥 대응·추적과 한 카메라 누락 보완
+- [x] 거리·속도 기반 TTC 및 위험 경고 유지
+- [ ] 논문 교정 및 학회 제출
+- [ ] 걷는 장면의 추적·경고 정량 평가
+- [ ] 한 카메라 보완의 고정 발목 높이 가정 개선
+- [ ] 의자·장비 바닥 접점 추정 개선
+- [ ] 실시간 관제 UI 완성
 
 ## Documentation
 
@@ -264,13 +309,13 @@ python -m pytest backend/tests -q
 
 ## Team
 
-| 이름 | 주요 역할 |
-| --- | --- |
-| 김근찬 | AI 탐지 모델, 엣지 파이프라인, 좌표 추정 |
-| 조해민 | 백엔드 API, 데이터 처리, 카메라 캘리브레이션 |
-| 서성윤 | Unity 가상환경, 데이터 생성, 결과 시각화 |
-| 양영준·박주환·김채현 | 프로젝트 자문 및 공동 연구 |
-| 손희문 부장 | 산업현장 요구사항 및 환경 자료 자문 |
+| 이름                 | 주요 역할                                    |
+| -------------------- | -------------------------------------------- |
+| 김근찬               | AI 탐지 모델, 엣지 파이프라인, 좌표 추정     |
+| 조해민               | 백엔드 API, 데이터 처리, 카메라 캘리브레이션 |
+| 서성윤               | Unity 가상환경, 데이터 생성, 결과 시각화     |
+| 양영준·박주환·김채현 | 프로젝트 자문 및 공동 연구                   |
+| 손희문 부장          | 산업현장 요구사항 및 환경 자료 자문          |
 
 ## Notice
 
