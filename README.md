@@ -135,6 +135,12 @@ flowchart LR
 
 ## Quick Start
 
+### 준비 사항
+
+- Python 3.11 이상
+- Docker Desktop 및 Docker Compose
+- Git
+
 ### 1. 저장소 받기
 
 ```bash
@@ -273,7 +279,10 @@ cam2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야
 
 ## Tests
 
+백엔드 의존성을 설치한 가상환경에서 저장소 루트를 기준으로 실행합니다.
+
 ```powershell
+pip install -r backend/requirements.txt
 python -m pytest backend/tests -q
 ```
 
