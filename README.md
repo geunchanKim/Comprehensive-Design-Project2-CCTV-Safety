@@ -20,15 +20,22 @@
 
 CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지하고, 서로 다른 화면의 동일인을 연결해 실제 바닥 좌표를 계산합니다. 한 카메라에서 작업자가 가려진 경우에는 이전 이동 경로를 이용해 위치 소실을 보완하고, 추정 좌표로 작업자와 장비 사이의 거리 및 충돌 위험을 판단합니다.
 
-`사람 탐지` → `카메라별 추적` → `동일인 매칭` → `바닥 위치 추정` → `거리·TTC 계산` → `위험 경고`
+<p align="center">
+  <code>사람 탐지</code> → <code>카메라별 추적</code> → <code>동일인 매칭</code> → <code>바닥 위치 추정</code> → <code>거리·TTC</code> → <code>위험 경고</code>
+</p>
 
-### 핵심 아이디어
+### 실험 결과 요약
 
-- **문제:** 광각 렌즈 왜곡, 사람 간 가림과 밀집으로 카메라 간 동일인 매칭 및 위치 추정이 실패합니다.
-- **방법:** ChArUco 렌즈 캘리브레이션과 좌표 평면 기반 매칭·추적·폐색 보완을 결합했습니다.
-- **검증:** 실제 CCTV 영상 15회, 정지 장면 50개, 사람 107명의 실측 좌표로 네 조건을 비교했습니다.
+<table>
+  <tr align="center">
+    <td width="25%"><strong>107 / 107</strong><br><sub>위치 추정 성공</sub></td>
+    <td width="25%"><strong>96.3%</strong><br><sub>15 cm 이내</sub></td>
+    <td width="25%"><strong>7.05 cm</strong><br><sub>평균 바닥 오차</sub></td>
+    <td width="25%"><strong>9 / 9</strong><br><sub>가장자리 복원</sub></td>
+  </tr>
+</table>
 
-| 실제 카메라 실험 | 기준 방법 | 제안 방법 (C+M) | 변화 |
+| 지표 | 기준 방법 | 제안 방법 `C+M` | 개선 |
 | --- | ---: | ---: | ---: |
 | 위치 추정 성공 | 91/107 (85.0%) | **107/107 (100%)** | **+16명** |
 | 바닥 오차 15 cm 이내 | 84.1% | **96.3%** | **+12.2%p** |
@@ -36,6 +43,12 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 | 화면 가장자리 성공 | 0/9 | **9/9** | **전원 복원** |
 
 > 성공률은 YOLO의 분류 정확도가 아니라, 추정 위치가 정답 좌표에서 50 cm 이내였던 **최종 바닥 위치 추정 성공률**입니다.
+
+### 세 가지 핵심 접근
+
+| 📐 렌즈 왜곡 보정 | 🔗 카메라 간 동일인 매칭 | 🛡️ 폐색 상황 보완 |
+| --- | --- | --- |
+| ChArUco로 내부 파라미터와 왜곡 계수를 추정해 화면 가장자리 좌표를 보정합니다. | 발 위치를 좌표 평면에 투영하고 헝가리안 알고리즘으로 두 화면의 작업자를 1:1 연결합니다. | 한 카메라에서 놓친 작업자는 기존 궤적의 예측 위치를 이용해 일시적인 위치 소실을 막습니다. |
 
 > 📄 **관련 논문**<br>
 > 「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」<br>
@@ -58,27 +71,44 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 
 | 영역 | 구현 내용 | 상태 |
 | --- | --- | :---: |
-| 탐지 | YOLO11n 객체 탐지, YOLO11n-pose 발목 추출 | ✅ |
-| 추적 | 카메라별 ByteTrack, 바닥 좌표 기반 통합 ID | ✅ |
-| 입력 | Unity 폴더·영상·웹캠·Tapo RTSP 스트림, 동시 녹화 | ✅ |
-| 캘리브레이션 | Unity 파라미터 변환, ChArUco·ArUco 실측 보정 | ✅ |
-| 매칭 | 렌즈 왜곡 보정, 에피폴라 제약, 좌표 평면 기반 1:1 대응 | ✅ |
-| 위치 추정 | 발목 삼각측량, 폐색 보완(단일 카메라 투영) | ✅ |
-| 안전 판단 | Kalman 속도 추정, 거리·TTC 계산, 경고 유지 | ✅ |
-| 평가 | 2×2 조건별 성공률·오차·통계 검정 자동 분석 | ✅ |
-| 관제 화면 | 실시간 관제 및 결과 시각화 | 개발 중 |
+| **탐지** | YOLO11n 객체 탐지, YOLO11n-pose 발목 추출 | ✅ 완료 |
+| **추적** | 카메라별 ByteTrack, 바닥 좌표 기반 통합 ID | ✅ 완료 |
+| **입력** | Unity 폴더·영상·웹캠·Tapo RTSP 스트림, 동시 녹화 | ✅ 완료 |
+| **캘리브레이션** | Unity 파라미터 변환, ChArUco·ArUco 실측 보정 | ✅ 완료 |
+| **매칭** | 렌즈 왜곡 보정, 에피폴라 제약, 좌표 평면 기반 1:1 대응 | ✅ 완료 |
+| **위치 추정** | 발목 삼각측량, 폐색 보완(단일 카메라 투영) | ✅ 완료 |
+| **안전 판단** | Kalman 속도 추정, 거리·TTC 계산, 경고 유지 | ✅ 완료 |
+| **평가** | 2×2 조건별 성공률·오차·통계 검정 자동 분석 | ✅ 완료 |
+| **관제 화면** | 실시간 관제 및 결과 시각화 | 🚧 개발 중 |
 
 ## 🧩 시스템 구조
 
 ```mermaid
 flowchart LR
-    INPUT[영상 입력<br/>Unity · Tapo RTSP] --> EDGE[엣지 처리<br/>동기화 · 탐지 · 추적]
-    CAL[카메라 보정<br/>ChArUco · ArUco] --> API
-    EDGE --> API[백엔드<br/>FastAPI]
-    API --> MATCH[동일인 매칭<br/>렌즈 · 에피폴라 · 바닥]
-    MATCH --> POS[위치 추정<br/>삼각측량 · 단일 카메라 보완]
-    POS --> SAFE[안전 판단<br/>거리 · 속도 · TTC]
-    SAFE --> EVAL[평가<br/>실측 · Unity GT]
+    subgraph SOURCE[입력]
+        CAM[📹 Tapo C200 × 2]
+        UNITY[🎮 Unity GT]
+    end
+    subgraph EDGE[엣지]
+        SYNC[프레임 동기화]
+        DET[YOLO 탐지<br/>ByteTrack 추적]
+    end
+    subgraph SERVER[FastAPI 서버]
+        MATCH[동일인 1:1 매칭]
+        POS[바닥 위치 추정]
+        SAFE[거리 · 속도 · TTC]
+    end
+    CAL[📐 ChArUco<br/>ArUco 보정] --> MATCH
+    CAM --> SYNC --> DET --> MATCH
+    UNITY -. 검증 .-> POS
+    MATCH --> POS --> SAFE --> DB[(PostgreSQL)]
+
+    classDef source fill:#102a43,stroke:#54e2d0,color:#fff
+    classDef process fill:#163b55,stroke:#82b8ff,color:#fff
+    classDef safety fill:#0a5b63,stroke:#54e2d0,color:#fff
+    class CAM,UNITY,CAL source
+    class SYNC,DET,MATCH,POS process
+    class SAFE,DB safety
 ```
 
 | 단계 | 처리 내용 |
