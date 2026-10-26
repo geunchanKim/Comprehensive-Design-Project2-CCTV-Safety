@@ -12,10 +12,10 @@
       0.5 미만 = 가운데, 0.5 이상 0.7 미만 = 바깥쪽, 0.7 이상 = 가장자리
 
 조건 이름 (폴더)
-  B  = 기준        <pack>/position_errors.csv
-  C  = 렌즈 캘리브레이션  <pack>/precise-baseline/
-  A  = 대응 알고리즘     <pack>/basic-improved/
-  CA = C+A         <pack>/precise-improved/
+  기준 방법           <pack>/position_errors.csv
+  렌즈 캘리브레이션    <pack>/precise-baseline/
+  매칭 알고리즘        <pack>/basic-improved/
+  두 방법 결합         <pack>/precise-improved/
 
 명령 (ai/ 폴더에서)
   python eval/compare_conditions.py runs/experiments/real-2x2-v4
@@ -33,7 +33,7 @@ from scipy import stats
 
 AI_DIR = Path(__file__).resolve().parents[1]
 CONDITIONS = {"B": ".", "C": "precise-baseline", "A": "basic-improved", "CA": "precise-improved"}
-LABELS = {"B": "기준", "C": "C", "A": "A", "CA": "C+A"}
+LABELS = {"B": "기준 방법", "C": "렌즈 캘리브레이션", "A": "매칭 알고리즘", "CA": "두 방법 결합"}
 PAIRS = [("B", "C"), ("B", "A"), ("A", "CA"), ("C", "CA")]
 REGIONS = [("전체", None), ("가운데", (0.0, 0.5)), ("바깥쪽", (0.5, 0.7)), ("가장자리", (0.7, 9.9))]
 
