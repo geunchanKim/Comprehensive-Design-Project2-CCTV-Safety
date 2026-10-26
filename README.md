@@ -1,20 +1,28 @@
-# CCTV Safety
+<div align="center">
 
-> 일반 IP 카메라 2대로 작업자의 실제 바닥 위치를 추정하는 산업현장 안전 모니터링 시스템
+![CCTV Safety](docs/assets/readme-hero.svg)
 
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
-![YOLO](https://img.shields.io/badge/YOLO-11-111F68)
-![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white)
-![Status](https://img.shields.io/badge/status-research_prototype-blue)
+### 일반 IP 카메라 2대로 작업자의 실제 바닥 위치를 추정하는 산업현장 안전 모니터링 시스템
 
-## 한눈에 보기
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white&style=flat-square)](https://fastapi.tiangolo.com/)
+[![YOLO](https://img.shields.io/badge/YOLO-11-111F68?style=flat-square)](https://github.com/ultralytics/ultralytics)
+[![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white&style=flat-square)](unity-sim/)
+![Research](https://img.shields.io/badge/status-research_prototype-38B2AC?style=flat-square)
+
+[**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**API**](#-api-요약)
+
+</div>
+
+---
+
+## 🔎 한눈에 보기
 
 CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지하고, 서로 다른 화면의 동일인을 연결해 실제 바닥 좌표를 계산합니다. 한 카메라에서 작업자가 가려진 경우에는 이전 이동 경로를 이용해 위치 소실을 보완하고, 추정 좌표로 작업자와 장비 사이의 거리 및 충돌 위험을 판단합니다.
 
 `사람 탐지` → `카메라별 추적` → `동일인 매칭` → `바닥 위치 추정` → `거리·TTC 계산` → `위험 경고`
 
-### 연구 핵심
+### 핵심 아이디어
 
 - **문제:** 광각 렌즈 왜곡, 사람 간 가림과 밀집으로 카메라 간 동일인 매칭 및 위치 추정이 실패합니다.
 - **방법:** ChArUco 렌즈 캘리브레이션과 좌표 평면 기반 매칭·추적·폐색 보완을 결합했습니다.
@@ -29,12 +37,11 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 
 > 성공률은 YOLO의 분류 정확도가 아니라, 추정 위치가 정답 좌표에서 50 cm 이내였던 **최종 바닥 위치 추정 성공률**입니다.
 
-관련 논문: **「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」**<br>
-2026 한국정보기술학회 추계 종합학술대회 제출 준비
+> 📄 **관련 논문**<br>
+> 「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」<br>
+> 2026 한국정보기술학회 추계 종합학술대회 제출 준비
 
-**바로가기** · [연구 배경](#연구-배경) · [주요 기능](#주요-기능) · [시스템 구조](#시스템-구조) · [실험 결과](#실험-결과) · [빠른 시작](#빠른-시작) · [API](#api-요약)
-
-## 연구 배경
+## 🎯 연구 배경
 
 한 대의 CCTV에서 얻은 2D 화면 좌표만으로는 작업자와 장비 사이의 실제 거리를 계산하기 어렵습니다. 카메라를 두 대 사용해도 광각 렌즈의 왜곡은 화면 가장자리 좌표를 밀어내고, 가림과 밀집은 동일 작업자 대응을 어렵게 만듭니다. 이 프로젝트는 고가의 전용 센서 없이 일반 IP 카메라와 컴퓨터 비전만으로 이 문제를 해결할 수 있는지 검증합니다.
 
@@ -47,7 +54,7 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 
 > Unity는 초기 파이프라인 개발과 반복 가능한 가상 데이터 생성에 사용했습니다. 논문의 정량 결과는 렌즈 왜곡과 센서 노이즈가 포함된 **실제 촬영 영상**으로 산출했습니다.
 
-## 주요 기능
+## ✨ 주요 기능
 
 | 영역 | 구현 내용 | 상태 |
 | --- | --- | :---: |
@@ -61,7 +68,7 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 | 평가 | 2×2 조건별 성공률·오차·통계 검정 자동 분석 | ✅ |
 | 관제 화면 | 실시간 관제 및 결과 시각화 | 개발 중 |
 
-## 시스템 구조
+## 🧩 시스템 구조
 
 ```mermaid
 flowchart LR
@@ -94,7 +101,7 @@ flowchart LR
 
 </details>
 
-## 실험 결과
+## 📊 실험 결과
 
 > 아래 내용은 논문 「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」의 실험 결과입니다.
 
@@ -157,7 +164,7 @@ flowchart LR
 - 가장자리 결과는 두 십자 마커 위의 9명에 한정됩니다.
 - 평가는 한 장소의 정지 장면에서만 수행했으며, 보행 장면의 실시간 위치 정확도와 추적 성능 평가는 향후 과제입니다.
 
-## 빠른 시작
+## 🚀 빠른 시작
 
 > 아래 명령 블록은 각각 **저장소 루트에서 시작하는 새 터미널**을 기준으로 작성했습니다.
 
@@ -240,7 +247,7 @@ python edge/unity_reader.py <Unity_출력_폴더> --server http://localhost:8000
 
 실행할 때마다 폴더 이름에 `-runN`이 붙은 새 `session_id`가 만들어집니다. 엣지는 두 카메라의 캘리브레이션을 먼저 등록한 뒤 탐지 결과와 정답 좌표를 전송합니다.
 
-## 실제 카메라 캘리브레이션
+## 📐 실제 카메라 캘리브레이션
 
 실제 CCTV는 ChArUco 보드로 내부 파라미터를 계산하고, 두 카메라가 함께 보는 18 cm ArUco 마커로 공통 월드 좌표계를 설정합니다.
 
@@ -264,7 +271,7 @@ python detect_aruco.py `
 
 카메라 2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야 합니다. 전체 절차는 [실제 카메라 캘리브레이션 안내](ai/calibration/README.md)를 확인하세요.
 
-## API 요약
+## 🔌 API 요약
 
 | Method | Endpoint | 설명 |
 | --- | --- | --- |
@@ -282,7 +289,7 @@ python detect_aruco.py `
 
 전체 계약과 요청·응답 예시는 [메시지 명세](docs/specs/message-spec.md)와 [탐지·삼각측량 API 문서](docs/detections-api.md)를 참고하세요.
 
-## 테스트
+## ✅ 테스트
 
 ```powershell
 pip install -r backend/requirements.txt
@@ -291,7 +298,7 @@ python -m pytest backend/tests -q
 
 테스트는 발목·바운딩 박스의 바닥 접점, 왜곡 보정, 사람 매칭, 바닥 평면 투영, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 정답 좌표 저장을 확인합니다.
 
-## 저장소 구성
+## 🗂️ 저장소 구성
 
 ```text
 .
@@ -307,7 +314,7 @@ python -m pytest backend/tests -q
 └── unity-sim/             # Unity 시뮬레이터 서브모듈
 ```
 
-## 진행 상황과 다음 단계
+## 🗺️ 진행 상황과 다음 단계
 
 - [x] 실제 Tapo CCTV 두 대의 동시 녹화·연동
 - [x] 렌즈 캘리브레이션 × 매칭 알고리즘 2×2 실험
@@ -320,7 +327,7 @@ python -m pytest backend/tests -q
 - [ ] 여러 장소·가장자리 표본 확대 평가
 - [ ] 실시간 관제 UI 완성
 
-## 문서 모음
+## 📚 문서 모음
 
 - [AI 학습 안내](ai/README.md)
 - [실제 카메라 캘리브레이션](ai/calibration/README.md)
@@ -328,7 +335,7 @@ python -m pytest backend/tests -q
 - [탐지·삼각측량 API](docs/detections-api.md)
 - [협업 및 커밋 규칙](CONVENTION.md)
 
-## 팀
+## 👥 팀
 
 | 이름 | 주요 역할 |
 | --- | --- |
@@ -338,6 +345,6 @@ python -m pytest backend/tests -q
 | 양영준·박주환·김채현 | 프로젝트 자문 및 공동 연구 |
 | 손희문 부장 | 산업현장 요구사항 및 환경 자료 자문 |
 
-## 안내
+## ⚠️ 안내
 
 이 프로젝트는 종합설계프로젝트 연구용 프로토타입입니다. 계산 결과는 현장 안전관리자의 판단을 보조하기 위한 것이며, 단독으로 작업자의 안전을 보장하지 않습니다.
