@@ -45,8 +45,14 @@ python eval/real_pack.py --edge runs/edge/classroom-1014-s1-t1-v5 \
     --gt runs/gt/classroom-1014-v2/diy-1014-s1-t1/frames.jsonl \
     --calib calibration/output/calib-classroom-1014-2x2b.json --name real-s1-t1 --force
 
-# 3. 네 조건 채점 (기본, C, A, C+A)
+# 3. 네 조건 채점 (기준 방법, 렌즈 캘리브레이션, 매칭 알고리즘, 두 방법 결합)
 python eval/run_experiment.py run --server http://<서버>:32130 --packs real-s1-t1 --label real-2x2-v4
+
+# 4. 조건 간 통계 검정 (논문 Ⅳ장의 Wilcoxon·TOST p값)
+python eval/compare_conditions.py runs/experiments/real-2x2-v4
+
+# 5. 검출 예시 그림 (팩 이름, 프레임 쌍 번호 → runs/figures/)
+python eval/draw_detections.py real-s10-t1 604
 ```
 
 ## 규칙
