@@ -11,7 +11,7 @@
 [![CI](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml/badge.svg)](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml)
 ![Research](https://img.shields.io/badge/status-research_prototype-38B2AC?style=flat-square)
 
-[**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**API**](#-api-요약)
+[**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**실험 재현**](#-실험-재현) · [**API**](#-api-요약)
 
 </div>
 
@@ -339,6 +339,54 @@ python -m pytest backend/tests -q
 
 테스트는 발목·바운딩 박스의 바닥 접점, 왜곡 보정, 사람 매칭, 바닥 평면 투영, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 정답 좌표 저장을 확인합니다.
 
+GitHub Actions는 `develop`·`main` 브랜치의 push와 PR마다 다음 검증을 자동 수행합니다.
+
+| 작업 | 검증 내용 |
+| --- | --- |
+| `backend-test` | Python 3.11, SQLite 환경에서 백엔드 테스트 실행 |
+| `edge-test` | AI·평가 코드 문법 검사와 엣지 테스트 실행 |
+
+## 🔁 실험 재현
+
+탐지 결과를 압축한 **experiment pack**을 서버에 다시 전송하면 YOLO 추론을 반복하지 않고도 동일 입력으로 위치 추정 알고리즘을 비교할 수 있습니다. 저장소에는 `s1`~`s4`의 bbox·발목 기준 pack이 포함되어 있습니다.
+
+### 1. 로컬 서버 준비
+
+[백엔드와 데이터베이스 실행](#4-백엔드와-데이터베이스-실행)에 따라 API를 실행하고 `/health` 응답을 확인합니다.
+
+### 2. 저장된 pack으로 평가
+
+```powershell
+cd ai
+python eval/run_experiment.py run `
+  --server http://localhost:8000 `
+  --packs s1,s2,s3,s4 `
+  --label local-baseline
+```
+
+### 3. 변경 전후 비교
+
+알고리즘을 수정한 뒤 같은 명령에 `--compare latest`를 추가하면 직전 결과와 현재 결과를 같은 표에서 비교합니다.
+
+```powershell
+python eval/run_experiment.py run `
+  --server http://localhost:8000 `
+  --packs s1,s2,s3,s4 `
+  --label local-after-change `
+  --compare latest
+```
+
+결과는 `ai/runs/experiments/<label>/`에 저장됩니다.
+
+| 결과 파일 | 내용 |
+| --- | --- |
+| `summary.md` | PR·GitHub Actions 요약에 바로 사용할 수 있는 비교표 |
+| `summary.csv` | pack·클래스별 성공 수, 평균·P90 오차, 누락·오매칭률 |
+| `meta.json` | 서버 커밋, 설정, 평가 기준과 실행 시각 |
+| `<pack>/position_errors.csv` | 객체별 위치 오차와 상세 평가 결과 |
+
+> 이 pack 평가는 서버 알고리즘의 반복 비교를 위한 도구입니다. 논문에 제시한 사람 107명의 실제 CCTV 2×2 실험과 Unity pack 평가는 데이터셋과 목적이 다릅니다.
+
 ## 🗂️ 저장소 구성
 
 ```text
@@ -347,6 +395,7 @@ python -m pytest backend/tests -q
 │   ├── calibration/       # 실제 카메라 캘리브레이션
 │   ├── configs/           # YOLO 데이터셋 설정
 │   ├── edge/              # 탐지·추적, 입력 처리, 서버 전송
+│   ├── eval/              # 재현용 pack, 평가·비교 자동화
 │   ├── scripts/           # 데이터 병합·자동 라벨링 도구
 │   └── train.py           # YOLO 학습 진입점
 ├── backend/               # FastAPI, DB 모델, 테스트
