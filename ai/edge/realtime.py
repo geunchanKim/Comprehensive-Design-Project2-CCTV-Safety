@@ -21,6 +21,10 @@
   - 탐지가 카메라보다 느리면 밀린 짝은 건너뛰고 가장 최근 짝을 탐지한다 (저장은 모든 짝을 함)
   - 서버가 "캘리브레이션 없음(404)", "해상도 다름(422)", "중복(409)"으로 거절하면 이유를 말하고 멈춘다
   - 보낸 것·서버 응답·실패: runs/edge/<session_id>/ (sent_detections.jsonl, responses_detections.jsonl, failed.jsonl)
+  - 짝마다 걸린 시간: runs/edge/<session_id>/timings.jsonl (실시간 속도 측정용)
+      wait_ms    짝이 만들어진 뒤 탐지를 시작하기까지 기다린 시간
+      detect_ms  카메라별 탐지(발목 포함) 시간
+      age_ms     카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지 걸린 전체 시간
 
 실행 (ai/ 폴더에서)
   python edge/realtime.py --cam1 0 --cam2 ~/Downloads/CCTVTEST.mp4 --seconds 20 --show            # 녹화만
@@ -157,6 +161,8 @@ class Sender:
         self.stats = {"sent": 0, "skipped": 0, "removed": 0, "empty": 0, "errors": 0}
         self.stop_reason = None
         self._latest = None
+        self.detect_ms = deque(maxlen=100)          # 최근 100짝의 탐지 시간 (상태 줄의 중간값용)
+        self._timings = (client.out_dir / "timings.jsonl").open("a", encoding="utf-8")
         self._cond = threading.Condition()
         self._closing = False
         self._thread = threading.Thread(target=self._run, name="sender", daemon=True)
@@ -175,6 +181,7 @@ class Sender:
             self._closing = True
             self._cond.notify()
         self._thread.join(timeout=wait)
+        self._timings.close()
 
     def _run(self):
         while True:
@@ -185,11 +192,17 @@ class Sender:
                     return
                 n, f1, f2 = self._latest
                 self._latest = None
+            received_ms = max(f1.recv_ms, f2.recv_ms)
+            wait_ms = time.time() * 1000 - received_ms
+            detect_ms = {}
             try:
                 frames = []
                 for f in (f1, f2):
                     h, w = f.image.shape[:2]
-                    dets, removed = clean_detections(self.detectors[f.camera](f.image), w, h)
+                    t0 = time.perf_counter()
+                    raw = self.detectors[f.camera](f.image)
+                    detect_ms[f.camera] = round((time.perf_counter() - t0) * 1000, 1)
+                    dets, removed = clean_detections(raw, w, h)
                     self.stats["removed"] += removed
                     frames.append(build_frame(f.camera, n, self.recorder.corrected_ms(f), (w, h), dets,
                                               pts_ms=f.pts_ms, recv_ms=f.recv_ms))
@@ -202,6 +215,10 @@ class Sender:
             self.client.send(build_bundle(self.session_id, n, frames,
                                           max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections")
             self.stats["sent"] += 1
+            self.detect_ms.append(sum(detect_ms.values()))
+            self._timings.write(json.dumps({"frame": n, "wait_ms": round(wait_ms, 1), "detect_ms": detect_ms,
+                                            "age_ms": round(time.time() * 1000 - received_ms, 1)}) + "\n")
+            self._timings.flush()
             self._check_server()
 
     def _check_server(self):
@@ -212,7 +229,8 @@ class Sender:
 
     def status(self) -> str:
         s = self.stats
-        return f"전송 {s['sent']} | 밀려서 건너뜀 {s['skipped']} | 서버 {self.client.summary()}"
+        det = f"{statistics.median(self.detect_ms):.0f}ms" if self.detect_ms else "-"
+        return f"전송 {s['sent']} | 밀려서 건너뜀 {s['skipped']} | 탐지 중간값 {det} | 서버 {self.client.summary()}"
 
 
 def preview(f1, f2, width=640):
