@@ -8,6 +8,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white&style=flat-square)](https://fastapi.tiangolo.com/)
 [![YOLO](https://img.shields.io/badge/YOLO-11-111F68?style=flat-square)](https://github.com/ultralytics/ultralytics)
 [![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white&style=flat-square)](unity-sim/)
+[![CI](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml/badge.svg)](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml)
 ![Research](https://img.shields.io/badge/status-research_prototype-38B2AC?style=flat-square)
 
 [**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**API**](#-api-요약)
@@ -135,6 +136,8 @@ flowchart LR
 
 > 아래 내용은 논문 「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」의 실험 결과입니다.
 
+![2×2 조건별 위치 추정 성능](docs/assets/benchmark-results.svg)
+
 ### 실험 구성
 
 | 항목 | 내용 |
@@ -197,6 +200,14 @@ flowchart LR
 ## 🚀 빠른 시작
 
 > 아래 명령 블록은 각각 **저장소 루트에서 시작하는 새 터미널**을 기준으로 작성했습니다.
+
+### 실행 경로 선택
+
+| 목적 | 권장 경로 | 필요한 구성 |
+| --- | --- | --- |
+| 파이프라인을 빠르게 확인 | [Unity 샘플 Dry Run](#3-서버-없이-먼저-확인하기) | Python, 모델 가중치, Unity 출력 폴더 |
+| API·DB까지 통합 실행 | [Docker Compose 실행](#4-백엔드와-데이터베이스-실행) | 위 구성 + Docker Desktop |
+| 실제 CCTV 연결 | [카메라 캘리브레이션](#-실제-카메라-캘리브레이션) | Tapo C200 2대, ChArUco·ArUco 보드 |
 
 ### 준비 사항
 
