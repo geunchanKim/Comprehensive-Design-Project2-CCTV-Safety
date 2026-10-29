@@ -11,7 +11,7 @@
 [![CI](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml/badge.svg)](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml)
 ![Research](https://img.shields.io/badge/status-research_prototype-38B2AC?style=flat-square)
 
-[**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**실험 재현**](#-실험-재현) · [**API**](#-api-요약)
+[**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**실험 재현**](#-실험-재현) · [**문제 해결**](#-문제-해결)
 
 </div>
 
@@ -268,6 +268,14 @@ PGADMIN_DEFAULT_EMAIL=admin@example.com
 PGADMIN_DEFAULT_PASSWORD=change-me
 BACKEND_PORT=8000
 PGADMIN_PORT=5050
+
+# 선택: 위치 추정 알고리즘 설정
+MAX_EPIPOLAR_ERROR_PX=50
+BOX_FOOT_Z_MIN=-0.35
+BOX_FOOT_Z_MAX=0.2
+ANKLE_FOOT_Z_MIN=-0.1
+ANKLE_FOOT_Z_MAX=0.4
+BBOX_POSITION_METHOD=triangulate
 ```
 
 ```powershell
@@ -330,6 +338,17 @@ python detect_aruco.py `
 
 전체 계약과 요청·응답 예시는 [메시지 명세](docs/specs/message-spec.md)와 [탐지·삼각측량 API 문서](docs/detections-api.md)를 참고하세요.
 
+### 주요 설정값
+
+| 환경변수 | 기본값 | 설명 |
+| --- | ---: | --- |
+| `MAX_EPIPOLAR_ERROR_PX` | `50` | 동일인 후보로 허용할 최대 에피폴라 거리(px) |
+| `BOX_FOOT_Z_MIN` / `BOX_FOOT_Z_MAX` | `-0.35` / `0.2` | bbox 하단점 삼각측량의 허용 높이 범위(m) |
+| `ANKLE_FOOT_Z_MIN` / `ANKLE_FOOT_Z_MAX` | `-0.1` / `0.4` | 발목 중간점 삼각측량의 허용 높이 범위(m) |
+| `BBOX_POSITION_METHOD` | `triangulate` | bbox 위치 계산 방식: `triangulate` 또는 `plane` |
+
+현재 적용된 서버 설정은 `GET /health` 응답에서 확인할 수 있습니다. 실험 결과를 비교할 때는 코드 커밋뿐 아니라 이 설정값도 함께 기록해야 합니다.
+
 ## ✅ 테스트
 
 ```powershell
@@ -386,6 +405,28 @@ python eval/run_experiment.py run `
 | `<pack>/position_errors.csv` | 객체별 위치 오차와 상세 평가 결과 |
 
 > 이 pack 평가는 서버 알고리즘의 반복 비교를 위한 도구입니다. 논문에 제시한 사람 107명의 실제 CCTV 2×2 실험과 Unity pack 평가는 데이터셋과 목적이 다릅니다.
+
+## 🧰 문제 해결
+
+| 증상 | 원인 | 해결 방법 |
+| --- | --- | --- |
+| `가중치 파일이 없어요` | `v2` 모델 파일이 지정 위치에 없음 | `ai/runs/train_v2/weights/best.pt`에 가중치를 두거나 `--model coco`로 먼저 실행 |
+| `/health`는 되지만 `/health/db` 실패 | PostgreSQL 미기동 또는 `.env` 접속 정보 불일치 | `infra`에서 `docker compose ps`와 `docker compose logs db backend` 확인 |
+| 탐지 전송 시 `404` | 해당 `session_id`의 카메라 캘리브레이션이 없음 | 같은 세션으로 cam1·cam2 캘리브레이션을 먼저 등록 |
+| 재전송 시 `409` | 같은 `session_id`와 `pair_id` 또는 frame이 이미 저장됨 | 새 `session_id` 사용. `unity_reader.py`는 기본적으로 `-runN`을 자동 증가 |
+| 탐지 전송 시 `422` | 두 프레임의 시간 차이가 50 ms를 초과하거나 요청 형식이 잘못됨 | 프레임 동기화와 `/docs`의 요청 스키마 확인 |
+| 가장자리 작업자가 매칭되지 않음 | 왜곡 보정 누락 또는 에피폴라 거리 초과 | ChArUco 보정 적용 여부와 `/health`의 `max_epipolar_error_px` 확인 |
+| 결과가 생성되지 않음 | 입력 이미지 누락·손상 또는 서버 요청 실패 | 실행 결과 폴더의 `failed.jsonl`과 `sent_*.jsonl` 확인 |
+
+문제가 계속되면 다음 정보를 함께 확인하면 원인을 빠르게 좁힐 수 있습니다.
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8000/health/db
+cd infra
+docker compose ps
+docker compose logs --tail 100 backend
+```
 
 ## 🗂️ 저장소 구성
 
