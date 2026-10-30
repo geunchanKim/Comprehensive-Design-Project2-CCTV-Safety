@@ -5,10 +5,13 @@ from PIL import Image
 from config import (
     A4_HEIGHT_MM,
     A4_WIDTH_MM,
+    A3_HEIGHT_MM,
+    A3_WIDTH_MM,
     ARUCO_DICTIONARY_ID,
     ARUCO_MARKER_DIR,
     ARUCO_MARKER_IDS,
     ARUCO_MARKER_LENGTH_M,
+    ARUCO_GRID_MARKER_LENGTH_M,
     DPI,
 )
 
@@ -25,13 +28,15 @@ def main() -> None:
         ARUCO_DICTIONARY_ID
     )
 
-    marker_size_mm = ARUCO_MARKER_LENGTH_M * 1000
-    marker_size_px = mm_to_px(marker_size_mm)
-
-    page_width_px = mm_to_px(A4_WIDTH_MM)
-    page_height_px = mm_to_px(A4_HEIGHT_MM)
-
     for marker_id in ARUCO_MARKER_IDS:
+        marker_size_mm = (ARUCO_MARKER_LENGTH_M if marker_id == 0
+                          else ARUCO_GRID_MARKER_LENGTH_M) * 1000
+        marker_size_px = mm_to_px(marker_size_mm)
+        page_width_mm, page_height_mm = ((A4_WIDTH_MM, A4_HEIGHT_MM) if marker_id == 0
+                                         else (A3_WIDTH_MM, A3_HEIGHT_MM))
+        page_width_px = mm_to_px(page_width_mm)
+        page_height_px = mm_to_px(page_height_mm)
+        page_name = "A4" if marker_id == 0 else "A3"
         marker_image = cv2.aruco.generateImageMarker(
             dictionary,
             marker_id,
@@ -58,7 +63,7 @@ def main() -> None:
             / (
                 f"aruco_dict4x4_50_"
                 f"id_{marker_id:02d}_"
-                f"{int(marker_size_mm)}mm_A4.png"
+                f"{int(marker_size_mm)}mm_{page_name}.png"
             )
         )
 
@@ -73,7 +78,8 @@ def main() -> None:
     print("ArUco 마커 생성 완료")
     print("딕셔너리: DICT_4X4_50")
     print(f"마커 ID: {ARUCO_MARKER_IDS}")
-    print(f"마커 크기: {marker_size_mm:.1f} mm")
+    print(f"ID 0 크기: {ARUCO_MARKER_LENGTH_M * 1000:.1f} mm")
+    print(f"ID 1~7 크기: {ARUCO_GRID_MARKER_LENGTH_M * 1000:.1f} mm")
 
 
 if __name__ == "__main__":

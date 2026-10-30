@@ -5,7 +5,8 @@
   - 칸 안에는 그 실험 때의 설정값을 적는다
       엣지: pack 의 meta.json "edge" (unity_reader 가 남긴 edge_config.json)
       서버: 실험 시작 때 받은 /health 응답 (서버에 설정이 추가되면 그대로 칸에 나타난다)
-      결과: summary 지표 (발 위치 종류별 사람 평균, 의자 평균)
+      결과: summary 지표 (발 위치 종류별 사람 평균, 의자 평균). 조건이 여럿이면 basic/baseline 기준,
+            개선 알고리즘(basic/improved) 결과는 따로 한 줄씩
   - 직전 실험과 값이 달라진 칸은 노란색으로 칠하고 "전 → 후"를 적는다
 
 run_experiment.py 가 summary.md 맨 위에 붙이고 diagram.mmd 로도 저장한다.
@@ -13,8 +14,25 @@ run_experiment.py 가 summary.md 맨 위에 붙이고 diagram.mmd 로도 저장�
 
 POSITION_NAMES = {"triangulate": "삼각측량", "plane": "바닥 평면 교점"}
 FOOT_NAMES = {"ankle": "발목", "box": "박스 아래"}
+BASE = "basic/baseline"
+COND_NAMES = {"basic/baseline": "기존", "basic/improved": "개선", "precise/baseline": "정밀·기존",
+              "precise/improved": "정밀·개선"}
+FEATURE_NAMES = {"a": "발목", "c": "바닥추적", "d": "한카메라", "e": "시간보정", "f": "경고유지",
+                 "g": "바닥", "h": "짝유지", "k": "칼만", "ankle": "같은 쪽 발목",
+                 "fallback": "한 카메라 보완", "floor": "바닥 좌표 추적", "ground": "바닥 짝짓기",
+                 "hold": "짝 유지", "hysteresis": "경고 유지", "kalman": "칼만", "timesync": "시간차 보정"}
+
+
+def cond_name(cond: str) -> str:
+    """basic/improved → 개선, basic/f-gk → +바닥+칼만, precise/f-g → 정밀·+바닥"""
+    if cond in COND_NAMES:
+        return COND_NAMES[cond]
+    profile, alg = cond.split("/")
+    name = "+" + "+".join(FEATURE_NAMES.get(c, c) for c in alg[2:]) if alg.startswith("f-") else alg
+    return name if profile == "basic" else f"정밀·{name}"
 HEALTH_USED = {"status", "commit", "max_epipolar_error_px", "box_foot_z_min", "box_foot_z_max",
-               "ankle_foot_z_min", "ankle_foot_z_max", "bbox_position_method"}
+               "ankle_foot_z_min", "ankle_foot_z_max", "bbox_position_method",
+               "matching_method", "algorithms", "feature_codes", "default_max_sync_delta_ms"}                      # 짝짓기 방식은 알고리즘 조건이 정함 (서버 환경 변수 값은 안 씀)
 
 
 def _join(values) -> str:
@@ -39,6 +57,8 @@ def describe(meta: dict, rows: list[dict]) -> dict:
 
     data = [("pack", ", ".join(sorted({n.replace("-ankle", "") for n in meta.get("packs", packs)}))),
             ("개수", f"{len(meta.get('packs', packs))}개")]
+    if meta.get("conditions"):
+        data.append(("채점 조건", ", ".join(cond_name(c) for c in meta["conditions"])))
 
     edge = [("모델", _join(e.get("model", "?") for e in edges.values())),
             ("입력 크기", _join(e.get("imgsz", "?") for e in edges.values())),
@@ -46,6 +66,13 @@ def describe(meta: dict, rows: list[dict]) -> dict:
             ("클래스", _join(e.get("classes", "?") for e in edges.values()))]
 
     match = [("에피폴라 기준", f"{h['max_epipolar_error_px']:g}px" if "max_epipolar_error_px" in h else "?")]
+    if "default_max_sync_delta_ms" in h:
+        match.append(("두 카메라 시간차 허용", f"{h['default_max_sync_delta_ms']}ms"))
+    improved = (h.get("algorithms") or {}).get("improved")
+    if improved and "features" in improved:              # 개선 알고리즘에 실제로 켜진 기능
+        match.append(("개선 기능", ", ".join(FEATURE_NAMES.get(f, f) for f in improved["features"]) or "없음"))
+    elif any(c.endswith("/improved") for c in meta.get("conditions", [])):
+        match.append(("짝짓기", "기존 = 에피폴라, 개선 = 바닥 위치"))
     if "box_foot_z_min" in h:
         match.append(("박스 높이 범위", f"{h['box_foot_z_min']:g}~{h['box_foot_z_max']:g}m"))
     if "ankle_foot_z_min" in h:
@@ -60,18 +87,23 @@ def describe(meta: dict, rows: list[dict]) -> dict:
         position.append(("박스 쌍", "삼각측량"))
 
     result = []
-    for foot in ("ankle", "box"):
-        rs = [r for r in rows if r["cls"] == "person" and edges.get(r["pack"], {}).get("foot") == foot]
-        if not rs:
-            continue
-        name = FOOT_NAMES[foot]
-        mean = _mean(r["mean_cm"] for r in rs)
-        mism = _mean(r["mismatch_rate"] for r in rs)
-        ok, chance = sum(r["ok"] for r in rs), sum(r["chance"] for r in rs)
-        result += [(f"사람 평균 ({name})", f"{mean:.1f}cm" if mean is not None else "-"),
-                   (f"오매칭 ({name})", f"{mism * 100:.1f}%" if mism is not None else "-"),
-                   (f"맞음 ({name})", f"{ok / chance * 100:.0f}%" if chance else "-")]
-    chair = _mean(r["mean_cm"] for r in rows if r["cls"] == "chair")
+    conds = meta.get("conditions") or [BASE] + [c for c in COND_NAMES if c != BASE]
+    for cond in [BASE] + [c for c in conds if c != BASE]:
+        cond_rows = [r for r in rows if r.get("cond", BASE) == cond]
+        tag = "" if cond == BASE else f" · {cond_name(cond)}"
+        for foot in ("ankle", "box"):
+            rs = [r for r in cond_rows if r["cls"] == "person" and edges.get(r["pack"], {}).get("foot") == foot]
+            if not rs:
+                continue
+            name = FOOT_NAMES[foot] + tag
+            mean = _mean(r["mean_cm"] for r in rs)
+            mism = _mean(r["mismatch_rate"] for r in rs)
+            ok, chance = sum(r["ok"] for r in rs), sum(r["chance"] for r in rs)
+            result.append((f"사람 평균 ({name})", f"{mean:.1f}cm" if mean is not None else "-"))
+            if cond == BASE:                           # 다른 조건은 평균만 (칸이 너무 길어짐)
+                result += [(f"오매칭 ({name})", f"{mism * 100:.1f}%" if mism is not None else "-"),
+                           (f"맞음 ({name})", f"{ok / chance * 100:.0f}%" if chance else "-")]
+    chair = _mean(r["mean_cm"] for r in rows if r["cls"] == "chair" and r.get("cond", BASE) == BASE)
     if chair is not None:
         result.append(("의자 평균", f"{chair:.1f}cm"))
 

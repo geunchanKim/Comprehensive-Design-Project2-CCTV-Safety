@@ -1,14 +1,40 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
 
 ObjectClass = Literal["person", "chair", "cart", "desk", "suitcase", "backpack"]
 FootSource = Literal["ankle", "box"]
 CalibrationMethod = Literal["unity-gt", "charuco-aruco"]
+CalibrationProfile = Literal["basic", "precise"]
+# baseline, improved, 또는 기능별 실험용 "f-<기능 글자>" (검사는 api.algorithm_features)
+Algorithm = str
+PositionMethod = Literal["mid", "left", "right", "foot", "single-camera"]
+
+
+class AnklePoint(RootModel[tuple[float, float, float]]):
+
+    @field_validator("root")
+    @classmethod
+    def valid_point(cls, value):
+        if not 0 <= value[2] <= 1:
+            raise ValueError("ankle confidence must be between 0 and 1")
+        return value
+
+
+class AnklesIn(BaseModel):
+    left: AnklePoint | None = None
+    right: AnklePoint | None = None
+
+    @model_validator(mode="after")
+    def at_least_one_ankle(self):
+        if self.left is None and self.right is None:
+            raise ValueError("ankles must contain left or right")
+        return self
 
 
 class CameraCalibrationIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    calibration_profile: CalibrationProfile = "basic"
     method: CalibrationMethod
     image_size: tuple[int, int]
     K: list[list[float]]
@@ -16,6 +42,9 @@ class CameraCalibrationIn(BaseModel):
     rvec: tuple[float, float, float]
     tvec: tuple[float, float, float]
     reproj_error_px: float = Field(ge=0)
+    validation_rmse_cm: float | None = Field(default=None, ge=0)
+    validation_max_error_cm: float | None = Field(default=None, ge=0)
+    validation_point_count: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_calibration(self):
@@ -28,6 +57,36 @@ class CameraCalibrationIn(BaseModel):
         return self
 
 
+class CalibrationPoint(BaseModel):
+    image: tuple[float, float]
+    world: tuple[float, float, float]
+
+
+class PnPCalibrationIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    image_size: tuple[int, int]
+    K: list[list[float]]
+    dist: list[float]
+    grid_points: list[CalibrationPoint] = Field(min_length=6)
+    validation_points: list[CalibrationPoint] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def validate_input(self):
+        if any(value <= 0 for value in self.image_size):
+            raise ValueError("image_size must contain positive values")
+        if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
+            raise ValueError("K must be a 3x3 matrix")
+        if len(self.dist) != 5:
+            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        training = {(point.image, point.world) for point in self.grid_points}
+        if any((point.image, point.world) in training for point in self.validation_points):
+            raise ValueError("validation points must be held out from PnP grid points")
+        grid_heights = {point.world[2] for point in self.grid_points}
+        if all(point.world[2] in grid_heights for point in self.validation_points):
+            raise ValueError("validation points must include at least one different-height point")
+        return self
+
+
 class DetectionIn(BaseModel):
     track_id: int = Field(ge=0)
     cls: ObjectClass
@@ -35,6 +94,7 @@ class DetectionIn(BaseModel):
     bbox: tuple[float, float, float, float]
     foot: tuple[float, float] | None = None
     foot_src: FootSource | None = None
+    ankles: AnklesIn | None = None
 
     @field_validator("bbox")
     @classmethod
@@ -49,6 +109,8 @@ class CameraFrameIn(BaseModel):
     camera_id: str = Field(min_length=1, max_length=64)
     frame_id: int = Field(ge=0)
     ts: int = Field(ge=0, description="Epoch milliseconds")
+    pts_ms: float | None = Field(default=None, ge=0, description="Camera/video presentation timestamp")
+    recv_ms: int | None = Field(default=None, ge=0, description="Edge receive time in epoch milliseconds")
     image_size: tuple[int, int]
     detections: list[DetectionIn]
 
@@ -62,12 +124,20 @@ class CameraFrameIn(BaseModel):
         if any(d.foot is not None and not (0 <= d.foot[0] < width and 0 <= d.foot[1] < height)
                for d in self.detections):
             raise ValueError("foot lies outside image_size")
+        for detection in self.detections:
+            if detection.ankles is None:
+                continue
+            for ankle in (detection.ankles.left, detection.ankles.right):
+                if ankle is not None and not (0 <= ankle.root[0] < width and 0 <= ankle.root[1] < height):
+                    raise ValueError("ankle lies outside image_size")
         return self
 
 
 class DetectionBundleIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    calibration_profile: CalibrationProfile = "basic"
     pair_id: int = Field(ge=0)
+    max_sync_delta_ms: int | None = Field(default=None, ge=0, le=10_000)
     frames: list[CameraFrameIn] = Field(min_length=2, max_length=2)
 
     @model_validator(mode="after")
@@ -94,6 +164,7 @@ class ObservationResult(BaseModel):
     image_size: tuple[int, int]
     foot_pixel: tuple[float, float]
     foot_src: FootSource
+    position_method: PositionMethod
 
 
 class DetectionResult(BaseModel):
@@ -103,17 +174,36 @@ class DetectionResult(BaseModel):
     foot_pixels: dict[str, tuple[float, float]]
     observations: list[ObservationResult]
     world: WorldPoint
-    epipolar_error_px: float
+    raw_world: WorldPoint | None = None
+    velocity: WorldPoint | None = None
+    epipolar_error_px: float | None = None   # D 한 카메라 위치는 None
+    matching_method: Literal["epipolar", "ground-plane", "single-camera"] = "epipolar"
+    ground_distance_m: float | None = None
+
+
+class RiskResult(BaseModel):
+    object1_id: int
+    object2_id: int
+    distance_m: float
+    ttc_s: float | None
+    level: Literal["safe", "warning", "danger"]
 
 
 class DetectionBundleOut(BaseModel):
     bundle_id: int
     session_id: str
     pair_id: int
+    calibration_profile: CalibrationProfile
     sync_delta_ms: int
+    pts_delta_ms: float | None = None
+    recv_delta_ms: int | None = None
+    sync_time_basis: Literal["recv_ms", "ts"] = "ts"
+    max_sync_delta_ms: int
     status: Literal["processed"] = "processed"
     matches: list[DetectionResult]
     unmatched: dict[str, list[int]]
+    risks: list[RiskResult] = Field(default_factory=list)
+    settings: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
 
 
 class GroundTruthObjectIn(BaseModel):

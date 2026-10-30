@@ -1,6 +1,6 @@
 # 엣지·Unity·서버 메시지 양식
 
-> 작성: 2026-10-02 · 수정: 2026-10-05 (foot 필드, 높이 검사 제안, 클래스 추가 예정)
+> 작성: 2026-10-02 · 수정: 2026-10-05 (foot 필드, 높이 검사 제안, 클래스 추가 예정) · 2026-10-12 (좌우 발목 ankles)
 > 트랙 A(엣지) 기준. 바뀌면 이 문서부터 고친다.
 
 ## 1. 전체 흐름
@@ -30,7 +30,7 @@ Unity ──(폴더 저장)──▶ 엣지 ──① PUT 캘리브레이션 ─
 | 같은 지도 | 정답 좌표(③)와 캘리브레이션 rvec·tvec(①)은 **같은 월드 좌표계**를 쓴다 |
 | 이미지 좌표 | 픽셀, 원점 = 좌상단, x는 오른쪽, y는 아래쪽 |
 | bbox | `[x1, y1, x2, y2]` 픽셀 절대좌표 (정규화 안 함) |
-| 시간 `ts` | epoch ms. Unity는 시뮬레이션 시각(시작 + frame × 100ms), 실제 카메라는 엣지 수신 시각 |
+| 시간 | `ts`: 호환용 epoch ms, `pts_ms`: 카메라/영상 PTS, `recv_ms`: 엣지 수신 epoch ms |
 | 클래스 | 서버 지원: `person`, `chair`, `cart`, `desk`, `suitcase`(카트 대신), `backpack`(통로 적치물) |
 | camera_id | `cam1`, `cam2` |
 | session_id | 폴더 이름 + `-runN`. 실행할 때마다 N이 1씩 늘어난다. 예: `unity-classroom-01-run3` |
@@ -94,10 +94,13 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 |---|---|---|
 | `session_id` | string | |
 | `pair_id` | int | 묶음 번호 = Unity `frame` |
+| `max_sync_delta_ms` | int | (선택) 세션에 고정할 허용 시간차. 기본 50ms |
 | `frames` | array | 카메라별 결과, 정확히 2개 (cam1, cam2) |
 | `frames[].camera_id` | string | `cam1`, `cam2` |
 | `frames[].frame_id` | int | Unity `frame` |
-| `frames[].ts` | int | `frames.jsonl`의 ts. 두 카메라 차이 50ms 이하 |
+| `frames[].ts` | int | 호환용 epoch ms |
+| `frames[].pts_ms` | float | (선택) 카메라 또는 영상의 presentation timestamp |
+| `frames[].recv_ms` | int | (선택) 엣지가 프레임을 받은 원본 epoch ms. 기록·진단용 |
 | `frames[].image_size` | [int, int] | `[width, height]` |
 | `frames[].detections` | array | 탐지 결과, 없으면 빈 배열 `[]` |
 | `detections[].track_id` | int | **카메라별** 추적 번호, 0 이상 (cam1의 1과 cam2의 1은 다른 물체) |
@@ -106,6 +109,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | `detections[].bbox` | [float ×4] | `[x1, y1, x2, y2]`, 이미지 안, 폭·높이 > 0 |
 | `detections[].foot` | [float ×2] | (선택) 좌표 계산에 쓸 발 위치 `[x, y]` 픽셀, 이미지 안 |
 | `detections[].foot_src` | string | (선택) `ankle`: 두 발목 가운데 / `box`: 박스 아래 가운데 |
+| `detections[].ankles` | object | (선택, 사람) 좌우 발목 `{"left": [x, y, conf] \| null, "right": [x, y, conf] \| null}` 픽셀, 이미지 안 |
 
 `foot` 정의 (엣지 `--foot ankle`)
 - 사람: 포즈 모델(yolo11n-pose)의 두 발목(COCO 키포인트 15, 16) 신뢰도가 모두 0.5 이상이면 두 발목 가운데
@@ -113,10 +117,17 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - 두 발목 가운데는 바닥에서 약 15cm 위 (Unity 측정 7~25cm)
 - Unity S1~S3 정답 비교: 위치 오차 평균 15.8cm(박스) → 5.8cm(발목)
 
+`ankles` 정의 (엣지 `--foot ankle`, 멘토 피드백 1: 같은 쪽 발목끼리 대응)
+- 왼쪽·오른쪽은 **사람 기준** (COCO 키포인트 15 = 왼발목, 16 = 오른발목). 화면 왼쪽·오른쪽이 아니다
+- 신뢰도 0.5 미만인 쪽은 `null`. 한쪽만 보이면 그쪽만 값이 있다
+- 사람 박스와 겹치는 포즈 결과가 없거나 두 발목이 다 안 보이면 `ankles`를 보내지 않는다
+- `foot`은 그대로 보낸다. 서버가 `ankles`를 아직 안 쓰면 기존 계산이 그대로 돈다
+- 서버 할 일(해민 REQ): 왼발목끼리, 오른발목끼리 따로 삼각측량 → 가운데를 위치로. 한쪽만 짝지어지면 그쪽만 사용
+
 엣지 전송 규칙
 - 추론 실패(이미지 누락·손상, 모델 오류) 묶음은 보내지 않는다
 - track_id가 아직 없는 탐지(처음 잡힌 순간)는 뺀다
-- bbox, foot은 이미지 범위로 자르고, 1px 미만 박스는 뺀다
+- bbox, foot, ankles는 이미지 범위로 자르고, 1px 미만 박스는 뺀다
 - 서버가 받는 클래스만 보낸다 (모르는 클래스가 하나라도 있으면 묶음 전체가 422)
 - 같은 `(session_id, pair_id)`를 다시 보내면 409
 
@@ -127,7 +138,8 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
   "frames": [
     {"camera_id": "cam1", "frame_id": 3, "ts": 1790900000300, "image_size": [1920, 1080],
      "detections": [{"track_id": 1, "cls": "person", "conf": 0.93, "bbox": [807.0, 47.0, 1026.0, 688.0],
-                     "foot": [921.5, 676.0], "foot_src": "ankle"}]},
+                     "foot": [921.5, 676.0], "foot_src": "ankle",
+                     "ankles": {"left": [905.0, 674.0, 0.91], "right": [938.0, 678.0, 0.87]}}]},
     {"camera_id": "cam2", "frame_id": 3, "ts": 1790900000300, "image_size": [1920, 1080],
      "detections": [{"track_id": 1, "cls": "person", "conf": 0.57, "bbox": [372.0, 10.0, 452.0, 331.0],
                      "foot": [412.0, 331.0], "foot_src": "box"}]}
@@ -137,12 +149,14 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 
 서버가 할 일 (참고)
 - 사람 짝짓기: 1차는 양쪽 발목끼리, 2차는 남은 사람의 양쪽 bbox 아래 가운데끼리 수행. `K`·`dist`로 왜곡 보정
-- 화면 좌우 끝에서 잘린 bbox는 반대 카메라 bbox 폭을 깊이 비율로 환산해 중심 복원
+- `chair`, `suitcase`의 화면 좌우 끝에서 잘린 bbox만 반대 카메라 bbox 폭을 깊이 비율로 환산해 바닥 중심 복원
 - 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 높이(z) + 두 카메라 앞쪽 여부를 먼저 검사한 뒤 헝가리안 매칭
 - 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 50px
+- 개선 매칭: `algorithm=improved`이면 평면 교점 사이 XY 거리를 비용으로 사용 (`MAX_GROUND_DISTANCE_M`, 기본 2m)
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
+- 개선 알고리즘에서 `ENABLE_ANKLE_PAIRING=true`이면 왼발목끼리와 오른발목끼리를 각각 삼각측량한다. 둘 다 유효하면 두 3D 좌표를 평균하고, 한쪽만 유효하면 그쪽 좌표를 사용한다. confidence 0.6 미만, 높이 -0.1~0.4m 밖, 같은 쪽 대응 없음은 `foot`으로 fallback한다. baseline은 이 설정과 관계없이 기존 `foot` 방식을 유지한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 
@@ -186,3 +200,4 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 발 위치 `foot` | ✅ 엣지 전송 및 서버 저장·삼각측량 지원 |
 | 에피폴라 기준 + 높이 검사 | ✅ 50px + `foot_src`별 z 범위 검사 |
 | `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |
+| 좌우 발목 `ankles` | ✅ 엣지 전송·서버 같은 쪽 발목별 삼각측량 |
