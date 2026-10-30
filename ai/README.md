@@ -55,6 +55,25 @@ python eval/compare_conditions.py runs/experiments/real-2x2-v4
 python eval/draw_detections.py real-s10-t1 604
 ```
 
+## 실시간 속도 재기
+
+카메라 두 대를 켠 채로 탐지·전송하고, 짝마다 걸린 시간을 표로 본다.
+
+```bash
+# 1. 실시간 전송 (10분, 짝마다 시간이 runs/edge/<session_id>/timings.jsonl 에 쌓임)
+python edge/realtime.py --cam1 tapo:<cam1 IP> --cam2 tapo:<cam2 IP> --seconds 600 --show \
+    --send --server http://<서버>:32130 --session <session_id>
+
+# 2. 속도 표 (중간값 / 90% 값 / 최댓값, 건너뛴 짝 비율, 초당 짝 수)
+python eval/timing_summary.py runs/edge/<session_id>
+
+# 고치기 전후 비교: 폴더를 여러 개 주면 한 표로 나온다
+python eval/timing_summary.py runs/edge/<전> runs/edge/<후>
+```
+
+- 서버 없이 엣지 속도만 볼 때는 `--server` 대신 `--dry-run`을 쓴다
+- 표의 "전체"는 카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지의 시간이다 (서버 처리 시간은 포함하지 않음)
+
 ## 규칙
 
 - 녹화는 `runs/real/`, 탐지 결과는 `runs/edge/`, 실험 결과는 `runs/experiments/`에 둔다
