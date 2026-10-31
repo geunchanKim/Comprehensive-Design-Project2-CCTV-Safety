@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">CCTV Safety</title>
+  <desc id="desc">Two-camera industrial worker positioning and safety monitoring</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.52" stop-color="#0d2940"/>
+      <stop offset="1" stop-color="#0a5b63"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#57e3d2" stop-opacity="0.48"/>
+      <stop offset="1" stop-color="#57e3d2" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#54e2d0"/>
+      <stop offset="1" stop-color="#82b8ff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#91b8c8" stroke-opacity="0.12"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="360" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="360" rx="28" fill="url(#grid)"/>
+  <circle cx="1040" cy="46" r="180" fill="#1b8a8b" opacity="0.12"/>
+  <circle cx="1110" cy="332" r="230" fill="#2374a5" opacity="0.11"/>
+
+  <g transform="translate(72 55)">
+    <text x="0" y="76" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="67" font-weight="800" letter-spacing="-2">CCTV SAFETY</text>
+    <rect x="2" y="98" width="455" height="5" rx="2.5" fill="url(#accent)"/>
+    <text x="2" y="145" fill="#cce3eb" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="500">Two-camera worker positioning</text>
+    <text x="2" y="177" fill="#91b7c4" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18">Detection · Matching · Ground localization · Risk alerts</text>
+
+    <g transform="translate(2 215)">
+      <rect width="126" height="38" rx="19" fill="#54e2d0" fill-opacity="0.14" stroke="#54e2d0" stroke-opacity="0.42"/>
+      <circle cx="22" cy="19" r="5" fill="#54e2d0"/>
+      <text x="37" y="25" fill="#d8fffa" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600">107 people</text>
+      <rect x="140" width="142" height="38" rx="19" fill="#82b8ff" fill-opacity="0.12" stroke="#82b8ff" stroke-opacity="0.4"/>
+      <circle cx="162" cy="19" r="5" fill="#82b8ff"/>
+      <text x="177" y="25" fill="#e2efff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600">100% located</text>
+      <rect x="296" width="144" height="38" rx="19" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.2"/>
+      <circle cx="318" cy="19" r="5" fill="#f4c95d"/>
+      <text x="333" y="25" fill="#f4f7f9" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600">7.05 cm error</text>
+    </g>
+  </g>
+
+  <g transform="translate(718 49)">
+    <path d="M70 64L222 244H-8Z" fill="url(#beam)"/>
+    <path d="M348 64L224 244H430Z" fill="url(#beam)"/>
+
+    <g transform="translate(4 13)">
+      <path d="M0 20h74a14 14 0 0 1 14 14v30H0z" fill="#d7edf3"/>
+      <path d="M88 37l30 8v20l-30 8z" fill="#8dafbc"/>
+      <circle cx="23" cy="43" r="14" fill="#15384d" stroke="#54e2d0" stroke-width="4"/>
+      <path d="M40 64v22H12" fill="none" stroke="#8dafbc" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(352 13) scale(-1 1)">
+      <path d="M0 20h74a14 14 0 0 1 14 14v30H0z" fill="#d7edf3"/>
+      <path d="M88 37l30 8v20l-30 8z" fill="#8dafbc"/>
+      <circle cx="23" cy="43" r="14" fill="#15384d" stroke="#82b8ff" stroke-width="4"/>
+      <path d="M40 64v22H12" fill="none" stroke="#8dafbc" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <g transform="translate(201 129)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="24" cy="18" r="15" fill="#f4c95d" stroke="#fff1ba" stroke-width="3"/>
+      <path d="M24 36v67M24 57L-1 83M24 57l27 21M24 103L3 140M24 103l26 36" stroke="#f5d66d" stroke-width="12"/>
+      <ellipse cx="25" cy="148" rx="53" ry="15" fill="#54e2d0" fill-opacity="0.16" stroke="#54e2d0" stroke-width="2"/>
+      <circle cx="25" cy="148" r="6" fill="#54e2d0" stroke="none" filter="url(#glow)"/>
+    </g>
+
+    <g stroke="#8fc8d5" stroke-opacity="0.35" stroke-width="2" fill="none">
+      <path d="M22 292h405M67 258l-45 34M128 258l-34 34M318 258l34 34M379 258l48 34"/>
+    </g>
+  </g>
+</svg>
