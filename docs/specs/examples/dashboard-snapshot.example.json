@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "event": "snapshot",
+  "session_id": "classroom-demo",
+  "calibration_profile": "precise",
+  "algorithm": "improved",
+  "pair_id": 1,
+  "captured_at_ms": 1793577600000,
+  "emitted_at_ms": 1793577600100,
+  "objects": [
+    {
+      "object_id": 7,
+      "cls": "person",
+      "world": {
+        "x": 3.5,
+        "y": 3.5,
+        "z": 0.08
+      },
+      "velocity": null,
+      "camera_tracks": {
+        "cam1": 10,
+        "cam2": 20
+      },
+      "vest": {
+        "status": "unknown",
+        "confidence": null,
+        "observed_at_ms": null
+      },
+      "zone_states": [
+        {
+          "zone_id": "classroom-demo-01",
+          "status": "unknown",
+          "distance_m": null
+        }
+      ]
+    }
+  ],
+  "collision_evaluated": true,
+  "risks": [],
+  "zones": [
+    {
+      "zone_id": "classroom-demo-01",
+      "name": "?? ??? ??",
+      "vertices": [
+        [
+          3.0,
+          3.0
+        ],
+        [
+          4.0,
+          3.0
+        ],
+        [
+          4.0,
+          4.0
+        ],
+        [
+          3.0,
+          4.0
+        ]
+      ],
+      "warning_distance_m": 0.5,
+      "enabled": true
+    }
+  ],
+  "zone_evaluated": false,
+  "vest_evaluated": false
+}

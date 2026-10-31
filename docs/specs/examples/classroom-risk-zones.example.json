@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "coordinate_system": "world_xy_m",
+  "zones": [
+    {
+      "zone_id": "classroom-demo-01",
+      "name": "?? ??? ??",
+      "vertices": [
+        [
+          3.0,
+          3.0
+        ],
+        [
+          4.0,
+          3.0
+        ],
+        [
+          4.0,
+          4.0
+        ],
+        [
+          3.0,
+          4.0
+        ]
+      ],
+      "warning_distance_m": 0.5,
+      "enabled": true
+    }
+  ]
+}
