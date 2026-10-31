@@ -55,9 +55,9 @@ MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "50"))
 BOX_FOOT_Z_MIN = float(os.getenv("BOX_FOOT_Z_MIN", "-0.35"))
 BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
 ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
-ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
+ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.15"))
 BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
-MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "2.0"))
+MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "1.5"))
 ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "true").lower() in {"1", "true", "yes"}
 ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "true").lower() in {"1", "true", "yes"}
 TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
@@ -145,8 +145,11 @@ ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
 FEATURES_NEEDING_FLOOR = ("d", "e")   # C의 트랙(예측 위치·속도)을 써야 동작
 
 # D 한 카메라 보완: 발목은 이 높이 평면, 박스 발은 바닥(0) 평면과 만나는 점을 위치로 쓴다.
+#   발목 높이 0.08m: 실측 2x2 데이터(사람 107명)에서 0.05~0.15m를 바꿔 보며 오차가 가장 작았던 값
+#   (삼각측량한 발목 높이 중앙값 0.073m와도 일치, 2026-10-19). 좌표 평면 매칭도 같은 높이를 쓴다
 #   한 카메라 위치는 덜 정확하니 칼만 측정 잡음을 크게 준다 (Unity s2·s4 오프라인 시뮬로 정함, 2026-10-13)
-SINGLE_CAMERA_ANKLE_Z_M = 0.15
+SINGLE_CAMERA_ANKLE_Z_M = float(os.getenv("SINGLE_CAMERA_ANKLE_Z_M", "0.08"))
+GROUND_ANKLE_Z_M = float(os.getenv("GROUND_ANKLE_Z_M", "0.08"))
 SINGLE_CAMERA_MEASUREMENT_NOISE = 0.05
 
 
@@ -208,6 +211,7 @@ def _experiment_settings(algorithm: Algorithm):
         "floor_track_gate_m": FLOOR_TRACK_GATE_M,
         "floor_track_max_missed": FLOOR_TRACK_MAX_MISSED,
         "single_camera_ankle_z_m": SINGLE_CAMERA_ANKLE_Z_M,
+        "ground_ankle_z_m": GROUND_ANKLE_Z_M,
         "single_camera_measurement_noise": SINGLE_CAMERA_MEASUREMENT_NOISE,
         "warning_release_margin_m": WARNING_RELEASE_MARGIN_M,
         "bbox_position_method": BBOX_POSITION_METHOD,
@@ -679,7 +683,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         def ground_cost(local1, local2):
             key = (local1, local2)
             point1, point2 = points_for_pair(local1, local2)
-            plane_z = 0.1 if source(0, local1) == source(1, local2) == "ankle" else 0.0
+            plane_z = GROUND_ANKLE_Z_M if source(0, local1) == source(1, local2) == "ankle" else 0.0
             positions = [position_on_plane(point, calibration, plane_z)
                          for point, calibration in zip((point1, point2), calibrations)]
             distance = float(np.linalg.norm(positions[0][:2] - positions[1][:2]))

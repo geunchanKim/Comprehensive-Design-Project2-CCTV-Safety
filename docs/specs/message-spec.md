@@ -152,11 +152,11 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 - `chair`, `suitcase`의 화면 좌우 끝에서 잘린 bbox만 반대 카메라 bbox 폭을 깊이 비율로 환산해 바닥 중심 복원
 - 두 카메라 사이 짝짓기: 같은 클래스 + 에피폴라 거리 + 높이(z) + 두 카메라 앞쪽 여부를 먼저 검사한 뒤 헝가리안 매칭
 - 에피폴라 거리 기준 `MAX_EPIPOLAR_ERROR_PX`: 현재 50px
-- 개선 매칭: `algorithm=improved`이면 평면 교점 사이 XY 거리를 비용으로 사용 (`MAX_GROUND_DISTANCE_M`, 기본 2m)
+- 개선 매칭: `algorithm=improved`이면 평면 교점 사이 XY 거리를 비용으로 사용 (`MAX_GROUND_DISTANCE_M`, 기본 1.5m)
 - 높이 검사: 삼각측량 z가 범위를 벗어나는 쌍은 짝짓기에서 제외 (박스 아래: -35~20cm, 발목: -10~40cm)
   - S2(2명)에서 두 사람을 바꿔 짝지은 22건은 모두 z가 30cm 이상, 정상 매칭은 -8~8cm
 - 발목 쌍의 최종 위치는 삼각측량 사용. bbox 쌍은 `BBOX_POSITION_METHOD`로 삼각측량(기본)과 Z=0cm 평면 교점 평균을 비교
-- 개선 알고리즘에서 `ENABLE_ANKLE_PAIRING=true`이면 왼발목끼리와 오른발목끼리를 각각 삼각측량한다. 둘 다 유효하면 두 3D 좌표를 평균하고, 한쪽만 유효하면 그쪽 좌표를 사용한다. confidence 0.6 미만, 높이 -0.1~0.4m 밖, 같은 쪽 대응 없음은 `foot`으로 fallback한다. baseline은 이 설정과 관계없이 기존 `foot` 방식을 유지한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
+- 개선 알고리즘에서 `ENABLE_ANKLE_PAIRING=true`이면 왼발목끼리와 오른발목끼리를 각각 삼각측량한다. 둘 다 유효하면 두 3D 좌표를 평균하고, 한쪽만 유효하면 그쪽 좌표를 사용한다. confidence 0.6 미만, 높이 -0.1~0.15m 밖, 같은 쪽 대응 없음은 `foot`으로 fallback한다. baseline은 이 설정과 관계없이 기존 `foot` 방식을 유지한다. 응답 `observations[].position_method`는 `mid|left|right|foot`이다.
 
 ## 6. ③ 엣지 → 서버: `POST /ground-truth`
 

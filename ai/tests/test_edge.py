@@ -9,6 +9,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - realtime: 두 카메라 프레임을 가장 가까운 것끼리 짝짓는지
   - feet: 발 위치(foot)와 좌우 발목(ankles)
   - run_experiment·crossing: 다른 조건 결과(results.csv) 변환, 교차 구간 지표
+  - 실시간 속도: Sender가 짝마다 시간을 기록하는지, timing_summary가 표를 맞게 계산하는지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -425,3 +426,61 @@ def test_real_pack_refuses_gt_frame_missing_from_detections(tmp_path):
     with pytest.raises(SystemExit):
         real_pack.make_real_pack(edge, tmp_path / "gt.jsonl", tmp_path / "calib.json", "real-y", set(),
                                  pack_root=tmp_path / "packs")
+
+
+def test_sender_writes_timing_per_pair(tmp_path):
+    import time
+    from types import SimpleNamespace
+    from realtime import Sender
+
+    class FakeClient:
+        out_dir = tmp_path
+        last_failure = None
+        sent = []
+
+        def send(self, message, path):
+            self.sent.append(message)
+
+        def summary(self):
+            return "ok"
+
+    def detect(image):
+        time.sleep(0.01)
+        return [{"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [10, 10, 50, 100],
+                 "foot": [30, 100], "foot_src": "box"}]
+
+    recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms)
+    client = FakeClient()
+    sender = Sender("classroom-1101-s1-t1", {"cam1": detect, "cam2": detect}, client, recorder)
+    now = int(time.time() * 1000)
+    frame = lambda cam: SimpleNamespace(camera=cam, image=np.zeros((1080, 1920, 3), np.uint8),
+                                        recv_ms=now, pts_ms=0.0)
+    sender.offer(3, frame("cam1"), frame("cam2"), 0)
+    for _ in range(100):                                    # 별도 스레드가 처리할 때까지 최대 2초
+        if client.sent:
+            break
+        time.sleep(0.02)
+    sender.close()
+
+    rows = [json.loads(line) for line in (tmp_path / "timings.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["frame"] == 3
+    assert set(rows[0]["detect_ms"]) == {"cam1", "cam2"}
+    assert all(ms >= 10 for ms in rows[0]["detect_ms"].values())
+    assert rows[0]["age_ms"] >= sum(rows[0]["detect_ms"].values())
+    assert "탐지 중간값" in sender.status()
+
+
+def test_timing_summary_counts_skipped_pairs_and_rate(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    timings, sent = [], []
+    for n in range(1, 21, 2):                               # 1~19번 중 홀수 10개만 보냄 → 9/19 건너뜀
+        timings.append({"frame": n, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0, "cam2": 60.0}, "age_ms": 120.0})
+        sent.append({"frames": [{"ts": 0, "recv_ms": 1000 + n * 50}, {"ts": 0, "recv_ms": 1000 + n * 50}]})
+    rx.write_jsonl(tmp_path / "timings.jsonl", timings)
+    rx.write_jsonl(tmp_path / "sent_detections.jsonl", sent)
+
+    line, cams = ts.summarize(tmp_path)
+    assert cams == ["cam1", "cam2"]
+    assert line[1:5] == ["10", "47%", "10.0", "5 / 5 / 5"]   # 보낸 짝, 건너뜀, 초당 짝(100ms 간격), 대기
+    assert line[-2:] == ["100 / 100 / 100", "120 / 120 / 120"]
