@@ -7,6 +7,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_cctv.db")
 os.environ.setdefault("APP_COMMIT_SHA", "test-commit")
 os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "50")
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from sqlalchemy import select
@@ -23,7 +25,12 @@ def setup_module():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
 
-
+@pytest.fixture(autouse=True)
+def synthetic_ankle_height(monkeypatch):
+    """테스트용 가상 장면은 발목이 바닥에서 0.3m 높이에 놓인다.
+    실측으로 정한 기본 상한(0.15m)을 쓰면 발목 쌍이 모두 걸러지므로, 이 파일에서는 예전 상한 0.4m를 쓴다."""
+    monkeypatch.setattr(api_module, "ANKLE_FOOT_Z_MAX", 0.4)
+    
 client = TestClient(app)
 K = [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]]
 SESSION = "unity-classroom-01"
