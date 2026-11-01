@@ -10,6 +10,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - feet: 발 위치(foot)와 좌우 발목(ankles)
   - run_experiment·crossing: 다른 조건 결과(results.csv) 변환, 교차 구간 지표
   - 실시간 속도: Sender가 짝마다 시간을 기록하는지, timing_summary가 표를 맞게 계산하는지
+  - 녹화 폴더 재생: 녹화한 사진을 기록한 시각 간격대로 흘려보내는지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -484,3 +485,40 @@ def test_timing_summary_counts_skipped_pairs_and_rate(tmp_path):
     assert cams == ["cam1", "cam2"]
     assert line[1:5] == ["10", "47%", "10.0", "5 / 5 / 5"]   # 보낸 짝, 건너뜀, 초당 짝(100ms 간격), 대기
     assert line[-2:] == ["100 / 100 / 100", "120 / 120 / 120"]
+
+
+def test_recorded_folder_replays_at_recorded_pace(tmp_path):
+    import time
+    rec = tmp_path / "s1" / "t1"
+    rows = []
+    for n, gap in enumerate([0, 100, 100], start=1):        # 짝 사이 100ms
+        t = 1_000_000 + (n - 1) * 100
+        rows.append({"frame": n, "ts": t, "objects": [], "dt_ms": 5.0,
+                     "cam1": {"seq": n * 3, "pts_ms": n * 100.0, "recv_ms": t},
+                     "cam2": {"seq": n * 3 + 1, "pts_ms": n * 100.0 + 5, "recv_ms": t + 5}})
+        for cam in ("cam1", "cam2"):
+            (rec / cam).mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(rec / cam / f"{n:06d}.jpg"), np.full((48, 64, 3), n * 40, np.uint8))
+    (rec / "frames.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    source = camera_source.CameraSource(str(rec / "cam2"), name="cam2")
+    assert source.kind == "folder"
+    source.start()
+    frames = []
+    while len(frames) < 3:
+        frame = source.get(timeout=2)
+        assert frame is not None
+        frames.append(frame)
+    source.stop()
+
+    assert source.size == (64, 48)
+    assert [f.seq for f in frames] == [4, 7, 10]               # 녹화 때 카메라 seq 그대로
+    assert [f.pts_ms for f in frames] == [105.0, 205.0, 305.0]
+    gaps = [b.recv_ms - a.recv_ms for a, b in zip(frames, frames[1:])]
+    assert all(80 <= g <= 160 for g in gaps)                    # 녹화 간격(100ms)대로 재생
+
+
+def test_recorded_folder_needs_frames_jsonl(tmp_path):
+    (tmp_path / "cam1").mkdir()
+    with pytest.raises(SystemExit):
+        camera_source.CameraSource(str(tmp_path / "cam1"))

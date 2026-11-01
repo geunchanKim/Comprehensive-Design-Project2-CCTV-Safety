@@ -34,6 +34,11 @@
       --send --server http://<서버>:32130 --session classroom-1014-s2-t1 --sessions sessions/classroom-1014.txt
   끝내기: --seconds 가 지나거나, 미리보기 창에서 q, 또는 Ctrl+C
 
+녹화 다시 틀어 속도 재기 (새 촬영 없이 녹화 폴더를 녹화 때 속도 그대로 재생)
+  python edge/realtime.py --cam1 runs/real/classroom/s10/t1/cam1 --cam2 runs/real/classroom/s10/t1/cam2 \\
+      --no-save --send --server http://<서버>:32130 --session classroom-1014-s10-t1-v6
+  --no-save: 같은 사진을 다시 저장하지 않음. 녹화가 끝나면 남은 짝까지 처리하고 멈춘다
+
 녹화만 해 두고 나중에 보내기
   python edge/unity_reader.py runs/real/<폴더> --server http://... --only detections --calib none --session <session_id>
 """
@@ -263,7 +268,7 @@ def make_sender(args, recorder):
 
 def main():
     parser = argparse.ArgumentParser(description="카메라 두 대 동시 녹화·실시간 전송")
-    parser.add_argument("--cam1", required=True, help="웹캠 번호, 영상 파일, tapo:IP, rtsp://...")
+    parser.add_argument("--cam1", required=True, help="웹캠 번호, 영상 파일, tapo:IP, rtsp://..., 녹화 폴더(.../cam1)")
     parser.add_argument("--cam2", required=True)
     parser.add_argument("--name", default=None,
                         help="녹화 폴더 이름 그대로 (예: t1). 안 주면 session_id(없으면 rec)-시각. 이미 있으면 멈춤")
@@ -357,7 +362,7 @@ def main():
 
     elapsed = time.time() - started
     meta = {
-        "name": name, "started": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
+        "name": out_dir.name, "started": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
         "seconds": round(elapsed, 1), "tol_ms": args.tol_ms, "cam2_offset_ms": args.cam2_offset_ms,
         "saved_images": not args.no_save,
         "pairs": rec.pairs, "pair_fps": round(rec.pairs / max(elapsed, 1e-9), 2),
