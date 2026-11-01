@@ -1,5 +1,31 @@
 {
   "$defs": {
+    "DashboardMap": {
+      "additionalProperties": false,
+      "properties": {
+        "coordinate_system": {
+          "const": "world_xy_m",
+          "default": "world_xy_m",
+          "title": "Coordinate System",
+          "type": "string"
+        },
+        "coordinate_frame_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Coordinate Frame Id",
+          "type": "string"
+        },
+        "bounds": {
+          "$ref": "#/$defs/MapBounds"
+        }
+      },
+      "required": [
+        "coordinate_frame_id",
+        "bounds"
+      ],
+      "title": "DashboardMap",
+      "type": "object"
+    },
     "DashboardObject": {
       "additionalProperties": false,
       "properties": {
@@ -58,6 +84,35 @@
         "camera_tracks"
       ],
       "title": "DashboardObject",
+      "type": "object"
+    },
+    "MapBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "x_min": {
+          "title": "X Min",
+          "type": "number"
+        },
+        "x_max": {
+          "title": "X Max",
+          "type": "number"
+        },
+        "y_min": {
+          "title": "Y Min",
+          "type": "number"
+        },
+        "y_max": {
+          "title": "Y Max",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min",
+        "x_max",
+        "y_min",
+        "y_max"
+      ],
+      "title": "MapBounds",
       "type": "object"
     },
     "RiskResult": {
@@ -279,6 +334,41 @@
       "title": "Event",
       "type": "string"
     },
+    "stream_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Stream Id",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "map": {
+      "$ref": "#/$defs/DashboardMap"
+    },
+    "stale_after_ms": {
+      "default": 1000,
+      "minimum": 1,
+      "title": "Stale After Ms",
+      "type": "integer"
+    },
+    "supported_classes": {
+      "items": {
+        "enum": [
+          "person",
+          "chair",
+          "cart",
+          "desk",
+          "suitcase",
+          "backpack"
+        ],
+        "type": "string"
+      },
+      "title": "Supported Classes",
+      "type": "array"
+    },
     "session_id": {
       "title": "Session Id",
       "type": "string"
@@ -346,6 +436,9 @@
     }
   },
   "required": [
+    "stream_id",
+    "seq",
+    "map",
     "session_id",
     "calibration_profile",
     "algorithm",

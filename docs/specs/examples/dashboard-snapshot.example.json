@@ -1,6 +1,27 @@
 {
   "schema_version": "1.0",
   "event": "snapshot",
+  "stream_id": "classroom-demo-epoch-1",
+  "seq": 1,
+  "map": {
+    "coordinate_system": "world_xy_m",
+    "coordinate_frame_id": "unity-world-xzy",
+    "bounds": {
+      "x_min": 2.79,
+      "x_max": 7.79,
+      "y_min": 1.785,
+      "y_max": 6.785
+    }
+  },
+  "stale_after_ms": 1000,
+  "supported_classes": [
+    "person",
+    "chair",
+    "cart",
+    "desk",
+    "suitcase",
+    "backpack"
+  ],
   "session_id": "classroom-demo",
   "calibration_profile": "precise",
   "algorithm": "improved",
@@ -40,7 +61,7 @@
   "zones": [
     {
       "zone_id": "classroom-demo-01",
-      "name": "?? ??? ??",
+      "name": "교실 검토용 구역",
       "vertices": [
         [
           3.0,

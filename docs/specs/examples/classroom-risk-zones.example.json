@@ -1,10 +1,11 @@
 {
   "schema_version": "1.0",
   "coordinate_system": "world_xy_m",
+  "coordinate_frame_id": "unity-world-xzy",
   "zones": [
     {
       "zone_id": "classroom-demo-01",
-      "name": "?? ??? ??",
+      "name": "교실 검토용 구역",
       "vertices": [
         [
           3.0,

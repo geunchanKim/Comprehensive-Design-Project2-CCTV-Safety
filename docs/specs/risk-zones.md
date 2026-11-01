@@ -4,7 +4,7 @@ Unity 제작과 대시보드 표시가 같은 구역을 사용하도록 꼭짓�
 
 ## 정의
 
-`backend.dashboard.ZoneSet`이 JSON을 검증한다. `schema_version=1.0`, `coordinate_system=world_xy_m`, `zones` 배열을 사용한다.
+`backend.dashboard.ZoneSet`이 JSON을 검증한다. `schema_version=1.0`, `coordinate_system=world_xy_m`, 원점·축을 구분하는 `coordinate_frame_id`, `zones` 배열을 사용한다. Unity 평가에는 `unity-world-xzy`를 사용한다. 이 frame ID는 지도 설정과 같아야 한다.
 
 | 구역 필드 | 조건 |
 | --- | --- |
@@ -31,4 +31,8 @@ Unity 제작과 대시보드 표시가 같은 구역을 사용하도록 꼭짓�
 
 [classroom-risk-zones.example.json](examples/classroom-risk-zones.example.json)은 5m×5m 지도에서 X=3~4m, Y=3~4m인 1m×1m 사각형과 주의 거리 0.5m를 정의한다. Unity 형식으로는 높이 y=0, x=3~4m, z=3~4m이다.
 
-예시 기대 상태: 서버 바닥 좌표 `(3.5,3.5)`는 침입, `(2.75,3.5)`는 주의, `(2,3.5)`는 외부다. 실제 교실 원점·축과 장애물 위치가 확인되면 좌표를 교체한다. 이 파일은 운영 구역으로 자동 등록되지 않는다.
+예시 기대 상태: 서버 바닥 좌표 `(3.5,3.5)`는 침입, `(2.75,3.5)`는 주의, `(2,3.5)`는 외부다. #71·#72 회신에 따라 이번 Unity 평가에서는 이 world 기준 구역을 유지한다. 실측 마커 원점 구역과 구분하며, 이 파일은 운영 구역으로 자동 등록되지 않는다.
+
+Unity의 원점 마커는 Unity `(5.29,0,1.285)`이며 `rel = 서버좌표 − (5.29,1.285,0)`이다. 이번에는 rel을 사용하지 않으며, 기존 world→(x,z,y) 규칙을 유지한다. 실측·Unity 원점을 통합하는 변경은 별도 작업이다.
+
+구역 정답은 `frames.jsonl`과 구역 다각형에서 채점 쪽이 계산한다. 구역이 바뀔 때 Unity 재촬영이나 events.json 수정은 필요 없다. 기존 sc6/8/9의 진입·이탈과 sc4 person_1의 주의 구간을 우선 재사용하며 추가 장면 요청은 보류한다.

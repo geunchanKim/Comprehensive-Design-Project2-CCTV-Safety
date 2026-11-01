@@ -4,14 +4,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from backend.dashboard import DashboardSnapshot, ZoneSet, build_snapshot
+from backend.dashboard import DashboardMap, DashboardSnapshot, MapBounds, ZoneSet, build_snapshot
 from backend.profiling import StageTimer
 from backend.schemas import DetectionBundleOut
 from backend.tools.timing_summary import summarize
 
 
 def zone_set(vertices=None):
-    return {"zones": [{"zone_id": "classroom-demo-01", "name": "Review example",
+    return {"coordinate_frame_id": "unity-world-xzy", "zones": [{"zone_id": "classroom-demo-01", "name": "Review example",
                        "vertices": vertices or [[3, 3], [4, 3], [4, 4], [3, 4]],
                        "warning_distance_m": 0.5}]}
 
@@ -54,15 +54,37 @@ def test_snapshot_preserves_identity_and_unevaluated_states():
         "unmatched": {}, "settings": {"risk_analysis": False, "warning_hysteresis": False},
     })
     snapshot = build_snapshot(result, algorithm="improved", captured_at_ms=1000,
-                              emitted_at_ms=1100, zones=ZoneSet.model_validate(zone_set()))
+                              emitted_at_ms=1100, zones=ZoneSet.model_validate(zone_set()),
+                              stream_id="test-stream", seq=1, map_config=map_config())
     assert snapshot.objects[0].object_id == 7
     assert snapshot.objects[0].vest.status == "unknown"
     assert snapshot.objects[0].zone_states[0].status == "unknown"
     assert not snapshot.zone_evaluated and not snapshot.vest_evaluated
     assert not snapshot.collision_evaluated
+    assert snapshot.seq == 1 and snapshot.stream_id == "test-stream"
+    assert snapshot.stale_after_ms == 1000
+    assert snapshot.map.bounds.x_max - snapshot.map.bounds.x_min == 5
+    assert set(snapshot.supported_classes) == {"person", "chair", "cart", "desk", "suitcase", "backpack"}
     result.settings["warning_hysteresis"] = True
     assert build_snapshot(result, algorithm="improved", captured_at_ms=1000,
-                          emitted_at_ms=1100, zones=ZoneSet(zones=[])).collision_evaluated
+                          emitted_at_ms=1100, zones=ZoneSet(zones=[], coordinate_frame_id="unity-world-xzy"),
+                          stream_id="test-stream", seq=2, map_config=map_config()).collision_evaluated
+    with pytest.raises(ValueError, match="coordinate frames"):
+        build_snapshot(result, algorithm="improved", captured_at_ms=1000,
+                       emitted_at_ms=1100, zones=ZoneSet(zones=[], coordinate_frame_id="marker-origin"),
+                       stream_id="test-stream", seq=3, map_config=map_config())
+
+
+def map_config():
+    return DashboardMap(coordinate_frame_id="unity-world-xzy", bounds=MapBounds(
+        x_min=2.79, x_max=7.79, y_min=1.785, y_max=6.785))
+
+
+def test_map_bounds_and_sequence_validation():
+    with pytest.raises(ValidationError):
+        MapBounds(x_min=1, x_max=0, y_min=0, y_max=1)
+    with pytest.raises(ValidationError):
+        MapBounds(x_min=0, x_max=float("inf"), y_min=0, y_max=1)
 
 
 def test_shared_examples_and_json_schemas_match_contract():

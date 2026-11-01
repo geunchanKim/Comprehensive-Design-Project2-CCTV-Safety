@@ -1,6 +1,6 @@
 """Week-one dashboard contract. Transport and zone/PPE evaluation come later."""
 from math import isclose
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -63,6 +63,7 @@ class RiskZone(ContractModel):
 class ZoneSet(ContractModel):
     schema_version: Literal["1.0"] = "1.0"
     coordinate_system: Literal["world_xy_m"] = "world_xy_m"
+    coordinate_frame_id: str = Field(min_length=1, max_length=128)
     zones: list[RiskZone]
 
     @model_validator(mode="after")
@@ -95,9 +96,33 @@ class DashboardObject(ContractModel):
     zone_states: list[ZoneState] = Field(default_factory=list)
 
 
+class MapBounds(ContractModel):
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+
+    @model_validator(mode="after")
+    def positive_extent(self):
+        if self.x_min >= self.x_max or self.y_min >= self.y_max:
+            raise ValueError("map bounds must have positive width and height")
+        return self
+
+
+class DashboardMap(ContractModel):
+    coordinate_system: Literal["world_xy_m"] = "world_xy_m"
+    coordinate_frame_id: str = Field(min_length=1, max_length=128)
+    bounds: MapBounds
+
+
 class DashboardSnapshot(ContractModel):
     schema_version: Literal["1.0"] = "1.0"
     event: Literal["snapshot"] = "snapshot"
+    stream_id: str = Field(min_length=1, max_length=128)
+    seq: int = Field(ge=0)
+    map: DashboardMap
+    stale_after_ms: int = Field(default=1000, ge=1)
+    supported_classes: list[ObjectClass] = Field(default_factory=lambda: list(get_args(ObjectClass)))
     session_id: str
     calibration_profile: CalibrationProfile
     algorithm: str
@@ -113,9 +138,13 @@ class DashboardSnapshot(ContractModel):
 
 
 def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
-                   captured_at_ms: int, emitted_at_ms: int, zones: ZoneSet) -> DashboardSnapshot:
+                   captured_at_ms: int, emitted_at_ms: int, zones: ZoneSet,
+                   stream_id: str, seq: int, map_config: DashboardMap) -> DashboardSnapshot:
     """Adapt existing results without inventing safe/PPE/zone decisions."""
+    if zones.coordinate_frame_id != map_config.coordinate_frame_id:
+        raise ValueError("zone and map coordinate frames must match")
     return DashboardSnapshot(
+        stream_id=stream_id, seq=seq, map=map_config,
         session_id=result.session_id, calibration_profile=result.calibration_profile,
         algorithm=algorithm, pair_id=result.pair_id, captured_at_ms=captured_at_ms,
         emitted_at_ms=emitted_at_ms,
