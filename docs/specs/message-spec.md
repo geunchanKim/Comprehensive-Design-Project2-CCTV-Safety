@@ -189,6 +189,8 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 
 ## 7. 결정된 것 / 정해야 할 것
 
+11월 대시보드 연동 초안: [실시간 메시지](dashboard-stream.md), [위험구역](risk-zones.md), [서버 시간 측정](server-profiling.md). 현재 탐지 API 계약과 향후 실시간 전송 계약을 구분한다.
+
 | 항목 | 상태 |
 |---|---|
 | Unity → 엣지 전달 방식 | ✅ 폴더 (엣지가 읽음) |

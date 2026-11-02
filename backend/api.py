@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import re
+import logging
 from itertools import combinations
 from typing import get_args
 
@@ -15,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 try:
+    from .profiling import StageTimer
     from .database import get_db
     from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
@@ -32,6 +34,7 @@ try:
                            update_kalman, update_pair_hysteresis)
     from .risk import WARNING_RELEASE_MARGIN_M, calculate_pair_risk, hysteresis_level
 except ImportError:  # Docker runs this directory as the import root.
+    from profiling import StageTimer
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
@@ -549,6 +552,7 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
 
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+    timer = StageTimer()
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
     used_object_ids: set[int] = set()
@@ -592,6 +596,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         if tuple(frame.image_size) != (camera.image_width, camera.image_height):
             raise HTTPException(422, f"image_size does not match calibration for {frame.camera_id}")
 
+    timer.mark("validation_ms")
     calibrations = [_calibration(camera) for camera in cameras]
     essential = fundamental_matrix(*calibrations)
     pixel_scale = float(np.mean([c.K[0, 0] for c in calibrations] + [c.K[1, 1] for c in calibrations]))
@@ -601,6 +606,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
     db.add(bundle)
     db.flush()
 
+    timer.mark("calibration_bundle_ms")
     records = {}
     normalized = {}
     for frame, calibration in zip(frames, calibrations):
@@ -620,6 +626,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             records[frame.camera_id].append((item, record, foot, foot_source))
             normalized[frame.camera_id].append(undistort(foot, calibration))
 
+    timer.mark("ingest_undistort_ms")
     matches, used = [], [set(), set()]
     floor_entries = []   # C 바닥 좌표 추적에 넘길 사람 위치들
 
@@ -902,6 +909,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             match_stage(object_class, remaining, "box")
         else:
             match_stage(object_class, class_indexes)
+    timer.mark("matching_position_tracking_ms")
     if settings["floor_tracking"]:
         singles = []
         if settings["single_camera_fallback"]:   # 짝이 안 된 사람 탐지 (D가 C 트랙에 이어 붙일 후보)
@@ -914,6 +922,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         if floor_entries or singles:
             matches.extend(_apply_floor_tracking(db, body.session_id, profile, algorithm, settings,
                                                  floor_entries, singles, frames, calibrations))
+    timer.mark("floor_tracking_ms")
     risks = []
     hysteresis = settings["warning_hysteresis"]
     if ENABLE_RISK_ANALYSIS or hysteresis:
@@ -941,19 +950,30 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             risks.append(risk)
             db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
                              captured_at_ms=max(frame.ts for frame in frames), **risk))
+    timer.mark("risk_ms")
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+    timer.mark("commit_ms")
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
-    return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
+    bundle_id = bundle.id
+    timer.mark("response_prepare_ms")
+    timings = timer.result()
+    logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
+        "session_id": body.session_id, "pair_id": body.pair_id,
+        "calibration_profile": profile, "algorithm": algorithm,
+        "timings_ms": timings, "input_detections": sum(len(f.detections) for f in frames),
+        "match_count": len(matches), "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
+    }, allow_nan=False))
+    return {"bundle_id": bundle_id, "session_id": body.session_id, "pair_id": body.pair_id,
             "calibration_profile": profile, "sync_delta_ms": sync_delta,
             "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
             "sync_time_basis": sync_time_basis, "max_sync_delta_ms": max_sync_delta_ms,
             "matches": matches, "unmatched": unmatched,
-            "risks": risks, "settings": settings}
+            "risks": risks, "settings": settings, "timings_ms": timings}
 
 
 @router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
