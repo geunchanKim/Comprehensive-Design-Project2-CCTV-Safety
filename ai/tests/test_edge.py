@@ -569,3 +569,21 @@ def test_replay_all_finds_recordings_in_number_order(tmp_path):
     (tmp_path / "s3" / "t1").mkdir(parents=True)            # frames.jsonl 없는 폴더는 녹화로 보지 않음
     names = [name for name, _ in replay_all.find_recordings(tmp_path)]
     assert names == ["s1-t1", "s1-t2", "s2-t1", "s10-t1"]   # 글자 순(s10 < s2)이 아니라 숫자 순
+
+
+def test_timing_summary_detail_counts_status_and_missing_responses(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    rows = [{"frame": n, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0, "cam2": 40.0},
+             "yolo_ms": {"cam1": 20.0, "cam2": 20.0}, "pose_ms": {"cam1": 20.0, "cam2": 20.0},
+             "age_ms": 100.0, "queue_ms": 1.0, "rtt_ms": 50.0 if n != 4 else None,
+             "status": 201 if n != 4 else 404} for n in range(1, 5)]
+    rx.write_jsonl(tmp_path / "timings.jsonl", rows)
+    rx.write_jsonl(tmp_path / "sent_detections.jsonl", [{"pair_id": n, "frames": []} for n in (1, 2, 3)])
+    rx.write_jsonl(tmp_path / "responses_detections.jsonl", [{"pair_id": n} for n in (1, 2)])   # 3번 응답 없음
+    rx.write_jsonl(tmp_path / "failed.jsonl", [{"status": 404, "message": {"pair_id": 4}}])
+
+    text = ts.detail([tmp_path], warmup=0)
+    assert "| 서버 왕복 | 3 | 50.0 | 50.0 | 50.0 | 50.0 | 50.0 |" in text
+    assert "| 201 | 3 |" in text and "| 404 | 1 |" in text
+    assert "받았는데 응답 기록이 없는 짝: 1" in text and "실패 기록(failed): 1" in text

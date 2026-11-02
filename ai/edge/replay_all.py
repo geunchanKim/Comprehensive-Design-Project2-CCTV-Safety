@@ -7,7 +7,8 @@
   - --sessions 목록 파일을 주면 목록에 있는 이름만 실행하고, 목록에 없는 녹화는 건너뛴다고 알려 준다
   - 사진은 다시 저장하지 않는다 (--no-save). 재생 기록(frames·meta)은 runs/replay/ 에 남긴다
   - 하나가 실패하면 이유를 보여 주고 멈춘다 (서버가 캘리브레이션 없음 등으로 거절하면 나머지도 실패하므로)
-  - 끝나면 timing_summary.py 로 모든 세션을 한 표로 보여 준다
+  - 끝나면 timing_summary.py 로 모든 세션을 한 표로 보여 준다 (--detail 포함)
+  - 실행 정보(시작·종료 시각, session_id 목록, 장비, 넘긴 설정)를 runs/replay/run-<시각>.json 에 남긴다
 
 명령 (ai/ 폴더에서, 가상환경 켠 뒤)
   python edge/replay_all.py --version v6 --dry-run                                  # 서버 없이 엣지만
@@ -16,9 +17,12 @@
   python edge/replay_all.py --version v6 --dry-run --only s10-t1 s6-t1              # 일부만
 """
 import argparse
+import json
+import platform
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 AI_DIR = Path(__file__).resolve().parent.parent
@@ -76,7 +80,20 @@ def main():
         raise SystemExit("재생할 녹화가 없어요")
     print(f"재생할 녹화 {len(plan)}개: " + ", ".join(s for s, _ in plan) + "\n")
 
-    done = []
+    started = datetime.now()
+    info = {"started": started.isoformat(timespec="seconds"), "finished": None,
+            "server": "dry-run" if args.dry_run else args.server, "sessions_file": args.sessions,
+            "planned": [s for s, _ in plan], "done": [], "realtime_args": extra,
+            "machine": {"platform": platform.platform(), "machine": platform.machine(),
+                        "processor": platform.processor(), "python": platform.python_version()}}
+    Path(args.out).mkdir(parents=True, exist_ok=True)
+    info_path = Path(args.out) / f"run-{started:%Y%m%d-%H%M%S}.json"
+
+    def save_info():
+        info["finished"] = datetime.now().isoformat(timespec="seconds")
+        info_path.write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    done = info["done"]
     for i, (session, path) in enumerate(plan, start=1):
         cmd = [sys.executable, str(AI_DIR / "edge" / "realtime.py"),
                "--cam1", str(path / "cam1"), "--cam2", str(path / "cam2"),
@@ -87,11 +104,14 @@ def main():
         cmd += extra
         print(f"===== [{i}/{len(plan)}] {session} =====", flush=True)
         if subprocess.run(cmd, cwd=AI_DIR).returncode != 0:
+            save_info()
             raise SystemExit(f"\n{session} 에서 멈췄어요. 위 메시지를 확인하세요 (끝난 것: {len(done)}개)")
         done.append(session)
+    save_info()
+    print(f"실행 정보: {info_path}")
 
     print("\n===== 전체 요약 =====")
-    subprocess.run([sys.executable, str(AI_DIR / "eval" / "timing_summary.py"),
+    subprocess.run([sys.executable, str(AI_DIR / "eval" / "timing_summary.py"), "--detail",
                     *[str(AI_DIR / "runs" / "edge" / s) for s in done]], cwd=AI_DIR)
 
 

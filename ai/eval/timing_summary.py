@@ -15,14 +15,20 @@
   - 같은 폴더의 sent_detections.jsonl 로 1초에 보낸 짝 수를 구한다 (준비 짝은 빼고)
   - 서버 실패·버림(status 가 2xx·dry-run 이 아닌 짝) 개수를 센다
   - 예전 기록(yolo_ms 등이 없는 줄)은 그 칸을 - 로 둔다
+  --detail 을 주면 BE 공유용 자세한 표를 더 보여 준다 (모든 세션을 합쳐서)
+      - 항목마다 표본 수·평균·P50·P90·P95·최댓값
+      - 서버 상태별 건수 (201, 404, dry-run, dropped ...)
+      - 응답 확인: 서버가 받은 짝(sent_detections) 중 응답(responses_detections)이 없는 짝 수, 실패(failed) 수
 
 명령 (ai/ 폴더에서)
   python eval/timing_summary.py runs/edge/classroom-1014-s10-t1-v6
   python eval/timing_summary.py runs/edge/classroom-1014-s*-v6         # 여러 세션을 한 표로
   python eval/timing_summary.py runs/edge/classroom-1014-s*-v6 --warmup 0
+  python eval/timing_summary.py runs/edge/classroom-1014-s*-v6 --detail > speed-v6.md
 """
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +100,63 @@ def summarize(folder: Path, warmup: int = 5) -> list[str]:
             str(bad)]
 
 
+DETAIL_ITEMS = [("대기", "wait_ms", False), ("검출 합", "yolo_ms", True), ("포즈 합", "pose_ms", True),
+                ("탐지 합", "detect_ms", True), ("엣지 전체", "age_ms", False), ("전송 큐", "queue_ms", False),
+                ("서버 왕복", "rtt_ms", False)]
+
+
+def count_lines(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def pair_ids(path: Path) -> set:
+    if not path.exists():
+        return set()
+    ids = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            ids.add(row.get("pair_id", (row.get("message") or {}).get("pair_id")))
+    return ids
+
+
+def detail(folders: list[Path], warmup: int) -> str:
+    """모든 세션을 합친 자세한 표 (마크다운)"""
+    rows, statuses = [], Counter()
+    check = {"sent": 0, "responses": 0, "missing": 0, "failed": 0}
+    for folder in folders:
+        session_rows = load(folder)
+        session_rows = session_rows[warmup:] if len(session_rows) > warmup else session_rows
+        rows += session_rows
+        statuses.update(str(r.get("status")) for r in session_rows)
+        sent, answered = pair_ids(folder / "sent_detections.jsonl"), pair_ids(folder / "responses_detections.jsonl")
+        check["sent"] += len(sent)
+        check["responses"] += len(answered)
+        check["failed"] += count_lines(folder / "failed.jsonl")
+        if any(r.get("status") not in (None, "dry-run") for r in session_rows):   # 서버로 보낸 세션만 응답을 따짐
+            check["missing"] += len(sent - answered)
+    out = [f"### 항목별 시간 (ms, 세션 {len(folders)}개 합침, 세션마다 앞 {warmup}짝 제외)", "",
+           "| 항목 | 표본 수 | 평균 | P50 | P90 | P95 | 최댓값 |", "|---|---|---|---|---|---|---|"]
+    for label, key, per_cam in DETAIL_ITEMS:
+        values = [cam_sum(r, key) if per_cam else r.get(key) for r in rows]
+        v = np.asarray([x for x in values if x is not None], dtype=float)
+        if v.size == 0:
+            out.append(f"| {label} | 0 | - | - | - | - | - |")
+            continue
+        p50, p90, p95 = np.percentile(v, [50, 90, 95])
+        out.append(f"| {label} | {v.size} | {v.mean():.1f} | {p50:.1f} | {p90:.1f} | {p95:.1f} | {v.max():.1f} |")
+    out += ["", "### 서버 상태별 건수", "", "| 상태 | 건수 |", "|---|---|"]
+    out += [f"| {status} | {n} |" for status, n in sorted(statuses.items())]
+    out += ["", "### 응답 확인", "",
+            f"- 서버가 받은 짝(sent_detections): {check['sent']}",
+            f"- 응답 기록(responses_detections): {check['responses']}",
+            f"- 받았는데 응답 기록이 없는 짝: {check['missing']}",
+            f"- 실패 기록(failed): {check['failed']}"]
+    return "\n".join(out)
+
+
 HEAD = ["세션", "짝", "건너뛴 짝", "초당 짝", "대기", "검출 합", "포즈 합", "탐지 합", "엣지 전체", "서버 왕복", "실패·버림"]
 
 
@@ -101,6 +164,7 @@ def main():
     parser = argparse.ArgumentParser(description="실시간 전송 시간 기록(timings.jsonl) 요약")
     parser.add_argument("folders", nargs="+", help="runs/edge/<session_id> 폴더")
     parser.add_argument("--warmup", type=int, default=5, help="앞에서 뺄 짝 수 (모델 준비 시간)")
+    parser.add_argument("--detail", action="store_true", help="표본 수·평균·P95, 상태별 건수, 응답 누락까지")
     args = parser.parse_args()
 
     print(f"시간(ms)은 중간값 / 90% 값 / 최댓값 · 앞 {args.warmup}짝 제외\n")
@@ -108,6 +172,8 @@ def main():
     print("|" + "---|" * len(HEAD))
     for folder in args.folders:
         print("| " + " | ".join(summarize(Path(folder), args.warmup)) + " |")
+    if args.detail:
+        print("\n" + detail([Path(f) for f in args.folders], args.warmup))
 
 
 if __name__ == "__main__":
