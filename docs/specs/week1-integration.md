@@ -23,6 +23,8 @@ RTT는 `timings.jsonl`의 행마다 `frame`과 함께 저장하며 frame은 서�
 
 ## Unity 입력과 지도
 
+11/2 후속: 위 dry-run과 별도로 실제 v6 15세션 로그를 수신했다. 실제 실행 커밋은 PR 공유 기준 `ba17304`이며, [통합 실측 보고서](../benchmarks/2026-11-02-edge-v6-replay.md)에서 2,884건 전송·응답과 예열 제외 2,809표본을 검증했다. 서버 계측은 아직 배포 전이므로 v6의 서버 단계 시간은 없다.
+
 이번 평가는 world→(x,z,y)를 유지하며 rel로 바꾸지 않는다. 4m 격자에 0.5m씩 여유를 둔 지도 범위는 X 2.79~7.79m, Y 1.785~6.785m이다. 지도·위험구역 frame ID는 `unity-world-xzy`다. 실측 마커 좌표와는 분리한다.
 
 | 검증 목적 | 우선 재사용할 장면 |
@@ -49,6 +51,6 @@ python -m backend.tools.check_unity_metadata ai/runs/week1-prep/unity-grid-sc10.
 
 ## 담당자에게 남은 확인
 
-- AI: v6 15개 서버 재생 뒤 RTT 포함 로그와 공유 위치. 실행 커밋·dry-run 샘플·15개 세션 목록·RTT의 frame 연결 방식은 확인 완료. 교실 사진 일정과 조끼 준비 현황은 추가 확인이 필요하다.
+- AI: v6 15개 서버 재생 로그 수신·검증 완료. [실측 보고서](../benchmarks/2026-11-02-edge-v6-replay.md)에 전체·세션별 통계를 기록했다. 계측 배포 후 v7 동일 입력 재측정과 교실 사진 일정·조끼 준비 현황 확인이 남아 있다.
 - Unity/프론트: 메시지 추가 필드 반영 의견과 디자인 시안. 지도 범위·seq·stale 기준·지원 클래스는 [snapshot 명세](dashboard-stream.md)에 반영했다.
 - 서버: PR 컨펌 전 push·배포하지 않는다. 전체 위험 분석 활성화와 실시간 API는 이번 준비 작업에서 앞당기지 않는다.

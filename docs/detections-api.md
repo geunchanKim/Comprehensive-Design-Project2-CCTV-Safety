@@ -4,6 +4,27 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 ## 세션 규칙
 
+### 실측 이후 합의한 서버 기본값
+
+2026-10-31 공유 실측 기준이다. 서버 환경변수 override가 우선하며 Python·Compose·`infra/.env.example`을 함께 확인한다. 기존 서버 `.env`의 명시값은 이 표 수정만으로 바뀌지 않는다.
+
+| 환경변수 | 기본값 |
+| --- | --- |
+| `ANKLE_FOOT_Z_MIN` / `ANKLE_FOOT_Z_MAX` | `-0.1` / `0.15` m |
+| `BOX_FOOT_Z_MIN` / `BOX_FOOT_Z_MAX` | `-0.35` / `0.2` m |
+| `MAX_GROUND_DISTANCE_M` | `1.5` m |
+| `GROUND_ANKLE_Z_M` / `SINGLE_CAMERA_ANKLE_Z_M` | `0.08` / `0.08` m |
+| `FLOOR_TRACK_GATE_M` | `0.8` m |
+| `MAX_SYNC_DELTA_MS` | `50` ms |
+| `MAX_EPIPOLAR_ERROR_PX` | `50` px |
+| `IMPROVED_FEATURES` | `cdfg` |
+| `WARNING_DISTANCE_M` / `DANGER_DISTANCE_M` | `1.0` / `0.5` m |
+| `ENABLE_RISK_ANALYSIS` | `false` (활성화는 별도 결정) |
+
+상자 하단 투영 평면은 `Z=0m`이며 `/health` 설정에는 `ground_ankle_z_m`을 노출한다. 발목·상자 범위를 `-0.1~0.18m`로 통일하는 안은 미정이다. API 테스트의 가상 발목 높이 `0.3m`는 해당 fixture에서만 상한 `0.4m`를 사용한다.
+
+실측 참조: `calib-classroom-1014-2x2b.json`, 107명 대상 기준/렌즈 보정/매칭 개선/결합의 성공은 91/100/107/107명, 평균 오차는 7.26/6.89/8.39/7.05cm, 15cm 이내는 84.1/90.7/91.6/96.3%다. 이는 공유 실측 결과이며 현재 브랜치의 재검증 결과가 아니다.
+
 `session_id`는 한 번의 실험 실행을 식별한다. 같은 Unity 데이터를 다시 실행해 결과를 비교할 때는 `unity-classroom-01-run2`처럼 새로운 `session_id`를 사용한다. 카메라 캘리브레이션, 전역 객체 ID, detection bundle, ground truth가 모두 세션 단위로 저장되므로 새 세션에서는 캘리브레이션도 다시 등록해야 한다.
 
 한 세션에서 `pair_id`는 실험 조건(`calibration_profile`, `algorithm`)마다 고유하다. 엣지의 최초 전송은 항상 `basic + baseline`으로 저장된다.

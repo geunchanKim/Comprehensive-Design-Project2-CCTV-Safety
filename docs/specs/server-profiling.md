@@ -18,6 +18,8 @@
 
 DB autoflush·조회 시간은 실제 발생한 구간에 포함된다. `total_ms`는 HTTP 요청 파싱, 응답 모델 직렬화, 로그 출력, 네트워크·화면 지연을 포함하지 않는다. 비활성 단계도 분기 통과 시간 때문에 정확히 0이 아닐 수 있다. 실패 요청은 성공 시간 표에 포함되지 않는다.
 
+같은 세션·profile·algorithm의 `frame = pair_id`로 연결한 `rtt_ms - timings_ms.total_ms`는 네트워크 왕복과 FastAPI 요청 파싱·응답 직렬화 등 함수 바깥 처리의 잔여 시간이다. 순수 네트워크 지연으로 해석하지 않는다.
+
 ## 기록과 요약
 
 최신 코드로 서버를 실행하고 기존 엣지 전송 또는 재전송 도구로 동일한 입력을 보낸다. #71 회신에 따라 1주 차는 10/14 녹화 15개(약 4분)를 녹화 속도로 재생한다. 실제 카메라 10분 연속 실행과 구분하며 새 촬영은 마지막 주 검증에서 진행한다. 예열 구간을 별도 세션으로 나누고, 같은 입력·설정·하드웨어에서 반복한다. 실행 커밋은 `APP_COMMIT_SHA`로 전달한다.
@@ -27,7 +29,7 @@ DB autoflush·조회 시간은 실제 발생한 구간에 포함된다. `total_m
 docker compose -f infra/docker-compose.yaml logs --no-color -f backend | Out-File -FilePath server-timing.log -Encoding utf8
 
 # 세션·캘리브레이션·알고리즘·커밋별 평균, p50, p90, p95, 최대 시간
-python -m backend.tools.timing_summary server-timing.log --out server-speed.md
+python -m backend.tools.server_log_summary server-timing.log --out server-speed.md
 ```
 
 측정 환경, DB 종류, 입력 사람 수, 실행 설정, 실행 시간, 에러 수를 표와 함께 기록한다. `APP_COMMIT_SHA=unknown`으로 서로 다른 실행을 한 파일에 모으지 않는다. 기존 엣지 측정은 `ai/eval/timing_summary.py`를 사용한다. 함수 시간의 역수는 실제 초당 처리 짝 수나 전체 지연이 아니므로 목표 달성 근거로 사용하지 않는다.
@@ -47,9 +49,15 @@ python -m backend.tools.benchmark_pack ai/eval/packs/s4 --pairs 100 --warmup 10 
 
 ```powershell
 python -m backend.tools.measurement_report ai/runs/edge/classroom-1014-s10-t1-v6 --out measurement-v6.md
+
+# PowerShell: 15개 세션을 합산하고 세션별 처음 관측한 5짝을 제외
+$folders = Get-ChildItem ai/runs/week1-v6-received/edge -Directory | Select-Object -ExpandProperty FullName
+python -m backend.tools.measurement_report @folders --warmup 5 --out measurement-v6-all.md
 ```
 
 `timings.jsonl`, `sent_detections.jsonl`, `responses_detections.jsonl`, `failed.jsonl`을 읽는다. 하나의 폴더에 세션·profile·알고리즘 조건이 섞이거나 pair_id/frame이 중복되면 거부한다. 세 로그에 모두 있는 pair 수, 저장된 응답 누락, HTTP/전송 실패 수와 구간별 시간을 출력한다. 성공 전송률은 입력 프레임 수신 시각 기준이며 서버 응답 완료율이 아니다.
+
+`--warmup` 기본값은 0이다. 5를 주면 각 세션에서 로그 전체의 pair_id/frame 합집합을 정렬한 앞 5개를 시간 통계와 전송률에서 제외한다. 프레임 번호 1~5만 빼는 방식이 아니며, 동일한 ID를 응답의 서버 시간에서도 제외한다. 전체 기록·상태·실패·응답 누락 건수는 예열을 포함한다. `queue_ms`, 카메라별 탐지 및 합계, P90을 출력하고 `status=dropped`는 실패 파일 없이도 상태 건수에 남긴다. 여러 폴더는 표본을 합쳐 전체 통계를 계산하고 세션별 표를 함께 출력한다. 같은 세션/profile의 중복 폴더, 서로 다른 v6/v7·profile·algorithm의 합산은 거부한다.
 
 #71 제안의 `yolo_ms`·`pose_ms`는 카메라별 dict, 기존 `detect_ms`는 포즈를 포함한 전체 탐지 시간이다. `rtt_ms`는 요청 송신~응답 수신이며 엣지 단조 시계 하나로 측정한다. 이 도구는 timings 행의 frame 번호 기준 값과 응답 행의 RTT를 각각 별도 항목으로 지원한다. 없는 값은 0으로 대체하지 않고 unavailable로 남긴다. 엣지 담당이 실제 필드와 저장 위치를 반영한 뒤 샘플로 최종 확인한다.
 

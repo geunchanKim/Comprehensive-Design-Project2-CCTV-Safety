@@ -9,7 +9,7 @@ import tempfile
 from itertools import islice
 from pathlib import Path
 
-from .timing_summary import summarize
+from .server_log_summary import summarize
 
 
 def main():
