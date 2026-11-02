@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { dataSource } from '../api/source'
-import type { AreaSnapshot, ClassInfo } from '../api/types'
+import type { AreaSnapshot, ClassInfo, VestState, ZoneState } from '../api/types'
 import AlertCard from '../components/AlertCard'
 import { useShell } from '../hooks/useShell'
 import FloorPlan, { type FloorPlanLayers } from '../components/FloorPlan'
@@ -9,7 +9,9 @@ import { usePolling } from '../hooks/usePolling'
 import { alertTitle, formatClock, objectName } from '../lib/safety'
 
 const LAYER_LABELS: [keyof FloorPlanLayers, string][] = [['trail', '이동 궤적'], ['fov', '카메라 시야'], ['zones', '구역']]
-const MATCHING_TEXT = { epipolar: 'epipolar (2대)', 'ground-plane': '바닥 평면 추정', 'single-camera': '한 카메라' }
+const VEST_TEXT: Record<VestState['status'], string> = { wearing: '착용', not_wearing: '미착용', unknown: '미판단' }
+const ZONE_TEXT: Record<ZoneState['status'], string> = { outside: '밖', warning: '접근', intrusion: '진입', unknown: '미판단' }
+const EVALUATED_TEXT = { collision: '충돌', zone: '위험 구역', vest: '안전조끼' }
 
 // 구역이 바뀌면 key로 다시 마운트해서 이전 구역 데이터가 남지 않게 한다
 export default function AreaPage() {
@@ -27,7 +29,10 @@ function AreaView({ areaId }: { areaId: string }) {
   if (snapshot.state === 'loading') return <p className="page-message">불러오는 중…</p>
   if (snapshot.state === 'error') return <p className="page-message">구역 데이터를 불러오지 못했습니다: {snapshot.detail}</p>
 
-  const { config, cameras, classes, objects, alerts } = snapshot.data
+  const { config, cameras, classes, objects, alerts, evaluated, capturedAtMs, staleAfterMs } = snapshot.data
+  // 마지막 snapshot이 기준보다 오래되면 화면이 멈춘 것. 안전으로 보이지 않게 표시한다
+  const stale = nowMs - capturedAtMs > staleAfterMs
+  const notEvaluated = (Object.keys(EVALUATED_TEXT) as (keyof typeof EVALUATED_TEXT)[]).filter((k) => !evaluated[k])
   const titleOf = (a: AreaSnapshot['alerts'][number]) => alertTitle(a, objects, config.zones, classes)
   const sorted = [...alerts].sort((a, b) => (a.level === b.level ? a.startedAtMs - b.startedAtMs : a.level === 'danger' ? -1 : 1))
   const danger = sorted.find((a) => a.level === 'danger')
@@ -51,9 +56,15 @@ function AreaView({ areaId }: { areaId: string }) {
           {cameras.map((c) => (
             <span key={c.cameraId} className="chip">
               <span className={`status-dot status-dot--${c.online ? 'ok' : 'offline'}`} aria-hidden="true" />
-              {c.cameraId.toUpperCase()} {c.online ? `${c.fps ?? '-'}fps` : '끊김'}
+              {c.cameraId.toUpperCase()} {c.online ? '연결' : '끊김'}
             </span>
           ))}
+          {stale && <span className="chip warning-text">갱신 지연 {((nowMs - capturedAtMs) / 1000).toFixed(0)}초</span>}
+          {notEvaluated.length > 0 && (
+            <span className="chip muted" title="판단이 꺼져 있어 경고가 없어도 안전하다는 뜻이 아닙니다">
+              미판단: {notEvaluated.map((k) => EVALUATED_TEXT[k]).join(' · ')}
+            </span>
+          )}
           <span className="mono clock">{formatClock(nowMs)}</span>
         </div>
       </header>
@@ -61,7 +72,11 @@ function AreaView({ areaId }: { areaId: string }) {
       {danger && (
         <div className="risk-banner" role="status">
           <span className="danger-text"><b>위험</b></span>
-          <span className="grow">{titleOf(danger)} · 거리 <b className="mono">{danger.distanceM?.toFixed(2)} m</b> · 예상 접촉 <b className="mono">{danger.ttcS?.toFixed(1)} s</b></span>
+          <span className="grow">
+            {titleOf(danger)}
+            {danger.distanceM !== undefined && <> · 거리 <b className="mono">{danger.distanceM.toFixed(2)} m</b></>}
+            {danger.ttcS !== undefined && <> · 예상 접촉 <b className="mono">{danger.ttcS.toFixed(1)} s</b></>}
+          </span>
           <button type="button" className="btn btn--ghost" onClick={() => setSelectedId(danger.object1Id ?? null)}>위치 보기</button>
         </div>
       )}
@@ -80,7 +95,7 @@ function AreaView({ areaId }: { areaId: string }) {
       <div className="content-row">
         <section className="card grow-wide" aria-label="평면도">
           <div className="card__head">
-            <h2 className="grow">구역 평면도 <span className="muted mono small">{config.size.w.toFixed(1)} × {config.size.h.toFixed(1)} m</span></h2>
+            <h2 className="grow">구역 평면도 <span className="muted mono small">{(config.bounds.xMax - config.bounds.xMin).toFixed(1)} × {(config.bounds.yMax - config.bounds.yMin).toFixed(1)} m</span></h2>
             {LAYER_LABELS.map(([key, text]) => (
               <button key={key} type="button" className="toggle" aria-pressed={layers[key]}
                 onClick={() => setLayers((l) => ({ ...l, [key]: !l[key] }))}>{text}</button>
@@ -108,10 +123,29 @@ function AreaView({ areaId }: { areaId: string }) {
               <dl className="detail-list">
                 <dt>위치 (x, y)</dt><dd className="mono">{selected.world.x.toFixed(2)}, {selected.world.y.toFixed(2)} m</dd>
                 <dt>속도</dt><dd className="mono">{selected.velocity ? `${Math.hypot(selected.velocity.x, selected.velocity.y).toFixed(2)} m/s` : '—'}</dd>
-                <dt>매칭 방식</dt><dd className="mono">{MATCHING_TEXT[selected.matchingMethod]}</dd>
-                {selected.ppe && (
-                  <><dt>PPE</dt><dd>안전모 {selected.ppe.helmet ? '○' : '✕'} · 조끼 {selected.ppe.vest ? '○' : '✕'}</dd></>
+                <dt>카메라 track</dt>
+                <dd className="mono">
+                  {Object.entries(selected.cameraTracks).map(([cam, track]) => `${cam} #${track}`).join(' · ')}
+                  {Object.keys(selected.cameraTracks).length < 2 && ' (한 카메라)'}
+                </dd>
+                {selected.cls === 'person' && (
+                  <>
+                    <dt>안전조끼</dt>
+                    <dd>
+                      {evaluated.vest ? VEST_TEXT[selected.vest.status] : '미판단'}
+                      {evaluated.vest && selected.vest.confidence !== null && <span className="muted mono small"> {Math.round(selected.vest.confidence * 100)}%</span>}
+                    </dd>
+                  </>
                 )}
+                {selected.zoneStates.map((zs) => (
+                  <Fragment key={zs.zoneId}>
+                    <dt>{config.zones.find((z) => z.zoneId === zs.zoneId)?.name ?? zs.zoneId}</dt>
+                    <dd>
+                      {evaluated.zone ? ZONE_TEXT[zs.status] : '미판단'}
+                      {evaluated.zone && zs.distanceM !== null && <span className="muted mono small"> {zs.distanceM.toFixed(2)} m</span>}
+                    </dd>
+                  </Fragment>
+                ))}
               </dl>
               {/* 카메라별 bbox 크롭은 영상 전달 경로가 생기면 붙인다 */}
               <div className="snap-row">
@@ -142,7 +176,7 @@ function Legend({ classes }: { classes: ClassInfo[] }) {
       <li><span className="legend__line legend__line--warning" />주의</li>
       <li><span className="legend__line legend__line--danger" />위험</li>
       <li><span className="legend__zone" />위험 구역</li>
-      <li><span className="legend__ppe">PPE</span>안전모·조끼 미착용</li>
+      <li><span className="legend__ppe">조끼</span>안전조끼 미착용</li>
     </ul>
   )
 }

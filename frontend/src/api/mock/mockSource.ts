@@ -21,7 +21,10 @@ const configOf = (areaId: string): AreaConfig => {
   if (known) return known
   const summary = AREAS.find((a) => a.areaId === areaId)
   if (!summary) throw new Error(`unknown area ${areaId}`)
-  return { areaId, name: summary.name, size: { w: summary.rect.w, h: summary.rect.h }, background: { kind: 'blocks' }, zones: [] }
+  return {
+    areaId, name: summary.name, coordinateFrameId: `site-${areaId.toLowerCase()}`,
+    bounds: { xMin: 0, xMax: summary.rect.w, yMin: 0, yMax: summary.rect.h }, background: { kind: 'blocks' }, zones: [],
+  }
 }
 
 export const mockSource: DataSource = {
@@ -31,11 +34,14 @@ export const mockSource: DataSource = {
     delay(
       {
         config: configOf(areaId),
-        cameras: CAMERAS[areaId] ?? [],
+        cameras: (CAMERAS[areaId] ?? []).map((c) => ({ ...c, lastFrameAtMs: c.online ? Date.now() - 30 : null })),
         classes: CLASSES,
         objects: OBJECTS[areaId] ?? [],
         alerts: alerts.filter((a) => a.areaId === areaId),
+        // 안전조끼 판정은 예시 구역 A만 켜져 있다고 가정 (나머지는 미판단 표시 확인용)
+        evaluated: { collision: true, zone: true, vest: areaId === 'A' },
         capturedAtMs: Date.now(),
+        staleAfterMs: 1000,
       },
       signal,
     ),
