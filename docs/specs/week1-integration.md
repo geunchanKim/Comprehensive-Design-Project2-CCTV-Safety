@@ -7,19 +7,19 @@
 - AI는 MacBook Pro M3 Pro/MPS, COCO yolo11n + yolo11n-pose, imgsz 1280, foot ankle로 10/14 녹화 15개를 재생한다. 전체 약 4분이며 10분 실시간 실행과 별도 조건이다.
 - v6는 현 배포 서버로 엣지·RTT를 측정하고, 계측 서버 배포 이후 v7으로 같은 녹화를 반복한다. 배포일은 PR 컨펌·push·리뷰 이후 결정한다.
 - 10/14와 카메라 위치가 같다는 AI 회신에 따라 `calib-classroom-1014-2x2b.json`을 후보로 사용한다. session_id만 새 이름으로 두고 cam1/cam2 × basic/precise 네 payload를 검증한다.
-- 실제 등록에는 기존 `ai/calibration/register_calibration.py`를 재사용한다. 이번에 추가한 `prepare_replay_calibrations`는 오프라인 사전 검증만 하며 서버에 접속하지 않는다.
+- 실제 등록에는 기존 `ai/calibration/register_calibration.py`를 재사용했다. 이번에 추가한 `prepare_replay_calibrations`는 오프라인 사전 검증만 하며 서버에 접속하지 않는다.
 
 ```powershell
 # 저장소 루트. AI가 확정한 세션 목록을 한 줄에 하나씩 적은 파일을 사용
 python -m backend.tools.prepare_replay_calibrations --calibration ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v6.txt --out ai/runs/week1-prep/registration-plan-v6.json
 
-# 등록 시점에 별도로 실행하는 기존 명령. 현재는 실행하지 않음
+# 2026-11-02 v6 실제 등록에 사용한 명령
 python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v6.txt --backend-url http://서버주소:32130
 ```
 
-11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. 아직 서버 등록은 실행하지 않았다.
+11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 같은 날 현 배포 서버(`ba7ec7e`)에 v6 60개 payload를 실제 등록했고 모두 성공했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. v7은 계측 서버 배포 뒤 등록한다.
 
-RTT는 `timings.jsonl`의 행마다 `frame`과 함께 저장하며 frame은 서버 pair_id와 같다. s10-t1 dry-run 보고값은 엣지 약 11.5짝/초, 전체 132ms(P90 182ms)다. 원본 로그 수신 전 AI 보고값으로 기록하며, 서버 전송·RTT·서버 처리 시간이나 15개 전체 측정 결과로 해석하지 않는다. dry-run은 서버에 쓰지 않았으므로 v6 이름은 아직 재사용 가능하다는 AI 회신을 받았다.
+RTT는 `timings.jsonl`의 행마다 `frame`과 함께 저장하며 frame은 서버 pair_id와 같다. 실행 커밋은 `feat/edge-week1-timing`의 `7b1f58f`다. 수신한 s6-t1 dry-run은 timings·sent가 각각 49행이며 추가 필드와 `status=dry-run`을 확인했다. AI가 앞 5짝을 제외해 보고한 값은 약 11.7짝/초, 탐지 합 81ms(검출 40ms+포즈 41ms), 엣지 전체 131ms(P90 176ms)다. [BE 통합 보고서](../benchmarks/2026-11-02-edge-s6-t1-dry-run.md)는 예열을 제외하지 않은 49행 전체 통계이므로 이 값과 구분한다. dry-run에는 RTT·서버 응답·서버 단계별 시간이 없으며, 15개 전체 측정 결과로 해석하지 않는다.
 
 ## Unity 입력과 지도
 
@@ -49,6 +49,6 @@ python -m backend.tools.check_unity_metadata ai/runs/week1-prep/unity-grid-sc10.
 
 ## 담당자에게 남은 확인
 
-- AI: 실행 커밋·기록 공유 위치, yolo/pose/RTT 로그 샘플. 15개 세션 목록과 RTT의 frame 연결 방식은 확인 완료. 교실 사진 일정과 조끼 준비 현황은 추가 확인이 필요하다.
+- AI: v6 15개 서버 재생 뒤 RTT 포함 로그와 공유 위치. 실행 커밋·dry-run 샘플·15개 세션 목록·RTT의 frame 연결 방식은 확인 완료. 교실 사진 일정과 조끼 준비 현황은 추가 확인이 필요하다.
 - Unity/프론트: 메시지 추가 필드 반영 의견과 디자인 시안. 지도 범위·seq·stale 기준·지원 클래스는 [snapshot 명세](dashboard-stream.md)에 반영했다.
 - 서버: PR 컨펌 전 push·배포하지 않는다. 전체 위험 분석 활성화와 실시간 API는 이번 준비 작업에서 앞당기지 않는다.
