@@ -11,13 +11,15 @@
 
 ```powershell
 # 저장소 루트. AI가 확정한 세션 목록을 한 줄에 하나씩 적은 파일을 사용
-python -m backend.tools.prepare_replay_calibrations --calibration ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/runs/week1-prep/sessions-v6.txt --out ai/runs/week1-prep/registration-plan-v6.json
+python -m backend.tools.prepare_replay_calibrations --calibration ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v6.txt --out ai/runs/week1-prep/registration-plan-v6.json
 
 # 등록 시점에 별도로 실행하는 기존 명령. 현재는 실행하지 않음
-python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/runs/week1-prep/sessions-v6.txt --backend-url http://서버주소:32130
+python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v6.txt --backend-url http://서버주소:32130
 ```
 
-전체 15개 세션 이름은 AI 확정 목록을 받아 사용하며 추측해서 생성하지 않는다. 현재 확인된 예시 `classroom-1014-s10-t1-v6/v7`에 대해서는 8개 payload 사전 검증을 완료했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다.
+11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. 아직 서버 등록은 실행하지 않았다.
+
+RTT는 `timings.jsonl`의 행마다 `frame`과 함께 저장하며 frame은 서버 pair_id와 같다. s10-t1 dry-run 보고값은 엣지 약 11.5짝/초, 전체 132ms(P90 182ms)다. 원본 로그 수신 전 AI 보고값으로 기록하며, 서버 전송·RTT·서버 처리 시간이나 15개 전체 측정 결과로 해석하지 않는다. dry-run은 서버에 쓰지 않았으므로 v6 이름은 아직 재사용 가능하다는 AI 회신을 받았다.
 
 ## Unity 입력과 지도
 
@@ -47,6 +49,6 @@ python -m backend.tools.check_unity_metadata ai/runs/week1-prep/unity-grid-sc10.
 
 ## 담당자에게 남은 확인
 
-- AI: 15개 정확한 세션 목록, 실행 커밋·기록 공유 위치, yolo/pose/RTT 로그 샘플. 교실 사진 일정과 조끼 준비 현황은 회신에 미기입 상태다.
+- AI: 실행 커밋·기록 공유 위치, yolo/pose/RTT 로그 샘플. 15개 세션 목록과 RTT의 frame 연결 방식은 확인 완료. 교실 사진 일정과 조끼 준비 현황은 추가 확인이 필요하다.
 - Unity/프론트: 메시지 추가 필드 반영 의견과 디자인 시안. 지도 범위·seq·stale 기준·지원 클래스는 [snapshot 명세](dashboard-stream.md)에 반영했다.
 - 서버: PR 컨펌 전 push·배포하지 않는다. 전체 위험 분석 활성화와 실시간 API는 이번 준비 작업에서 앞당기지 않는다.
