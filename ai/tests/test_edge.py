@@ -11,6 +11,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - run_experiment·crossing: 다른 조건 결과(results.csv) 변환, 교차 구간 지표
   - 실시간 속도: Sender가 짝마다 시간을 기록하는지, timing_summary가 표를 맞게 계산하는지
   - 녹화 폴더 재생: 녹화한 사진을 기록한 시각 간격대로 흘려보내는지
+  - 녹화 여러 개 재생(replay_all): 녹화 폴더를 순서대로 찾는지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -434,25 +435,36 @@ def test_sender_writes_timing_per_pair(tmp_path):
     from types import SimpleNamespace
     from realtime import Sender
 
-    class FakeClient:
+    class FakeClient:                                       # 서버 대신: 보내면 바로 응답 받은 것으로 처리
         out_dir = tmp_path
         last_failure = None
-        sent = []
+        on_done = None
 
-        def send(self, message, path):
+        def __init__(self):
+            self.sent = []
+
+        def send(self, message, path, meta=None):
             self.sent.append(message)
+            self.on_done(meta, 201, 12.5, 0.3)
+
+        def close(self, wait=None):
+            pass
 
         def summary(self):
             return "ok"
 
-    def detect(image):
-        time.sleep(0.01)
-        return [{"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [10, 10, 50, 100],
-                 "foot": [30, 100], "foot_src": "box"}]
+    class FakeDetector:
+        last_ms = {"yolo": 0.0, "pose": 0.0}
+
+        def __call__(self, image):
+            time.sleep(0.01)
+            self.last_ms = {"yolo": 7.0, "pose": 3.0}
+            return [{"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [10, 10, 50, 100],
+                     "foot": [30, 100], "foot_src": "box"}]
 
     recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms)
     client = FakeClient()
-    sender = Sender("classroom-1101-s1-t1", {"cam1": detect, "cam2": detect}, client, recorder)
+    sender = Sender("classroom-1101-s1-t1", {"cam1": FakeDetector(), "cam2": FakeDetector()}, client, recorder)
     now = int(time.time() * 1000)
     frame = lambda cam: SimpleNamespace(camera=cam, image=np.zeros((1080, 1920, 3), np.uint8),
                                         recv_ms=now, pts_ms=0.0)
@@ -468,7 +480,21 @@ def test_sender_writes_timing_per_pair(tmp_path):
     assert set(rows[0]["detect_ms"]) == {"cam1", "cam2"}
     assert all(ms >= 10 for ms in rows[0]["detect_ms"].values())
     assert rows[0]["age_ms"] >= sum(rows[0]["detect_ms"].values())
-    assert "탐지 중간값" in sender.status()
+    assert rows[0]["yolo_ms"] == {"cam1": 7.0, "cam2": 7.0}
+    assert rows[0]["pose_ms"] == {"cam1": 3.0, "cam2": 3.0}
+    assert (rows[0]["rtt_ms"], rows[0]["status"]) == (12.5, 201)   # 응답 왕복이 같은 줄(frame)에 붙음
+    assert "왕복 중간값" in sender.status()
+
+
+def test_server_client_reports_result_with_meta(tmp_path):
+    results = []
+    client = ServerClient(None, tmp_path, dry_run=True)
+    client.on_done = lambda meta, status, rtt, queue_ms: results.append((meta, status, rtt))
+    client.send({"pair_id": 4}, "/detections", meta={"frame": 4})
+    client.send({"frame": 1}, "/ground-truth")                     # meta 없는 메시지도 그대로 동작
+    client.close()
+    assert results == [({"frame": 4}, "dry-run", None), (None, "dry-run", None)]
+    assert (tmp_path / "sent_detections.jsonl").exists()
 
 
 def test_timing_summary_counts_skipped_pairs_and_rate(tmp_path):
@@ -476,15 +502,24 @@ def test_timing_summary_counts_skipped_pairs_and_rate(tmp_path):
     import timing_summary as ts
     timings, sent = [], []
     for n in range(1, 21, 2):                               # 1~19번 중 홀수 10개만 보냄 → 9/19 건너뜀
-        timings.append({"frame": n, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0, "cam2": 60.0}, "age_ms": 120.0})
-        sent.append({"frames": [{"ts": 0, "recv_ms": 1000 + n * 50}, {"ts": 0, "recv_ms": 1000 + n * 50}]})
+        first = n == 1                                      # 첫 짝은 모델 준비로 아주 느림 (warmup 으로 뺌)
+        timings.append({"frame": n, "wait_ms": 5.0,
+                        "detect_ms": {"cam1": 4000.0 if first else 40.0, "cam2": 60.0},
+                        "yolo_ms": {"cam1": 30.0, "cam2": 45.0}, "pose_ms": {"cam1": 8.0, "cam2": 12.0},
+                        "age_ms": 120.0, "rtt_ms": 30.0, "status": 404 if n == 19 else 201})
+        sent.append({"pair_id": n, "frames": [{"ts": 0, "recv_ms": 1000 + n * 50}, {"ts": 0, "recv_ms": 1000 + n * 50}]})
     rx.write_jsonl(tmp_path / "timings.jsonl", timings)
     rx.write_jsonl(tmp_path / "sent_detections.jsonl", sent)
 
-    line, cams = ts.summarize(tmp_path)
-    assert cams == ["cam1", "cam2"]
-    assert line[1:5] == ["10", "47%", "10.0", "5 / 5 / 5"]   # 보낸 짝, 건너뜀, 초당 짝(100ms 간격), 대기
-    assert line[-2:] == ["100 / 100 / 100", "120 / 120 / 120"]
+    line = ts.summarize(tmp_path, warmup=1)
+    assert line[1:4] == ["9", "47%", "10.0"]                 # 짝(첫 짝 뺌), 건너뜀(3~19의 17칸 중 9개만 보냄), 초당 짝(100ms 간격)
+    assert line[5:8] == ["75 / 75 / 75", "20 / 20 / 20", "100 / 100 / 100"]   # 검출 합, 포즈 합, 탐지 합
+    assert line[9:] == ["30 / 30 / 30", "1"]                 # 서버 왕복, 실패(404) 1개
+
+    old = tmp_path / "old"                                  # 예전 기록 (yolo_ms·rtt_ms 없음)도 읽힘
+    old.mkdir()
+    rx.write_jsonl(old / "timings.jsonl", [{"frame": 1, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0}, "age_ms": 50.0}])
+    assert ts.summarize(old, warmup=0)[5] == "-"
 
 
 def test_recorded_folder_replays_at_recorded_pace(tmp_path):
@@ -522,3 +557,15 @@ def test_recorded_folder_needs_frames_jsonl(tmp_path):
     (tmp_path / "cam1").mkdir()
     with pytest.raises(SystemExit):
         camera_source.CameraSource(str(tmp_path / "cam1"))
+
+
+def test_replay_all_finds_recordings_in_number_order(tmp_path):
+    import replay_all
+    for scene, take in [("s10", "t1"), ("s2", "t1"), ("s1", "t2"), ("s1", "t1")]:
+        folder = tmp_path / scene / take
+        (folder / "cam1").mkdir(parents=True)
+        (folder / "cam2").mkdir()
+        (folder / "frames.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "s3" / "t1").mkdir(parents=True)            # frames.jsonl 없는 폴더는 녹화로 보지 않음
+    names = [name for name, _ in replay_all.find_recordings(tmp_path)]
+    assert names == ["s1-t1", "s1-t2", "s2-t1", "s10-t1"]   # 글자 순(s10 < s2)이 아니라 숫자 순

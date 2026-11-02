@@ -57,22 +57,24 @@ python eval/draw_detections.py real-s10-t1 604
 
 ## 실시간 속도 재기
 
-카메라 두 대를 켠 채로 탐지·전송하고, 짝마다 걸린 시간을 표로 본다.
+녹화를 실제 속도로 다시 틀거나 카메라를 켠 채로 탐지·전송하고, 짝마다 걸린 시간을 표로 본다.
 
 ```bash
-# 1. 실시간 전송 (10분, 짝마다 시간이 runs/edge/<session_id>/timings.jsonl 에 쌓임)
+# 1-a. 10/14 녹화 15개를 차례로 재생 (서버 없이 엣지만 보려면 --dry-run)
+python edge/replay_all.py --version v6 --server http://<서버>:32130 \
+    --sessions calibration/sessions/classroom-1014-v6.txt
+
+# 1-b. 실제 카메라 (짝마다 시간이 runs/edge/<session_id>/timings.jsonl 에 쌓임)
 python edge/realtime.py --cam1 tapo:<cam1 IP> --cam2 tapo:<cam2 IP> --seconds 600 --show \
     --send --server http://<서버>:32130 --session <session_id>
 
-# 2. 속도 표 (중간값 / 90% 값 / 최댓값, 건너뛴 짝 비율, 초당 짝 수)
-python eval/timing_summary.py runs/edge/<session_id>
-
-# 고치기 전후 비교: 폴더를 여러 개 주면 한 표로 나온다
-python eval/timing_summary.py runs/edge/<전> runs/edge/<후>
+# 2. 속도 표 (중간값 / 90% 값 / 최댓값, 앞 5짝은 모델 준비라 뺌)
+python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> ...]
 ```
 
-- 서버 없이 엣지 속도만 볼 때는 `--server` 대신 `--dry-run`을 쓴다
-- 표의 "전체"는 카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지의 시간이다 (서버 처리 시간은 포함하지 않음)
+- 기록 항목: 대기, 검출(`yolo_ms`), 포즈(`pose_ms`), 탐지 전체(`detect_ms`), 엣지 전체(`age_ms`), 서버 왕복(`rtt_ms`). 뜻은 `edge/realtime.py` 맨 위 설명
+- 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다. 다시 잴 때는 버전을 올린다 (예: v7)
+- "엣지 전체"에는 서버 처리 시간이 들어가지 않는다. 서버까지 포함한 시간은 "서버 왕복"을 본다
 
 ## 규칙
 

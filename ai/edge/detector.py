@@ -130,6 +130,7 @@ class Detector:
         self.model_name = model
         # 발목 방식이면 포즈 모델을 하나 더 쓴다 (사람 박스와 짝지어 발목만 가져옴)
         self.pose = YOLO(POSE_WEIGHTS) if foot == "ankle" else None
+        self.last_ms = {"yolo": 0.0, "pose": 0.0}   # 마지막 호출에서 걸린 시간 (실시간 속도 기록용)
 
     @staticmethod
     def _check_classes(wanted: set, available: tuple, model: str):
@@ -149,6 +150,7 @@ class Detector:
 
     def __call__(self, frame, track: bool = True) -> list[dict]:
         detections = []
+        t0 = time.perf_counter()
         for model, class_map, offset in self.models:
             min_conf = min([self.conf, *self.class_conf.values()])      # 모델에는 가장 낮은 기준으로 묻고, 아래에서 클래스별로 거른다
             kwargs = dict(conf=min_conf, classes=list(class_map), device=self.device, imgsz=self.imgsz, verbose=False)
@@ -171,7 +173,10 @@ class Detector:
                     "conf": round(conf, 3),
                     "bbox": [round(v, 1) for v in xyxy],
                 })
+        t1 = time.perf_counter()
         people = self._pose_people(frame) if self.pose and any(d["cls"] == "person" for d in detections) else []
+        t2 = time.perf_counter()
+        self.last_ms = {"yolo": round((t1 - t0) * 1000, 1), "pose": round((t2 - t1) * 1000, 1)}  # 사람 없으면 pose 0 근처
         return attach_feet(detections, people, self.ankle_conf)
 
 
