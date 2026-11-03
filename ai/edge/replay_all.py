@@ -6,6 +6,8 @@
   - 녹화마다 session_id 를 <prefix>-s<장면>-t<회차>-<버전> 으로 붙인다 (예: classroom-1014-s10-t1-v6)
   - --sessions 목록 파일을 주면 목록에 있는 이름만 실행하고, 목록에 없는 녹화는 건너뛴다고 알려 준다
   - 사진은 다시 저장하지 않는다 (--no-save). 재생 기록(frames·meta)은 runs/replay/ 에 남긴다
+  - 시작하기 전에 기록 폴더(runs/edge/<session>, runs/replay/<session>)가 이미 있는 세션을 모두 찾아 알려 주고 멈춘다
+    (중간에 멈추지 않게. 남은 것만 이어서 돌리는 --only 명령도 같이 보여 준다)
   - 하나가 실패하면 이유를 보여 주고 멈춘다 (서버가 캘리브레이션 없음 등으로 거절하면 나머지도 실패하므로)
   - 끝나면 timing_summary.py 로 모든 세션을 한 표로 보여 준다 (--detail 포함)
   - 실행 정보(시작·종료 시각, session_id 목록, 장비, 넘긴 설정)를 runs/replay/run-<시각>.json 에 남긴다
@@ -44,6 +46,17 @@ def find_recordings(root: Path) -> list[tuple[str, Path]]:
     return [(name, path) for _, name, path in sorted(found)]
 
 
+def existing_records(plan: list[tuple[str, Path]], replay_root: Path, edge_root: Path) -> dict[str, list[Path]]:
+    """이미 기록 폴더가 있는 세션 → 그 폴더들. 비어 있는 폴더는 없는 것으로 본다"""
+    found = {}
+    for session, _ in plan:
+        folders = [root / session for root in (edge_root, replay_root)
+                   if (root / session).is_dir() and any((root / session).iterdir())]
+        if folders:
+            found[session] = folders
+    return found
+
+
 def load_list(path: str | None) -> set | None:
     if not path:
         return None
@@ -79,6 +92,20 @@ def main():
     if not plan:
         raise SystemExit("재생할 녹화가 없어요")
     print(f"재생할 녹화 {len(plan)}개: " + ", ".join(s for s, _ in plan) + "\n")
+
+    existing = existing_records(plan, Path(args.out), AI_DIR / "runs" / "edge")
+    if existing:
+        print(f"이미 기록이 있는 세션 {len(existing)}개 (기록이 섞이지 않게 시작하지 않아요):")
+        for session, folders in existing.items():
+            print(f"  {session}: " + ", ".join(str(f) for f in folders))
+        left = [s.removeprefix(f"{args.prefix}-").removesuffix(f"-{args.version}") for s, _ in plan if s not in existing]
+        print("\n이렇게 하세요")
+        m = re.fullmatch(r"v(\d+)", args.version)
+        bumped = f"v{int(m.group(1)) + 1}" if m else "새 버전"   # session_id 규칙은 -v<숫자>
+        print(f"  - 처음부터 다시 잴 때: 버전을 올리기 (예: --version {bumped}, 서버 캘리브레이션 등록 필요) 또는 위 폴더 지우기")
+        if left:
+            print(f"  - 남은 것만 이어서 돌릴 때: --only {' '.join(left)}")
+        raise SystemExit(1)
 
     started = datetime.now()
     info = {"started": started.isoformat(timespec="seconds"), "finished": None,

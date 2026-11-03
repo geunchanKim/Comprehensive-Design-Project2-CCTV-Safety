@@ -587,3 +587,16 @@ def test_timing_summary_detail_counts_status_and_missing_responses(tmp_path):
     assert "| 서버 왕복 | 3 | 50.0 | 50.0 | 50.0 | 50.0 | 50.0 |" in text
     assert "| 201 | 3 |" in text and "| 404 | 1 |" in text
     assert "받았는데 응답 기록이 없는 짝: 1" in text and "실패 기록(failed): 1" in text
+
+
+def test_replay_all_finds_sessions_that_already_have_records(tmp_path):
+    import replay_all
+    edge, replay = tmp_path / "edge", tmp_path / "replay"
+    (edge / "classroom-1014-s1-t1-v6").mkdir(parents=True)
+    (edge / "classroom-1014-s1-t1-v6" / "timings.jsonl").write_text("{}", encoding="utf-8")
+    (replay / "classroom-1014-s2-t1-v6").mkdir(parents=True)
+    (replay / "classroom-1014-s2-t1-v6" / "meta.json").write_text("{}", encoding="utf-8")
+    (edge / "classroom-1014-s3-t1-v6").mkdir()                 # 빈 폴더는 기록 없음으로 봄
+    plan = [(f"classroom-1014-s{n}-t1-v6", tmp_path) for n in (1, 2, 3)]
+    found = replay_all.existing_records(plan, replay, edge)
+    assert set(found) == {"classroom-1014-s1-t1-v6", "classroom-1014-s2-t1-v6"}
