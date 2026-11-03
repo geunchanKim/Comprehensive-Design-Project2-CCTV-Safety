@@ -20,6 +20,7 @@
   - 캘리브레이션은 등록하지 않는다 (해민 담당). 항상 calibration_profile=basic 으로 보낸다
   - 탐지가 카메라보다 느리면 밀린 짝은 건너뛰고 가장 최근 짝을 탐지한다 (저장은 모든 짝을 함)
   - 서버가 "캘리브레이션 없음(404)", "해상도 다름(422)", "중복(409)"으로 거절하면 이유를 말하고 멈춘다
+    (기록·meta.json 을 남긴 뒤 종료 코드 2로 끝낸다)
   - 보낸 것·서버 응답·실패: runs/edge/<session_id>/ (sent_detections.jsonl, responses_detections.jsonl, failed.jsonl)
   - 짝마다 걸린 시간: runs/edge/<session_id>/timings.jsonl (실시간 속도 측정용). 서버 응답을 받으면 한 줄을 쓴다
       frame      짝 번호 (= 서버로 보낸 pair_id. 응답 기록과 이 번호로 연결)
@@ -423,6 +424,8 @@ def main():
             print(f"  멈춘 이유: {sender.stop_reason}")
         print(f"  전송 기록: {sender.client.out_dir}")
     print(f"저장 위치: {out_dir}")
+    if sender and sender.stop_reason:          # 기록은 다 남긴 뒤, 실패로 끝났음을 종료 코드로 알린다 (replay_all 이 멈추게)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

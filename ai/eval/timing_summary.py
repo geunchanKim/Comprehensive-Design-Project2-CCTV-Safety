@@ -3,7 +3,9 @@
 
 무엇을 하나
   - runs/edge/<session_id>/timings.jsonl 의 짝마다 기록을 모은다 (항목 뜻은 edge/realtime.py 맨 위 설명)
-  - 처음 몇 짝은 빼고 계산한다 (--warmup, 기본 5짝). 첫 짝은 모델을 처음 돌리는 준비 시간이라 수 초가 걸린다
+  - 시간 통계·초당 짝·건너뛴 짝은 처음 몇 짝을 빼고 계산한다 (--warmup, 기본 5짝). 첫 짝은 모델 준비로 수 초가 걸린다
+    서버 상태·실패·버림 건수는 예열 짝까지 모든 기록으로 센다 (예열 중 실패가 숨지 않게)
+    기록이 예열 짝 수 이하이면 시간 통계는 - (표본 0)로 둔다
   - 항목마다 중간값·90% 값·최댓값을 구한다 (90% 값: 짝 10개 중 9개가 이 시간 안에 끝남)
       대기       wait_ms
       검출 합    두 카메라 yolo_ms 합 (물체 검출·추적)
@@ -81,14 +83,22 @@ def pairs_per_second(folder: Path, first_frame: int) -> float | None:
     return (len(times) - 1) / ((times[-1] - times[0]) / 1000)
 
 
+def split_warmup(rows: list[dict], warmup: int) -> list[dict]:
+    """시간 통계용 행: 앞 warmup 짝을 뺀다. 전부 예열이면 빈 목록"""
+    if warmup < 0:
+        raise ValueError("warmup 은 0 이상이어야 해요")
+    return rows[warmup:]
+
+
 def summarize(folder: Path, warmup: int = 5) -> list[str]:
-    rows = load(folder)
-    if len(rows) > warmup:
-        rows = rows[warmup:]
+    all_rows = load(folder)
+    rows = split_warmup(all_rows, warmup)
+    bad = sum(1 for r in all_rows if not ok_status(r.get("status")))   # 실패·버림은 예열 포함 전체
+    if not rows:
+        return [folder.name, "0", "-", "-"] + ["-"] * 6 + [str(bad)]
     frames = [r["frame"] for r in rows]
     span = max(frames) - min(frames) + 1
     pps = pairs_per_second(folder, min(frames))
-    bad = sum(1 for r in rows if not ok_status(r.get("status")))
     return [folder.name, str(len(rows)), f"{100 * (1 - len(rows) / span):.0f}%",
             "-" if pps is None else f"{pps:.1f}",
             stats(r["wait_ms"] for r in rows),
@@ -127,15 +137,14 @@ def detail(folders: list[Path], warmup: int) -> str:
     rows, statuses = [], Counter()
     check = {"sent": 0, "responses": 0, "missing": 0, "failed": 0}
     for folder in folders:
-        session_rows = load(folder)
-        session_rows = session_rows[warmup:] if len(session_rows) > warmup else session_rows
-        rows += session_rows
-        statuses.update(str(r.get("status")) for r in session_rows)
+        all_rows = load(folder)
+        rows += split_warmup(all_rows, warmup)                         # 시간 표본: 예열 제외
+        statuses.update(str(r.get("status")) for r in all_rows)        # 상태 건수: 예열 포함 전체
         sent, answered = pair_ids(folder / "sent_detections.jsonl"), pair_ids(folder / "responses_detections.jsonl")
         check["sent"] += len(sent)
         check["responses"] += len(answered)
         check["failed"] += count_lines(folder / "failed.jsonl")
-        if any(r.get("status") not in (None, "dry-run") for r in session_rows):   # 서버로 보낸 세션만 응답을 따짐
+        if any(r.get("status") not in (None, "dry-run") for r in all_rows):   # 서버로 보낸 세션만 응답을 따짐
             check["missing"] += len(sent - answered)
     out = [f"### 항목별 시간 (ms, 세션 {len(folders)}개 합침, 세션마다 앞 {warmup}짝 제외)", "",
            "| 항목 | 표본 수 | 평균 | P50 | P90 | P95 | 최댓값 |", "|---|---|---|---|---|---|---|"]
@@ -147,7 +156,7 @@ def detail(folders: list[Path], warmup: int) -> str:
             continue
         p50, p90, p95 = np.percentile(v, [50, 90, 95])
         out.append(f"| {label} | {v.size} | {v.mean():.1f} | {p50:.1f} | {p90:.1f} | {p95:.1f} | {v.max():.1f} |")
-    out += ["", "### 서버 상태별 건수", "", "| 상태 | 건수 |", "|---|---|"]
+    out += ["", "### 서버 상태별 건수 (예열 포함 전체 기록)", "", "| 상태 | 건수 |", "|---|---|"]
     out += [f"| {status} | {n} |" for status, n in sorted(statuses.items())]
     out += ["", "### 응답 확인", "",
             f"- 서버가 받은 짝(sent_detections): {check['sent']}",
@@ -166,6 +175,8 @@ def main():
     parser.add_argument("--warmup", type=int, default=5, help="앞에서 뺄 짝 수 (모델 준비 시간)")
     parser.add_argument("--detail", action="store_true", help="표본 수·평균·P95, 상태별 건수, 응답 누락까지")
     args = parser.parse_args()
+    if args.warmup < 0:
+        parser.error("--warmup 은 0 이상이어야 해요")
 
     print(f"시간(ms)은 중간값 / 90% 값 / 최댓값 · 앞 {args.warmup}짝 제외\n")
     print("| " + " | ".join(HEAD) + " |")

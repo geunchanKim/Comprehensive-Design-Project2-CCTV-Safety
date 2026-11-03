@@ -600,3 +600,57 @@ def test_replay_all_finds_sessions_that_already_have_records(tmp_path):
     plan = [(f"classroom-1014-s{n}-t1-v6", tmp_path) for n in (1, 2, 3)]
     found = replay_all.existing_records(plan, replay, edge)
     assert set(found) == {"classroom-1014-s1-t1-v6", "classroom-1014-s2-t1-v6"}
+
+
+def test_timing_summary_keeps_warmup_failures_in_counts(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    rows = [{"frame": n, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0}, "age_ms": 100.0,
+             "rtt_ms": None if n <= 2 else 30.0, "status": {1: 404, 2: "dropped"}.get(n, 201)}
+            for n in range(1, 7)]                              # 예열(앞 5짝) 안에 404·dropped
+    rx.write_jsonl(tmp_path / "timings.jsonl", rows)
+
+    line = ts.summarize(tmp_path, warmup=5)
+    assert line[1] == "1" and line[-1] == "2"                 # 시간 표본은 1짝, 실패·버림은 예열 포함 2건
+    text = ts.detail([tmp_path], warmup=5)
+    assert "| 404 | 1 |" in text and "| dropped | 1 |" in text and "| 201 | 4 |" in text
+    assert "| 서버 왕복 | 1 |" in text
+
+
+def test_timing_summary_short_session_has_no_time_samples(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    rx.write_jsonl(tmp_path / "timings.jsonl",
+                   [{"frame": 1, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0}, "age_ms": 100.0, "status": 201}])
+    line = ts.summarize(tmp_path, warmup=5)                    # 전부 예열이면 시간 통계 없음
+    assert line[1] == "0" and line[4:10] == ["-"] * 6 and line[-1] == "0"
+    assert "| 대기 | 0 | - |" in ts.detail([tmp_path], warmup=5)
+    with pytest.raises(ValueError):
+        ts.summarize(tmp_path, warmup=-1)
+
+
+def test_replay_all_stops_when_a_session_fails(tmp_path, monkeypatch):
+    import replay_all
+    for scene in ("s1", "s2"):
+        folder = tmp_path / "real" / scene / "t1"
+        (folder / "cam1").mkdir(parents=True)
+        (folder / "cam2").mkdir()
+        (folder / "frames.jsonl").write_text("", encoding="utf-8")
+    calls = []
+    real_run = replay_all.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if not str(cmd[1]).endswith("realtime.py"):            # 장비 정보 조회 등 다른 호출은 그대로
+            return real_run(cmd, **kwargs)
+        calls.append(cmd[cmd.index("--session") + 1])
+        return type("Done", (), {"returncode": 2})()           # realtime.py 가 서버 거절(404)로 멈춘 경우
+
+    monkeypatch.setattr(replay_all.subprocess, "run", fake_run)
+    monkeypatch.setattr(replay_all, "AI_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["replay_all.py", "--root", str(tmp_path / "real"), "--version", "v9",
+                                      "--dry-run", "--out", str(tmp_path / "replay")])
+    with pytest.raises(SystemExit):
+        replay_all.main()
+    assert calls == ["classroom-1014-s1-t1-v9"]                # 첫 세션에서 멈추고 다음 세션은 실행 안 함
+    info = json.loads(next((tmp_path / "replay").glob("run-*.json")).read_text(encoding="utf-8"))
+    assert info["done"] == []
