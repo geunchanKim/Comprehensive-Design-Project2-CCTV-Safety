@@ -84,6 +84,49 @@ def test_measurement_report_rejects_mixed_sessions_and_duplicate_pairs(tmp_path)
         report(tmp_path)
 
 
+def test_measurement_report_warmup_aligns_logs_and_keeps_dropped_counts(tmp_path):
+    write_jsonl(tmp_path, "timings.jsonl", [
+        {"frame": 20, "queue_ms": 4, "rtt_ms": 30, "status": 201},
+        {"frame": 1, "queue_ms": 999, "rtt_ms": 999, "status": "dropped"},
+    ])
+    write_jsonl(tmp_path, "responses_detections.jsonl", [
+        {"session_id": "v6", "pair_id": 20, "timings_ms": {"total_ms": 10}},
+    ])
+    text = report(tmp_path, warmup=1)
+    assert "'dropped': 1" in text
+    assert "Detection failures: 0" in text
+    assert "| edge.queue_ms | 1 | 4.000" in text
+    assert "| server.total_ms | 1 | 10.000" in text
+    assert "p90 ms" in text
+    assert "999.000" not in text
+    assert "rtt_ms: unavailable" in report(tmp_path, warmup=10)
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        report(tmp_path, warmup=-1)
+
+
+def test_measurement_report_pools_samples_and_excludes_warmup_per_session(tmp_path):
+    folders = [tmp_path / name for name in ("a", "b")]
+    for folder, values in zip(folders, ([999, 10], [999, 20, 30])):
+        folder.mkdir()
+        write_jsonl(folder, "timings.jsonl", [
+            {"frame": n * 10, "rtt_ms": value, "status": 201}
+            for n, value in enumerate(values)
+        ])
+        write_jsonl(folder, "sent_detections.jsonl", [
+            {"session_id": folder.name + "-v6", "pair_id": n * 10}
+            for n in range(len(values))
+        ])
+    text = report(folders, warmup=1)
+    assert "| edge.rtt_ms | 3 | 20.000 | 20.000 | 28.000 | 29.000 | 30.000 |" in text
+    assert "'timings': 5" in text
+    assert "## a" in text and "## b" in text
+    with pytest.raises(ValueError, match="distinct"):
+        report([folders[0], folders[0]])
+    write_jsonl(folders[1], "sent_detections.jsonl", [{"session_id": "b-v7", "pair_id": 0}])
+    with pytest.raises(ValueError, match="different version"):
+        report(folders)
+
+
 def test_unity_metadata_zip_uses_world_frame_and_checks_timestamps(tmp_path):
     def make_zip(timestamp):
         cameras = {"cameras": [

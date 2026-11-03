@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from backend.dashboard import DashboardMap, DashboardSnapshot, MapBounds, ZoneSet, build_snapshot
 from backend.profiling import StageTimer
 from backend.schemas import DetectionBundleOut
-from backend.tools.timing_summary import summarize
+from backend.tools.server_log_summary import summarize
 
 
 def zone_set(vertices=None):
