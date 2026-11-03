@@ -23,7 +23,7 @@ v7 목록과 `calib-classroom-1014-2x2b.json`으로 15세션 × 2카메라 × 2p
 실제 등록에 사용한 명령이다. 이미 완료했으므로 재생 준비를 위해 다시 실행할 필요는 없다.
 
 ```powershell
-python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v7.txt --backend-url http://121.182.60.2:32130
+python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v7.txt --backend-url http://<실습서버>:32130
 ```
 
 v7 재생을 위한 캘리브레이션 등록은 완료됐다. AI가 같은 녹화를 같은 장비·모델 설정으로 재생하고, 실행 커밋·시작/종료 시각·health 설정·원본 로그를 함께 공유하면 BE가 `session/profile/algorithm + frame=pair_id`로 RTT와 서버 단계를 연결한다. 세션별 예열 5짝을 동일하게 제외한다. v6는 0.4m/2.0m, v7은 0.15m/1.5m 설정이므로 시간 차이를 계측 도입 효과 하나로 귀속하지 않는다. 서버 실측을 받은 뒤 최적화 두 단계를 선정한다.
@@ -37,6 +37,8 @@ v7 재생을 위한 캘리브레이션 등록은 완료됐다. AI가 같은 녹�
 | [#74 관제 추가 요구](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/74) | 요청 접수·현 코드 대조 | 공개 snapshot GET·cameras·영속 alert/ack·판정 대상 설정 모두 미구현. 아래 일정으로 진행하며 완료 체크는 구현·검증 후 수행 |
 
 ## #74 구현 순서와 리뷰 결정
+
+1주 차 완료 조건·SSE/지도 표시 제안과 v7 로그 인수 절차는 [마무리 검토안](week1-closeout.md)에 정리했다. #76 수정과 v7 실측·#72 리뷰 회신은 아직 대기 상태다.
 
 1주 차에는 계약과 범위를 확정한다. 2주 차에는 최신 snapshot GET과 카메라 상태부터 구현한다. `GET /dashboard/snapshot`은 FE 제안이며 현재 공개 경로가 아니다. 조건 생략 시 운영 조건은 명시적 서버 설정으로 선택하고, DB에서 마지막으로 쓰인 임의 실험을 고르지 않는 방향으로 검토한다. 데이터 없음·조건 미설정 응답, 저장 시점·seq·재시작 기준을 API 구현 전에 확정한다. GET polling에서도 같은 seq 재수신을 새 데이터로 보아 stale 타이머를 연장하지 않는 기준이 필요하다. SSE/WS 선택은 기존 1주 차 리뷰 의제로 유지한다.
 
