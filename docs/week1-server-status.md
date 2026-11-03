@@ -30,7 +30,7 @@ Windows 11, Python 3.12.10, 임시 SQLite, 저장소 `s4` Unity 탐지 데이터
 - 성윤 회신: 기존 장면과 sc10을 재사용한다. 지도는 4m 격자에 0.5m 여유를 둔 범위로 반영했다. world 기준 위험구역을 유지하고 구역 정답은 GT에서 계산한다. 디자인 시안과 추가 필드 의견을 기다린다.
 - 주말 리뷰: vest·unity-world-xzy 형식은 AI 확인 완료. SSE 제안은 성윤 의견을 포함해 결정한다. 실측 마커 원점 지도 frame ID·범위는 2~3주 차에 합의하고, 서버 최적화 두 단계는 v7 계측 후 결정한다.
 
-세부 결정·실행 명령·sc10 검증 범위는 [회신 반영 문서](specs/week1-integration.md)에 정리했다. v6 캘리브레이션 등록은 완료했으며 계측 배포와 v7 등록은 아직 실행하지 않았다.
+세부 결정·실행 명령·sc10 검증 범위는 [회신 반영 문서](specs/week1-integration.md)에 정리했다. v6 캘리브레이션 등록은 완료했다. 11/3 PR #75 병합·배포 후 공개 health에서 `2e1d2c3`와 합의 설정을 직접 확인했다. v7 등록은 60개 payload 사전 검증 완료 상태이며 실제 등록은 아직 하지 않았다. [후속 작업과 이슈별 잔여 범위](specs/week1-followup.md)를 따른다.
 
 실시간 엔드포인트·구역 침입 계산은 2주 차 범위이며 아직 추가하지 않았다. 안전복 결과는 `unknown`, 구역 상태도 판단 전에는 `unknown`으로 전달하도록 준비했다. 전체 위험 판단 플래그는 기존 false를 유지하며 cdfg의 사람–사람 경고 유지 동작은 보존했다.
 
@@ -44,4 +44,4 @@ $env:DATABASE_URL = 'sqlite:///./test_cctv.db'
 python -m pytest --rootdir=. --confcutdir=backend/tests backend/tests -q -o cache_dir=.pytest_cache
 ```
 
-이번 변경은 기능 브랜치에서 관리한다. develop·main 병합과 실습 서버 배포는 아직 진행하지 않았다.
+기존 구현은 PR #73·#75로 develop에 병합·배포됐다. 이번 후속 문서는 `docs/week1-v7-followup` 로컬 브랜치에서 관리하며 별도 push·병합·배포는 하지 않는다.
