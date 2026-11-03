@@ -17,7 +17,7 @@ python -m backend.tools.prepare_replay_calibrations --calibration ai/calibration
 python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v6.txt --backend-url http://서버주소:32130
 ```
 
-11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 같은 날 현 배포 서버(`ba7ec7e`)에 v6 60개 payload를 실제 등록했고 모두 성공했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. v7은 계측 서버 배포 뒤 등록한다.
+11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 같은 날 현 배포 서버(`ba7ec7e`)에 v6 60개 payload를 실제 등록했고 모두 성공했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. 11/3 계측 서버 배포 `2e1d2c3`와 합의 설정·DB 연결을 확인하고 사용자 승인 후 v7 60건도 실제 등록했으며 모두 HTTP 200으로 성공했다. v7 동일 입력 재생은 아직 수행하지 않았다.
 
 RTT는 `timings.jsonl`의 행마다 `frame`과 함께 저장하며 frame은 서버 pair_id와 같다. 실행 커밋은 `feat/edge-week1-timing`의 `7b1f58f`다. 수신한 s6-t1 dry-run은 timings·sent가 각각 49행이며 추가 필드와 `status=dry-run`을 확인했다. AI가 앞 5짝을 제외해 보고한 값은 약 11.7짝/초, 탐지 합 81ms(검출 40ms+포즈 41ms), 엣지 전체 131ms(P90 176ms)다. [BE 통합 보고서](../benchmarks/2026-11-02-edge-s6-t1-dry-run.md)는 예열을 제외하지 않은 49행 전체 통계이므로 이 값과 구분한다. dry-run에는 RTT·서버 응답·서버 단계별 시간이 없으며, 15개 전체 측정 결과로 해석하지 않는다.
 

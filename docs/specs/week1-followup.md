@@ -18,21 +18,21 @@
 | improved 기능 | floor·fallback·hysteresis·ground (`cdfg`) |
 | 전체 위험 분석 | false |
 
-v7 목록과 `calib-classroom-1014-2x2b.json`으로 15세션 × 2카메라 × 2profile = 60개 payload 사전 검증을 통과했다. 기존 준비 파일을 보존하고 `ai/runs/week1-prep/registration-plan-v7-20261103.json`에 생성했다(로컬 실행 자료). 실제 등록은 미실행이다. 외부 서버 전송·DB 변경에 대한 자동 승인 검토가 사용자 명시 승인 부족으로 차단해 승인을 대기한다.
+v7 목록과 `calib-classroom-1014-2x2b.json`으로 15세션 × 2카메라 × 2profile = 60개 payload 사전 검증을 통과했다. 기존 준비 파일을 보존하고 `ai/runs/week1-prep/registration-plan-v7-20261103.json`에 생성했다(로컬 실행 자료). 11/3 사용자 명시 승인 후 실습 서버에 실제 등록했으며 **60건 모두 HTTP 200**으로 성공했다. 등록 전 배포 `2e1d2c3`와 위 유효 설정·DB connected를 다시 확인했다. 등록기 종료 코드는 0이다.
 
-등록 승인 후 기존 등록기를 사용한다.
+실제 등록에 사용한 명령이다. 이미 완료했으므로 재생 준비를 위해 다시 실행할 필요는 없다.
 
 ```powershell
 python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v7.txt --backend-url http://121.182.60.2:32130
 ```
 
-60건 성공을 확인한 다음 #71에 재생 가능 상태를 알린다. AI가 같은 녹화를 같은 장비·모델 설정으로 재생하고, 실행 커밋·시작/종료 시각·health 설정·원본 로그를 함께 공유하면 BE가 `session/profile/algorithm + frame=pair_id`로 RTT와 서버 단계를 연결한다. 세션별 예열 5짝을 동일하게 제외한다. v6는 0.4m/2.0m, v7은 0.15m/1.5m 설정이므로 시간 차이를 계측 도입 효과 하나로 귀속하지 않는다. 서버 실측을 받은 뒤 최적화 두 단계를 선정한다.
+v7 재생을 위한 캘리브레이션 등록은 완료됐다. AI가 같은 녹화를 같은 장비·모델 설정으로 재생하고, 실행 커밋·시작/종료 시각·health 설정·원본 로그를 함께 공유하면 BE가 `session/profile/algorithm + frame=pair_id`로 RTT와 서버 단계를 연결한다. 세션별 예열 5짝을 동일하게 제외한다. v6는 0.4m/2.0m, v7은 0.15m/1.5m 설정이므로 시간 차이를 계측 도입 효과 하나로 귀속하지 않는다. 서버 실측을 받은 뒤 최적화 두 단계를 선정한다.
 
 ## 이슈별 완료와 잔여 범위
 
 | 이슈 | 확인 완료 | 남은 작업 / 종료 조건 |
 | --- | --- | --- |
-| [#71 AI·엣지](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/71) | 시간 필드·frame 연결·좌표·vest 계약, v6 등록 및 15세션 로그 검증, 계측 배포·합의 설정 확인 | v7 등록·재측정·서버 단계 비교, 조끼 데이터셋 원문/버전/라이선스·교실 사진 날짜·조끼 준비 현황. 열어 둠 |
+| [#71 AI·엣지](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/71) | 시간 필드·frame 연결·좌표·vest 계약, v6 등록 및 15세션 로그 검증, 계측 배포·합의 설정 확인, v7 60건 등록 | v7 재측정·서버 단계 비교, 조끼 데이터셋 원문/버전/라이선스·교실 사진 날짜·조끼 준비 현황. 열어 둠 |
 | [#72 Unity·대시보드](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/72) | 데이터/버전/샘플·5개 장면 대응표·world 좌표/지도 범위·검토용 구역·GT 이벤트 산출, #74 mock 화면/추가 요구 공유 | 지도 경계 밖 객체·주의 띠 표시, SSE/WS 리뷰 합의. 추가 API 구현은 #74에서 관리하며 이슈를 중복 생성하지 않음 |
 | [#74 관제 추가 요구](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/74) | 요청 접수·현 코드 대조 | 공개 snapshot GET·cameras·영속 alert/ack·판정 대상 설정 모두 미구현. 아래 일정으로 진행하며 완료 체크는 구현·검증 후 수행 |
 
