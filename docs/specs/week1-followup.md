@@ -1,6 +1,6 @@
 # 1주 차 리뷰 후속과 이슈 정리
 
-2026-11-03 확인 기준. 원격 develop은 PR #75 병합 커밋 `2e1d2c3`이며 현재 코드와 `982062e`의 파일 차이는 없다. #71·#72·#74와 #75 최신 댓글을 확인했다.
+2026-11-04 확인 기준. 원격 develop은 PR #75 병합 커밋 `2e1d2c3`이며 현재 코드와 `982062e`의 파일 차이는 없다. #71·#72·#74와 #75 최신 댓글을 확인했다.
 
 ## 배포 확인과 v7 준비
 
@@ -32,15 +32,15 @@ v7 재생을 위한 캘리브레이션 등록은 완료됐다. AI가 같은 녹�
 
 | 이슈 | 확인 완료 | 남은 작업 / 종료 조건 |
 | --- | --- | --- |
-| [#71 AI·엣지](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/71) | 시간 필드·frame 연결·좌표·vest 계약, v6 등록 및 15세션 로그 검증, 계측 배포·합의 설정 확인, v7 60건 등록 | v7 재측정·서버 단계 비교, 조끼 데이터셋 원문/버전/라이선스·교실 사진 날짜·조끼 준비 현황. 열어 둠 |
-| [#72 Unity·대시보드](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/72) | 데이터/버전/샘플·5개 장면 대응표·world 좌표/지도 범위·검토용 구역·GT 이벤트 산출, #74 mock 화면/추가 요구 공유 | 지도 경계 밖 객체·주의 띠 표시, SSE/WS 리뷰 합의. 추가 API 구현은 #74에서 관리하며 이슈를 중복 생성하지 않음 |
+| [#71 AI·엣지](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/71) | 시간 필드·frame 연결·좌표·vest 계약, v6 등록 및 15세션 로그 검증, 계측 배포·합의 설정 확인, v7 60건 등록 | v7 로그 검증·서버 단계 비교 완료. 후속 cdfg 측정·함수 밖 지연 조사, 조끼 데이터셋 원문/버전/라이선스·교실 사진 날짜·조끼 준비 현황. 열어 둠 |
+| [#72 Unity·대시보드](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/72) | 데이터/버전/샘플·5개 장면 대응표·world 좌표/지도 범위·검토용 구역·GT 이벤트 산출, #74 mock 화면/추가 요구 공유 | SSE/GET·지도 경계 표시 합의 및 GET 세부 규칙 회신 완료. 추가 API 구현은 #74에서 관리하며 이슈를 중복 생성하지 않음 |
 | [#74 관제 추가 요구](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/74) | 요청 접수·현 코드 대조 | 공개 snapshot GET·cameras·영속 alert/ack·판정 대상 설정 모두 미구현. 아래 일정으로 진행하며 완료 체크는 구현·검증 후 수행 |
 
 ## #74 구현 순서와 리뷰 결정
 
-1주 차 완료 조건·SSE/지도 표시 제안과 v7 로그 인수 절차는 [마무리 검토안](week1-closeout.md)에 정리했다. #76 수정과 v7 실측·#72 리뷰 회신은 아직 대기 상태다.
+1주 차 완료 조건·SSE/지도 표시 제안과 v7 로그 인수 절차는 [마무리 검토안](week1-closeout.md)에 정리했다. #76 `4e31f45` 수정 재검토·엣지 36개 통과(EOF 뒤 늦은 실패 종료 처리 추가 요청), v7 3,020건 검증·2,945표본 서버 시간 표 작성과 #72 FE 합의를 완료했다. [v6/v7 비교](../benchmarks/2026-11-04-v6-v7-comparison.md)에서 baseline 서버 개선 후보 commit·validation을 선정했다.
 
-1주 차에는 계약과 범위를 확정한다. 2주 차에는 최신 snapshot GET과 카메라 상태부터 구현한다. `GET /dashboard/snapshot`은 FE 제안이며 현재 공개 경로가 아니다. 조건 생략 시 운영 조건은 명시적 서버 설정으로 선택하고, DB에서 마지막으로 쓰인 임의 실험을 고르지 않는 방향으로 검토한다. 데이터 없음·조건 미설정 응답, 저장 시점·seq·재시작 기준을 API 구현 전에 확정한다. GET polling에서도 같은 seq 재수신을 새 데이터로 보아 stale 타이머를 연장하지 않는 기준이 필요하다. SSE/WS 선택은 기존 1주 차 리뷰 의제로 유지한다.
+1주 차에는 계약과 범위를 확정한다. 2주 차에는 최신 snapshot GET과 카메라 상태부터 구현한다. `GET /dashboard/snapshot`은 FE 제안이며 현재 공개 경로가 아니다. 조건 생략 시 운영 조건은 명시적 서버 설정으로 선택하고, DB에서 마지막으로 쓰인 임의 실험을 고르지 않는 방향으로 검토한다. 데이터 없음·조건 미설정 응답, 저장 시점·seq·재시작 기준을 API 구현 전에 확정한다. GET polling에서도 같은 seq 재수신을 새 데이터로 보아 stale 타이머를 연장하지 않는 기준이 필요하다. SSE 우선·GET 선연결은 FE 동의로 확정했고, 500ms polling·성공 저장 시 생성·204 응답·GET stream 변경 처리는 snapshot 명세에 반영했다.
 
 `cameras`의 위치·yaw·수평 fov는 map과 같은 좌표계로 계산한다. K의 초점거리만으로 평면 시야를 단정하지 않고 카메라 자세·영상 크기를 함께 사용한다. 현재 캘리브레이션 API에는 엣지 연결 상태가 없다. 탐지 객체 없음과 프레임 미수신을 구분할 수 있는 heartbeat/프레임 관측 계약, 기준 시계·수신 시각·timeout을 AI와 먼저 맞춘다. `online`을 보정 등록 여부나 오래된 영상의 캡처 시각만으로 만들지 않는다.
 
