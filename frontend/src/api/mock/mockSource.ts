@@ -8,11 +8,15 @@ const alerts: Alert[] = ALERTS.map(({ sinceMs, ...rest }) => ({ ...rest, started
 
 const delay = <T,>(value: T, signal?: AbortSignal) =>
   new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(structuredClone(value)), 120)
-    signal?.addEventListener('abort', () => {
+    const onAbort = () => {
       clearTimeout(timer)
       reject(new DOMException('aborted', 'AbortError'))
-    })
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve(structuredClone(value))
+    }, 120)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 
 // 예시 데이터가 없는 구역은 크기만 맞춘 빈 평면도로 보여준다

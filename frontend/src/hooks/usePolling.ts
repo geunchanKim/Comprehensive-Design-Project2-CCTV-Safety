@@ -17,16 +17,23 @@ export function usePolling<T>(fetcher: (signal: AbortSignal) => Promise<T>, inte
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetcherRef.current(ctrl.signal)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const scheduleNext = () => {
+      if (!ctrl.signal.aborted) timer = setTimeout(() => setTick((t) => t + 1), intervalMs)
+    }
+
+    Promise.resolve()
+      .then(() => fetcherRef.current(ctrl.signal))
       .then((data) => setResult({ state: 'ok', data }))
       .catch((e: unknown) => {
         if (ctrl.signal.aborted) return
         setResult((prev) => (prev.state === 'ok' ? prev : { state: 'error', detail: e instanceof Error ? e.message : String(e) }))
       })
-    const timer = setTimeout(() => setTick((t) => t + 1), intervalMs)
+      .finally(scheduleNext)
+
     return () => {
       ctrl.abort()
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
     }
   }, [tick, intervalMs])
 
