@@ -1,4 +1,4 @@
-# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드를 자동 배포하고, 배포된 서버로 실험을 자동 실행한다.
+# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드와 프론트엔드를 자동 배포하고, 배포된 서버로 실험을 자동 실행한다.
 # 배포·실험은 실습 서버에 설치한 self-hosted runner(cctv-server)가 직접 실행한다.
 # 보안: 이 워크플로는 PR에서 실행되지 않는다 (외부 코드가 서버에서 돌지 않도록).
 name: Deploy
@@ -37,6 +37,7 @@ jobs:
       SHA: ${{ github.sha }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       HEALTH_URL: http://127.0.0.1:32130/health
+      FRONTEND_PORT: 32123
     steps:
       - name: 서버 레포를 배포 커밋으로 맞추기
         run: |
@@ -48,23 +49,34 @@ jobs:
           echo "APP_COMMIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "배포 커밋: $(git rev-parse --short HEAD)"
 
-      - name: 백엔드 재빌드·재시작
+      - name: 백엔드·프론트엔드 재빌드·재시작
         run: |
           set -euo pipefail
           cd "$DEPLOY_PATH/infra"
-          docker compose up -d --build backend
+          docker compose up -d --build backend frontend
 
       - name: 서버 응답과 배포 커밋 확인
         run: |
+          set -euo pipefail
+          backend_ok=false
+          frontend_ok=false
           for i in $(seq 1 12); do
             BODY=$(curl -fsS "$HEALTH_URL" || true)
             if echo "$BODY" | grep -q "\"commit\":\"$APP_COMMIT_SHA\""; then
-              echo "$BODY"; echo "배포 성공 ($APP_COMMIT_SHA)"; exit 0
+              backend_ok=true
             fi
-            echo "대기 중... ($i/12) 응답: ${BODY:-없음}"; sleep 5
+            if curl -fsS "http://127.0.0.1:${FRONTEND_PORT}/" >/dev/null; then
+              frontend_ok=true
+            fi
+            if [ "$backend_ok" = true ] && [ "$frontend_ok" = true ]; then
+              echo "$BODY"; echo "백엔드·프론트엔드 배포 성공 ($APP_COMMIT_SHA)"; exit 0
+            fi
+            echo "대기 중... ($i/12) 백엔드: $backend_ok, 프론트엔드: $frontend_ok, 응답: ${BODY:-없음}"
+            sleep 5
           done
-          echo "1분 동안 배포 커밋($APP_COMMIT_SHA)이 /health에 나오지 않음"
+          echo "1분 동안 백엔드 커밋($APP_COMMIT_SHA) 또는 프론트엔드 응답을 확인하지 못함"
           docker compose -f "$DEPLOY_PATH/infra/docker-compose.yaml" logs --tail 50 backend
+          docker compose -f "$DEPLOY_PATH/infra/docker-compose.yaml" logs --tail 50 frontend
           exit 1
 
   experiment:
