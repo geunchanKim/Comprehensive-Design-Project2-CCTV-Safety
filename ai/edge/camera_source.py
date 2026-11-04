@@ -4,6 +4,8 @@
 소스 쓰는 법 (--source 또는 CameraSource(source))
   0, 1                 노트북 웹캠 번호
   video.mp4            영상 파일 (실제 카메라처럼 원래 속도로 흘려보냄)
+  runs/real/.../cam1   realtime.py 로 녹화한 사진 폴더. 녹화 때 기록한 시각(상위 폴더 frames.jsonl)대로
+                       실제 카메라처럼 흘려보냄. cam1·cam2 폴더를 같이 주면 두 카메라 시각 차이도 그대로
   tapo:192.168.0.10    Tapo 카메라. 계정 아이디·비밀번호는 실행할 때 입력 (코드·파일에 남기지 않음)
   rtsp://...           RTSP 주소를 그대로 (테스트용 가짜 카메라 등)
 
@@ -17,7 +19,7 @@
   - 카메라마다 읽기 스레드 하나가 쉬지 않고 프레임을 받아 큐에 넣는다.
     (RTSP는 안 읽고 두면 카메라 쪽 버퍼가 쌓여 영상이 점점 늦어진다)
   - 큐가 가득 차면 가장 오래된 프레임을 버리고 dropped 로 센다.
-  - 웹캠·RTSP가 끊기면 최대 reconnect_limit 번 다시 연결한다. 파일은 끝나면 멈춘다.
+  - 웹캠·RTSP가 끊기면 최대 reconnect_limit 번 다시 연결한다. 파일·녹화 폴더는 끝나면 멈춘다.
 
 단독 실행 (ai/ 폴더에서): 연결 확인과 fps·시각 점검
   python edge/camera_source.py --source 0 --seconds 10 --show
@@ -26,6 +28,7 @@
 """
 
 import argparse
+import json
 import getpass
 import os
 import queue
@@ -80,7 +83,44 @@ def resolve(source: str):
     path = Path(source).expanduser()
     if not path.exists():
         raise SystemExit(f"영상 파일이 없어요: {path}")
+    if path.is_dir():
+        if not (path.parent / "frames.jsonl").exists():
+            raise SystemExit(f"녹화 폴더 위에 frames.jsonl 이 없어요: {path.parent}")
+        return str(path), f"{path.parent.name}/{path.name}", "folder"
     return str(path), path.name, "file"
+
+
+_REPLAY_STARTS: dict[str, float] = {}
+_REPLAY_LOCK = threading.Lock()
+
+
+def _replay_start(recording: Path, lead_s: float = 0.3) -> float:
+    """같은 녹화 폴더를 처음 시작한 카메라가 정한 출발 시각(epoch 초)을 나머지 카메라도 쓴다"""
+    with _REPLAY_LOCK:
+        key = str(recording.resolve())
+        if key not in _REPLAY_STARTS:
+            _REPLAY_STARTS[key] = time.time() + lead_s
+        return _REPLAY_STARTS[key]
+
+
+def load_recording(folder: Path) -> tuple[list[tuple[Path, int, float, int]], int]:
+    """녹화 폴더(cam1 등) → ([(사진, 카메라 seq, pts_ms, 받은 시각)], 기준 시각).
+    기준 시각은 첫 짝에서 두 카메라 중 먼저 받은 시각이라, cam1·cam2 를 따로 열어도 같은 시간축으로 재생된다"""
+    rows = [json.loads(line) for line in (folder.parent / "frames.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+    cam = folder.name
+    items = []
+    for row in rows:
+        info = row.get(cam)
+        image = folder / f"{row['frame']:06d}.jpg"
+        if info is None or not image.exists():
+            continue
+        items.append((image, int(info["seq"]), float(info["pts_ms"]), int(info["recv_ms"])))
+    if not items:
+        raise SystemExit(f"재생할 사진이 없어요: {folder}")
+    first = rows[0]
+    base = min(int(first[c]["recv_ms"]) for c in ("cam1", "cam2") if c in first)
+    return items, base
 
 
 class CameraSource:
@@ -105,6 +145,15 @@ class CameraSource:
 
     # ---- 열기 / 닫기 ----
     def _open(self) -> bool:
+        if self.kind == "folder":
+            self._recording, self._base_ms = load_recording(Path(self.target))
+            image = cv2.imread(str(self._recording[0][0]))
+            if image is None:
+                return False
+            self.size = (image.shape[1], image.shape[0])
+            span = (self._recording[-1][3] - self._recording[0][3]) / 1000
+            self.fps = (len(self._recording) - 1) / span if span > 0 else None
+            return True
         cap = cv2.VideoCapture(self.target)
         if self.requested_size:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.requested_size[0])
@@ -171,7 +220,27 @@ class CameraSource:
                 return True
         return False
 
+    def _run_folder(self):
+        """녹화 폴더: 기록한 받은 시각 간격 그대로 사진을 흘려보낸다.
+        - 같은 녹화의 cam1·cam2 는 같은 출발 시각을 써서, 늦게 연 카메라가 밀리지 않게 한다
+        - 사진은 정해진 시각 전에 미리 읽어 두고, 그 시각이 되면 바로 넘긴다 (읽는 시간만큼 밀리지 않게)"""
+        start_s = _replay_start(Path(self.target).parent)
+        for image_path, seq, pts_ms, recorded_ms in self._recording:
+            if self._stop.is_set():
+                break
+            image = cv2.imread(str(image_path))
+            if image is None:
+                continue
+            wait = start_s + (recorded_ms - self._base_ms) / 1000 - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            self._push(Frame(self.name, seq, pts_ms, int(time.time() * 1000), image))
+            self.received += 1
+
     def _run(self):
+        if self.kind == "folder":
+            self._run_folder()
+            return
         seq = 0
         start_wall = time.perf_counter()
         while not self._stop.is_set():
