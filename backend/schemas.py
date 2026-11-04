@@ -190,6 +190,7 @@ class RiskResult(BaseModel):
 
 
 class DetectionBundleOut(BaseModel):
+    timings_ms: dict[str, float] = Field(default_factory=dict)
     bundle_id: int
     session_id: str
     pair_id: int

@@ -4,6 +4,27 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 ## 세션 규칙
 
+### 실측 이후 합의한 서버 기본값
+
+2026-10-31 공유 실측 기준이다. 서버 환경변수 override가 우선하며 Python·Compose·`infra/.env.example`을 함께 확인한다. 기존 서버 `.env`의 명시값은 이 표 수정만으로 바뀌지 않는다.
+
+| 환경변수 | 기본값 |
+| --- | --- |
+| `ANKLE_FOOT_Z_MIN` / `ANKLE_FOOT_Z_MAX` | `-0.1` / `0.15` m |
+| `BOX_FOOT_Z_MIN` / `BOX_FOOT_Z_MAX` | `-0.35` / `0.2` m |
+| `MAX_GROUND_DISTANCE_M` | `1.5` m |
+| `GROUND_ANKLE_Z_M` / `SINGLE_CAMERA_ANKLE_Z_M` | `0.08` / `0.08` m |
+| `FLOOR_TRACK_GATE_M` | `0.8` m |
+| `MAX_SYNC_DELTA_MS` | `50` ms |
+| `MAX_EPIPOLAR_ERROR_PX` | `50` px |
+| `IMPROVED_FEATURES` | `cdfg` |
+| `WARNING_DISTANCE_M` / `DANGER_DISTANCE_M` | `1.0` / `0.5` m |
+| `ENABLE_RISK_ANALYSIS` | `false` (활성화는 별도 결정) |
+
+상자 하단 투영 평면은 `Z=0m`이며 `/health` 설정에는 `ground_ankle_z_m`을 노출한다. 발목·상자 범위를 `-0.1~0.18m`로 통일하는 안은 미정이다. API 테스트의 가상 발목 높이 `0.3m`는 해당 fixture에서만 상한 `0.4m`를 사용한다.
+
+실측 참조: `calib-classroom-1014-2x2b.json`, 107명 대상 기준/렌즈 보정/매칭 개선/결합의 성공은 91/100/107/107명, 평균 오차는 7.26/6.89/8.39/7.05cm, 15cm 이내는 84.1/90.7/91.6/96.3%다. 이는 공유 실측 결과이며 현재 브랜치의 재검증 결과가 아니다.
+
 `session_id`는 한 번의 실험 실행을 식별한다. 같은 Unity 데이터를 다시 실행해 결과를 비교할 때는 `unity-classroom-01-run2`처럼 새로운 `session_id`를 사용한다. 카메라 캘리브레이션, 전역 객체 ID, detection bundle, ground truth가 모두 세션 단위로 저장되므로 새 세션에서는 캘리브레이션도 다시 등록해야 한다.
 
 한 세션에서 `pair_id`는 실험 조건(`calibration_profile`, `algorithm`)마다 고유하다. 엣지의 최초 전송은 항상 `basic + baseline`으로 저장된다.
@@ -76,7 +97,7 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 각 단계는 에피폴라 오차, 삼각측량 높이, 두 카메라 앞쪽 여부를 헝가리안 알고리즘 실행 전에 검사한다. 기본 에피폴라 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
 
-`algorithm=improved`는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. `baseline`은 에피폴라 매칭을 사용한다. 발목은 `Z=0.1m`, bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=2.0`이다. S4 자동 실험에서 1.0m는 놓침이 증가했지만 2.0m는 정상 추적 95.4%, 놓침 4.6%, ID 변경 1회로 기존 에피폴라 방식(93.6%, 6.4%, 7회)보다 개선됐다. 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
+`algorithm=improved`는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. `baseline`은 에피폴라 매칭을 사용한다. 발목은 `Z=0.08m`(`GROUND_ANKLE_Z_M`), bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=1.5`이다. 0.08m는 실측 2x2 데이터(107명)에서 같은 사람의 두 교점이 가장 가까워지는 높이로, 삼각측량한 발목 높이 중앙값(0.073m)과도 일치한다. 1.5m는 정답 쌍의 최대 교점 거리(1.40m)를 포함하는 최소값(0.5m 단위)이다. 이전 기본값 2.0m는 S4 자동 실험에서 1.0m보다 놓침이 적어 정했던 값이다(정상 추적 95.4%, 놓침 4.6%, ID 변경 1회). 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
 
 `improved`에 켤 기능은 `IMPROVED_FEATURES`(기능 글자, 배포 기본값 `cdfg` = 바닥추적 + 한 카메라 보완 + 경고 유지 + 바닥 짝짓기)로 정한다. Unity 기능별 실험(2026-10-13)에서 효과가 확인된 것만 넣었고, `e`(시간차 보정)는 교차 구간 ID 바뀜이 늘어 빠졌다. `IMPROVED_FEATURES`를 비우면 아래 예전 방식(`ENABLE_*`)을 쓴다.
 
@@ -114,7 +135,7 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 예: `recompute?profile=basic&algorithm=f-g`(기존 + 바닥 짝짓기), `algorithm=f-gk`(기존 + 바닥 짝짓기 + 칼만). `baseline`은 기능 없음, `improved`는 서버 환경 변수로 켠 기능 전부다. 잘못된 이름(`f-gg`, `f-ga`, 모르는 글자, `c` 없이 `d`·`e`)은 422로 거절한다. 결과 csv의 `settings.features`에 실제로 켠 기능이 남고, `/health`의 `feature_codes`에서 글자 목록을 확인할 수 있다. 두 query parameter의 기본값은 각각 `basic`, `baseline`이다.
 위치 행에는 원본 묶음과 카메라 프레임을 추적할 수 있도록 `pair_id`, `frame_id`가 포함된다. 한 묶음의 위치 행은 대표 카메라의 `(camera_id, track_id)`를 기준으로 구분하므로, 잘못된 전역 `object_id` 충돌이 있더라도 서로 다른 사람의 행이 합쳐지지 않는다.
 
-높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.4`다.
+높이 범위는 환경변수로 바꿀 수 있다. 기본값은 `box`가 `BOX_FOOT_Z_MIN=-0.35`, `BOX_FOOT_Z_MAX=0.2`, `ankle`이 `ANKLE_FOOT_Z_MIN=-0.1`, `ANKLE_FOOT_Z_MAX=0.15`다. 발목 범위는 실측 발목 높이(-0.10~0.12m)를 포함하는 최소 범위(0.05m 단위)이다.
 
 응답의 `matches[].world`는 기본적으로 두 관측점의 삼각측량 월드 좌표다. 발목 쌍과 사람 bbox는 항상 삼각측량을 사용한다. `chair`, `suitcase`의 bbox만 `BBOX_POSITION_METHOD=triangulate|plane|weighted-plane`으로 비교할 수 있으며 기본값은 `triangulate`다. `plane`은 두 카메라 광선과 `Z=0m` 평면의 교점을 평균하고, `weighted-plane`은 멀거나 바닥과 평행에 가까운 광선의 가중치를 낮춘다. `observations`에는 실제 계산에 사용한 `foot_pixel`, `foot_src`가 들어가며, `unmatched`에는 매칭되지 않은 카메라별 track ID가 들어간다.
 

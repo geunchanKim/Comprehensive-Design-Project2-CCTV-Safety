@@ -7,6 +7,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_cctv.db")
 os.environ.setdefault("APP_COMMIT_SHA", "test-commit")
 os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "50")
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from sqlalchemy import select
@@ -23,7 +25,12 @@ def setup_module():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
 
-
+@pytest.fixture(autouse=True)
+def synthetic_ankle_height(monkeypatch):
+    """테스트용 가상 장면은 발목이 바닥에서 0.3m 높이에 놓인다.
+    실측으로 정한 기본 상한(0.15m)을 쓰면 발목 쌍이 모두 걸러지므로, 이 파일에서는 예전 상한 0.4m를 쓴다."""
+    monkeypatch.setattr(api_module, "ANKLE_FOOT_Z_MAX", 0.4)
+    
 client = TestClient(app)
 K = [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]]
 SESSION = "unity-classroom-01"
@@ -52,6 +59,30 @@ def detection_payload(pair_id=1, session_id=SESSION, ts2=1020):
          "detections": [{"track_id": 9, "cls": "person", "conf": 0.9,
                          "bbox": [850, 400, 870, 540]}]},
     ]}
+
+
+def test_processing_timings_exposed_and_logged(caplog):
+    import logging
+    session_id = "week1-timing"
+    put_camera("cam1", [0, 2, 0], session_id)
+    put_camera("cam2", [-1, 2, 0], session_id)
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        response = client.post("/detections", json=detection_payload(session_id=session_id))
+    assert response.status_code == 201, response.text
+    timings = response.json()["timings_ms"]
+    assert set(timings) == {
+        "validation_ms", "calibration_bundle_ms", "ingest_undistort_ms",
+        "matching_position_tracking_ms", "floor_tracking_ms", "risk_ms", "commit_ms",
+        "response_prepare_ms", "total_ms",
+    }
+    assert all(value >= 0 for value in timings.values())
+    assert timings["total_ms"] >= sum(value for key, value in timings.items() if key != "total_ms")
+    assert any("detection_timing " in r.message and session_id in r.message for r in caplog.records)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        duplicate = client.post("/detections", json=detection_payload(session_id=session_id))
+    assert duplicate.status_code == 409
+    assert not any("detection_timing " in r.message for r in caplog.records)
 
 
 def create_improved(payload):
