@@ -1,6 +1,6 @@
 # 1주 차 리뷰 후속과 이슈 정리
 
-2026-11-04 확인 기준. 원격 develop은 PR #75 병합 커밋 `2e1d2c3`이며 현재 코드와 `982062e`의 파일 차이는 없다. #71·#72·#74와 #75 최신 댓글을 확인했다.
+2026-11-04 회의 전 재확인 기준. 원격 develop은 PR #76 병합 커밋 `2a762bc`이며, 현재 문서 브랜치의 기반은 #75 병합 `2e1d2c3`이다. #71·#72·#74와 #76 최신 댓글·원격 CI를 확인했다. #76 엣지 변경은 현재 브랜치에 중복 적용하지 않았다. 아래 배포 확인값은 기존 실측 당시 기록이며 새 develop의 배포 확인을 뜻하지 않는다.
 
 ## 배포 확인과 v7 준비
 
@@ -36,9 +36,19 @@ v7 재생을 위한 캘리브레이션 등록은 완료됐다. AI가 같은 녹�
 | [#72 Unity·대시보드](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/72) | 데이터/버전/샘플·5개 장면 대응표·world 좌표/지도 범위·검토용 구역·GT 이벤트 산출, #74 mock 화면/추가 요구 공유 | SSE/GET·지도 경계 표시 합의 및 GET 세부 규칙 회신 완료. 추가 API 구현은 #74에서 관리하며 이슈를 중복 생성하지 않음 |
 | [#74 관제 추가 요구](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/74) | 요청 접수·현 코드 대조 | 공개 snapshot GET·cameras·영속 alert/ack·판정 대상 설정 모두 미구현. 아래 일정으로 진행하며 완료 체크는 구현·검증 후 수행 |
 
-## #74 구현 순서와 리뷰 결정
+## 리뷰 결과
 
-1주 차 완료 조건·SSE/지도 표시 제안과 v7 로그 인수 절차는 [마무리 검토안](week1-closeout.md)에 정리했다. #76 `4e31f45` 수정 재검토·엣지 36개 통과(EOF 뒤 늦은 실패 종료 처리 추가 요청), v7 3,020건 검증·2,945표본 서버 시간 표 작성과 #72 FE 합의를 완료했다. [v6/v7 비교](../benchmarks/2026-11-04-v6-v7-comparison.md)에서 baseline 서버 개선 후보 commit·validation을 선정했다.
+1주 차 완료 조건·SSE/지도 표시 제안과 v7 로그 인수 절차는 [마무리 검토안](week1-closeout.md)에 정리했다. #76은 `d09d2f6`에서 EOF 뒤 늦은 실패 확인을 보완했고 최종 head `e42f1e7`의 backend/edge CI 성공 후 develop에 병합됐다. `Sender.close()`의 전송 종료 뒤 최종 실패 확인과 종료 코드 판정 순서를 확인했다. v7 3,020건 검증·2,945표본 서버 시간 표 작성과 #72 FE 합의를 완료했다. [v6/v7 비교](../benchmarks/2026-11-04-v6-v7-comparison.md)에서 baseline 서버 개선 후보 commit·validation을 선정했다.
+
+## #71 최신 AI 회신
+
+근찬은 1초 초과 110/2,945건(3.74%)에 따라 목표 미달이라는 결론, basic/baseline 한정 해석과 commit·validation 후보 선정에 동의했다. `82912cf` push 진행 동의도 남겼다. 실제 push는 저장소의 사용자 컨펌 절차를 따른다.
+
+2주 차 엣지 계획은 전송 큐 최신성 정책과 `status=stale`·대기 시간 기록, 새 연결/재시도 기록, 유선 v8 비교, 포즈 시간 개선이다. 500ms는 예시이며 확정 임계값이 아니다. 버림 수·age와 추적 ID 유지도 정책 전후 비교한다.
+
+데이터셋 후보 원문은 [Kaggle Safety Vests Detection](https://www.kaggle.com/datasets/adilshamim8/safety-vests-detection-dataset), [Roboflow safety-vests](https://universe.roboflow.com/mgworkspace/safety-vests-p1e7v)로 회신됐다. 규모·2클래스·CC BY 4.0은 AI 담당자 보고값이며 원문 라이선스를 독립 검증한 결과가 아니다. 실제 사용할 버전·다운로드 완료, 교실 촬영 날짜·조끼 준비 현황은 미확정이다. 학습/평가는 사람·촬영 구간을 분리하는 계획이다. #71은 이 후속 때문에 열어 둔다.
+
+## #74 구현 순서
 
 1주 차에는 계약과 범위를 확정한다. 2주 차에는 최신 snapshot GET과 카메라 상태부터 구현한다. `GET /dashboard/snapshot`은 FE 제안이며 현재 공개 경로가 아니다. 조건 생략 시 운영 조건은 명시적 서버 설정으로 선택하고, DB에서 마지막으로 쓰인 임의 실험을 고르지 않는 방향으로 검토한다. 데이터 없음·조건 미설정 응답, 저장 시점·seq·재시작 기준을 API 구현 전에 확정한다. GET polling에서도 같은 seq 재수신을 새 데이터로 보아 stale 타이머를 연장하지 않는 기준이 필요하다. SSE 우선·GET 선연결은 FE 동의로 확정했고, 500ms polling·성공 저장 시 생성·204 응답·GET stream 변경 처리는 snapshot 명세에 반영했다.
 

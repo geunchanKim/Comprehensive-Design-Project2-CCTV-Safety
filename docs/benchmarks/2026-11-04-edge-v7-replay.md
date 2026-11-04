@@ -687,4 +687,3 @@ Missing measurements are unavailable, never zero. RTT is not capture-to-display 
 | server.risk_ms | 238 | 0.001 | 0.001 | 0.001 | 0.001 | 0.002 |
 | server.total_ms | 238 | 17.745 | 14.393 | 30.934 | 34.093 | 46.031 |
 | server.validation_ms | 238 | 4.754 | 2.866 | 11.473 | 12.917 | 15.501 |
-
