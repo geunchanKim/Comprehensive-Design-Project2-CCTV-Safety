@@ -10,6 +10,20 @@ npm install
 npm run dev       # 개발 서버 (HMR)
 ```
 
+## Docker 실행
+
+프론트엔드는 `infra/docker-compose.yaml`의 `frontend` 서비스로 빌드·실행할 수 있습니다.
+기본 포트는 `32123`이며, 서버에서 다른 허용 포트를 사용하려면 `infra/.env`에
+`FRONTEND_PORT=32123`처럼 지정합니다.
+
+```bash
+cd infra
+docker compose up -d --build frontend
+```
+
+브라우저에서 `http://서버주소:32123`으로 접속합니다. Nginx 컨테이너가 React 정적
+파일을 제공하고 `/api/*` 요청은 같은 Compose 네트워크의 `backend:8000`으로 전달합니다.
+
 ## 스크립트
 
 | 명령 | 설명 |

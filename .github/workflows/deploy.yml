@@ -1,4 +1,4 @@
-# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드를 자동 배포하고, 배포된 서버로 실험을 자동 실행한다.
+# develop에 병합(push)되면 테스트 후 실습 서버에 백엔드와 프론트엔드를 자동 배포하고, 배포된 서버로 실험을 자동 실행한다.
 # 배포·실험은 실습 서버에 설치한 self-hosted runner(cctv-server)가 직접 실행한다.
 # 보안: 이 워크플로는 PR에서 실행되지 않는다 (외부 코드가 서버에서 돌지 않도록).
 name: Deploy
@@ -48,11 +48,11 @@ jobs:
           echo "APP_COMMIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "배포 커밋: $(git rev-parse --short HEAD)"
 
-      - name: 백엔드 재빌드·재시작
+      - name: 백엔드·프론트엔드 재빌드·재시작
         run: |
           set -euo pipefail
           cd "$DEPLOY_PATH/infra"
-          docker compose up -d --build backend
+          docker compose up -d --build backend frontend
 
       - name: 서버 응답과 배포 커밋 확인
         run: |
