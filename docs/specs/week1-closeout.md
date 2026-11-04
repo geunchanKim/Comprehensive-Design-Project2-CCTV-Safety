@@ -48,7 +48,7 @@
 7. `session/profile/algorithm + frame=pair_id`가 일치하는 표본에서만 RTT와 서버 total을 비교한다. 차이는 네트워크·함수 외부 처리 잔여 시간이며 순수 네트워크 시간이 아니다. 음수·누락·대응 실패가 있으면 먼저 원인을 확인한다.
 8. 실제 서버의 평균 비용과 P95, 세션별 반복성을 함께 보고 개선 후보 2개를 선정한다. v6/v7 설정 차이가 있으므로 속도 차이를 계측 도입만의 효과로 결론 내리지 않는다.
 
-저장소 루트에서 실제 받은 15개 폴더를 확인한 뒤 실행한다. 아래 경로는 수신 후 사용할 예시이며 현재 v7 자료가 존재한다는 뜻은 아니다.
+v7 자료는 수신했고 15세션 3,020건 검증을 완료했다. 아래는 재검증 명령 예시다. 실행 환경마다 저장소 루트에서 실제 받은 15개 폴더와 경로를 확인한 뒤 실행한다.
 
 ```powershell
 $v7Folders = @(Get-ChildItem ai/runs/week1-v7-received/edge -Directory | Select-Object -ExpandProperty FullName)

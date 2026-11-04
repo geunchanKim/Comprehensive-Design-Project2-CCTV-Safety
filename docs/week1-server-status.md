@@ -46,4 +46,4 @@ $env:DATABASE_URL = 'sqlite:///./test_cctv.db'
 python -m pytest --rootdir=. --confcutdir=backend/tests backend/tests -q -o cache_dir=.pytest_cache
 ```
 
-기존 구현은 PR #73·#75로 develop에 병합·배포됐다. 이번 후속 문서는 `docs/week1-v7-followup` 로컬 브랜치에서 관리하며 별도 push·병합·배포는 하지 않는다.
+기존 구현은 PR #73·#75로 develop에 병합·배포됐다. 이번 후속 문서는 `docs/week1-v7-followup` 브랜치에서 PR #79로 제출했으며 리뷰 수정 중이다. 문서 PR의 병합 상태와 서버 배포 확인은 구분한다.
