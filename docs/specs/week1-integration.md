@@ -17,13 +17,13 @@ python -m backend.tools.prepare_replay_calibrations --calibration ai/calibration
 python ai/calibration/register_calibration.py --calib ai/calibration/output/calib-classroom-1014-2x2b.json --sessions ai/calibration/sessions/classroom-1014-v6.txt --backend-url http://서버주소:32130
 ```
 
-11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 같은 날 현 배포 서버(`ba7ec7e`)에 v6 60개 payload를 실제 등록했고 모두 성공했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. v7은 계측 서버 배포 뒤 등록한다.
+11/2 AI가 확정한 15개 이름을 `ai/calibration/sessions/classroom-1014-v6.txt`에 저장했다. v7은 같은 목록의 접미사만 바꾼 `classroom-1014-v7.txt`를 사용한다. 각 15개×카메라 2대×profile 2종으로 버전당 60개, 총 120개 payload를 오프라인 검증했다. 같은 날 현 배포 서버(`ba7ec7e`)에 v6 60개 payload를 실제 등록했고 모두 성공했다. 기존 등록기는 PUT으로 값을 갱신하므로 과거 실험 이름을 재사용하지 않는다. 11/3 계측 서버 배포 `2e1d2c3`와 합의 설정·DB 연결을 확인하고 사용자 승인 후 v7 60건도 실제 등록했으며 모두 HTTP 200으로 성공했다. 11/4 동일 입력 v7 15세션 원본을 받아 3,020건/예열 제외 2,945표본을 검증했다. [v7 실측 표](../benchmarks/2026-11-04-edge-v7-replay.md)와 [비교·후보 선정](../benchmarks/2026-11-04-v6-v7-comparison.md)을 참조한다.
 
 RTT는 `timings.jsonl`의 행마다 `frame`과 함께 저장하며 frame은 서버 pair_id와 같다. 실행 커밋은 `feat/edge-week1-timing`의 `7b1f58f`다. 수신한 s6-t1 dry-run은 timings·sent가 각각 49행이며 추가 필드와 `status=dry-run`을 확인했다. AI가 앞 5짝을 제외해 보고한 값은 약 11.7짝/초, 탐지 합 81ms(검출 40ms+포즈 41ms), 엣지 전체 131ms(P90 176ms)다. [BE 통합 보고서](../benchmarks/2026-11-02-edge-s6-t1-dry-run.md)는 예열을 제외하지 않은 49행 전체 통계이므로 이 값과 구분한다. dry-run에는 RTT·서버 응답·서버 단계별 시간이 없으며, 15개 전체 측정 결과로 해석하지 않는다.
 
 ## Unity 입력과 지도
 
-11/2 후속: 위 dry-run과 별도로 실제 v6 15세션 로그를 수신했다. 실제 실행 커밋은 PR 공유 기준 `ba17304`이며, [통합 실측 보고서](../benchmarks/2026-11-02-edge-v6-replay.md)에서 2,884건 전송·응답과 예열 제외 2,809표본을 검증했다. 서버 계측은 아직 배포 전이므로 v6의 서버 단계 시간은 없다.
+11/2 후속: 위 dry-run과 별도로 실제 v6 15세션 로그를 수신했다. 실제 실행 커밋은 PR 공유 기준 `ba17304`이며, [통합 실측 보고서](../benchmarks/2026-11-02-edge-v6-replay.md)에서 2,884건 전송·응답과 예열 제외 2,809표본을 검증했다. v6 측정 당시 서버 계측은 배포 전이므로 v6의 서버 단계 시간은 없다.
 
 이번 평가는 world→(x,z,y)를 유지하며 rel로 바꾸지 않는다. 4m 격자에 0.5m씩 여유를 둔 지도 범위는 X 2.79~7.79m, Y 1.785~6.785m이다. 지도·위험구역 frame ID는 `unity-world-xzy`다. 실측 마커 좌표와는 분리한다.
 
@@ -51,6 +51,6 @@ python -m backend.tools.check_unity_metadata ai/runs/week1-prep/unity-grid-sc10.
 
 ## 담당자에게 남은 확인
 
-- AI: v6 15개 서버 재생 로그 수신·검증 완료. [실측 보고서](../benchmarks/2026-11-02-edge-v6-replay.md)에 전체·세션별 통계를 기록했다. 계측 배포 후 v7 동일 입력 재측정과 교실 사진 일정·조끼 준비 현황 확인이 남아 있다.
-- Unity/프론트: 메시지 추가 필드 반영 의견과 디자인 시안. 지도 범위·seq·stale 기준·지원 클래스는 [snapshot 명세](dashboard-stream.md)에 반영했다.
+- AI: v6 15개 서버 재생 로그 수신·검증 완료. [실측 보고서](../benchmarks/2026-11-02-edge-v6-replay.md)에 전체·세션별 통계를 기록했다. v7 동일 입력 재측정·BE 로그 검증 완료. 함수 밖 지연과 전송 큐 후속, cdfg 별도 프로파일, 교실 사진 일정·조끼 준비 확인이 남아 있다.
+- Unity/프론트: #74에서 mock 관제 화면과 추가 API 요구가 공유됐다. 지도 범위·seq·stale 기준·지원 클래스는 [snapshot 명세](dashboard-stream.md)에 반영했다. GET·카메라 상태·경고 ack·판정 대상 요청은 [후속 작업](week1-followup.md)으로 나눠 관리한다.
 - 서버: PR 컨펌 전 push·배포하지 않는다. 전체 위험 분석 활성화와 실시간 API는 이번 준비 작업에서 앞당기지 않는다.
