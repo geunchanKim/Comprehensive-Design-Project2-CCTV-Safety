@@ -199,6 +199,7 @@ class Sender:
             self._cond.notify()
         self._thread.join(timeout=wait)
         self.client.close(wait=wait)
+        self._check_server()                       # 마지막 요청의 거절(404 등)이 종료 대기 중에 와도 놓치지 않게
         with self._timings_lock:
             self._timings.close()
 
@@ -267,6 +268,11 @@ class Sender:
         det = f"{statistics.median(self.detect_ms):.0f}ms" if self.detect_ms else "-"
         rtt = f" | 왕복 중간값 {statistics.median(self.rtt_ms):.0f}ms" if self.rtt_ms else ""
         return f"전송 {s['sent']} | 밀려서 건너뜀 {s['skipped']} | 탐지 중간값 {det}{rtt} | 서버 {self.client.summary()}"
+
+
+def exit_code(sender) -> int:
+    """서버가 계속 거절할 이유로 멈췄으면 2, 아니면 0. sender.close() 뒤에 불러야 마지막 응답까지 반영된다"""
+    return 2 if sender is not None and sender.stop_reason else 0
 
 
 def preview(f1, f2, width=640):
@@ -424,8 +430,9 @@ def main():
             print(f"  멈춘 이유: {sender.stop_reason}")
         print(f"  전송 기록: {sender.client.out_dir}")
     print(f"저장 위치: {out_dir}")
-    if sender and sender.stop_reason:          # 기록은 다 남긴 뒤, 실패로 끝났음을 종료 코드로 알린다 (replay_all 이 멈추게)
-        raise SystemExit(2)
+    code = exit_code(sender)                   # 기록은 다 남긴 뒤, 실패로 끝났음을 종료 코드로 알린다 (replay_all 이 멈추게)
+    if code:
+        raise SystemExit(code)
 
 
 if __name__ == "__main__":

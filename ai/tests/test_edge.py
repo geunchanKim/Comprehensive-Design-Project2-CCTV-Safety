@@ -654,3 +654,30 @@ def test_replay_all_stops_when_a_session_fails(tmp_path, monkeypatch):
     assert calls == ["classroom-1014-s1-t1-v9"]                # 첫 세션에서 멈추고 다음 세션은 실행 안 함
     info = json.loads(next((tmp_path / "replay").glob("run-*.json")).read_text(encoding="utf-8"))
     assert info["done"] == []
+
+
+def test_sender_catches_rejection_that_arrives_while_closing(tmp_path):
+    from types import SimpleNamespace
+    from realtime import Sender, exit_code
+
+    class LateFailClient:                                      # 마지막 요청의 404가 close() 대기 중에 도착
+        out_dir = tmp_path
+        last_failure = None
+        on_done = None
+
+        def send(self, message, path, meta=None):
+            pass
+
+        def close(self, wait=None):
+            self.last_failure = ("/detections", 404, {"detail": "calibration not found"})
+
+        def summary(self):
+            return "ok"
+
+    recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms)
+    sender = Sender("classroom-1101-s1-t1", {}, LateFailClient(), recorder)
+    assert exit_code(sender) == 0
+    sender.close()
+    assert sender.stop_reason                                  # 종료 대기 중 온 거절도 멈춘 이유로 남음
+    assert exit_code(sender) == 2                              # → realtime.py 종료 코드 2 → replay_all 이 멈춤
+    assert exit_code(None) == 0
