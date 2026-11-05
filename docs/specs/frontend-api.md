@@ -1,5 +1,7 @@
 # 관제 화면(frontend)이 서버에 필요한 것
 
+2026-11-05 BE 후속: [2주 차 API](week2-dashboard.md)에 snapshot GET·SSE, 별도 cameras 조회, 구역 전체 교체를 구현했다. polling 합의는 아래 초기 제안의 1초에서 **500ms**로 갱신됐으며 AreaPage에 반영했다. cameras의 `online`은 heartbeat 합의 전 null이고 `frame_status`를 별도로 제공한다. FE는 현재 mock이며 adapter 연동이 남아 있다. 영속 alert/ack와 판정 대상 설정은 이번 구현에 포함되지 않는다.
+
 관제 화면은 서버의 [대시보드 snapshot 계약](dashboard-stream.md)(`backend/dashboard.py`의 `DashboardSnapshot`, `feat/server-week1-observability` 기준)을 그대로 입력으로 쓴다. 이 문서는 그 계약 위에 **화면 때문에 더 필요한 것**만 적는다. 계약에 이미 있는 것은 다시 정의하지 않는다.
 
 지금 프론트엔드는 mock 데이터(`frontend/src/api/mock/`)로 돌아가고, 서버가 준비되면 `frontend/src/api/source.ts`의 데이터 소스만 바꾼다.

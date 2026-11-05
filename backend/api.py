@@ -951,6 +951,19 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
                              captured_at_ms=max(frame.ts for frame in frames), **risk))
     timer.mark("risk_ms")
+    unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
+                 for n, frame in enumerate(frames)}
+    result = {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
+              "calibration_profile": profile, "sync_delta_ms": sync_delta,
+              "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
+              "sync_time_basis": sync_time_basis, "max_sync_delta_ms": max_sync_delta_ms,
+              "matches": matches, "unmatched": unmatched, "risks": risks, "settings": settings}
+    try:
+        from .dashboard_api import publish
+    except ImportError:
+        from dashboard_api import publish
+    publish(db, body, algorithm, result)
+    timer.mark("dashboard_snapshot_ms")
     try:
         db.commit()
     except IntegrityError as exc:
@@ -1044,6 +1057,11 @@ def recompute_session(session_id: str, profile: CalibrationProfile,
         TrackPairState.calibration_profile == profile,
         TrackPairState.algorithm == algorithm,
     ))
+    try:
+        from .dashboard_api import reset_stream
+    except ImportError:
+        from dashboard_api import reset_stream
+    reset_stream(db, session_id, profile, algorithm)
     db.commit()
 
     results = [_create_detections(payload, db, algorithm=algorithm) for payload in payloads]

@@ -21,7 +21,7 @@ export default function AreaPage() {
 
 function AreaView({ areaId }: { areaId: string }) {
   const { nowMs, areas, acknowledge } = useShell()
-  const [snapshot, refresh] = usePolling((signal) => dataSource.getAreaSnapshot(areaId, signal), 1000)
+  const [snapshot, refresh] = usePolling((signal) => dataSource.getAreaSnapshot(areaId, signal), 500)
   const [layers, setLayers] = useState<FloorPlanLayers>({ trail: true, fov: true, zones: true })
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const summary = areas.find((a) => a.areaId === areaId)

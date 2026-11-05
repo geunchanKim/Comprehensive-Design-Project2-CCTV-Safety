@@ -193,6 +193,21 @@ class SessionSettings(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DashboardState(Base):
+    __tablename__ = "dashboard_states"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True)
+    algorithm: Mapped[str] = mapped_column(String(16), primary_key=True)
+    map_config: Mapped[dict] = mapped_column(JSON)
+    zones: Mapped[dict] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    stream_id: Mapped[str] = mapped_column(String(36))
+    seq: Mapped[int] = mapped_column(BigInteger, default=0)
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observations: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class GroundTruth(Base):
     __tablename__ = "ground_truth"
     __table_args__ = (UniqueConstraint("session_id", "frame"),)

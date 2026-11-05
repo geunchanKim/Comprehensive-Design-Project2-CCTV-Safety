@@ -1,5 +1,5 @@
-"""Week-one dashboard contract. Transport and zone/PPE evaluation come later."""
-from math import isclose
+"""Dashboard contract and explicit XY zone evaluation. PPE remains unevaluated."""
+from math import hypot, isclose, isfinite
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -139,11 +139,12 @@ class DashboardSnapshot(ContractModel):
 
 def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
                    captured_at_ms: int, emitted_at_ms: int, zones: ZoneSet,
-                   stream_id: str, seq: int, map_config: DashboardMap) -> DashboardSnapshot:
+                   stream_id: str, seq: int, map_config: DashboardMap,
+                   evaluate_zones: bool = False) -> DashboardSnapshot:
     """Adapt existing results without inventing safe/PPE/zone decisions."""
     if zones.coordinate_frame_id != map_config.coordinate_frame_id:
         raise ValueError("zone and map coordinate frames must match")
-    return DashboardSnapshot(
+    snapshot = DashboardSnapshot(
         stream_id=stream_id, seq=seq, map=map_config,
         session_id=result.session_id, calibration_profile=result.calibration_profile,
         algorithm=algorithm, pair_id=result.pair_id, captured_at_ms=captured_at_ms,
@@ -158,3 +159,28 @@ def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
                                  or result.settings.get("warning_hysteresis")),
         risks=result.risks, zones=zones.zones,
     )
+    if evaluate_zones:
+        snapshot.zone_evaluated = True
+        for item in snapshot.objects:
+            if item.cls == "person":
+                item.zone_states = [evaluate_zone(item.world.x, item.world.y, zone)
+                                    for zone in zones.zones if zone.enabled]
+    return snapshot
+
+
+def evaluate_zone(x: float, y: float, zone: RiskZone) -> ZoneState:
+    """Minimum XY edge distance and ray crossing, including polygon boundary."""
+    if not isfinite(x) or not isfinite(y):
+        return ZoneState(zone_id=zone.zone_id)
+    inside = False
+    distance = float("inf")
+    for a, b in zip(zone.vertices, zone.vertices[1:] + zone.vertices[:1]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = max(0.0, min(1.0, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy)))
+        distance = min(distance, hypot(x - a[0] - t * dx, y - a[1] - t * dy))
+        if (a[1] > y) != (b[1] > y) and x < a[0] + (y - a[1]) * dx / dy:
+            inside = not inside
+    if inside or distance <= 1e-9:
+        return ZoneState(zone_id=zone.zone_id, status="intrusion", distance_m=0)
+    return ZoneState(zone_id=zone.zone_id, distance_m=distance,
+                     status="warning" if distance <= zone.warning_distance_m else "outside")
