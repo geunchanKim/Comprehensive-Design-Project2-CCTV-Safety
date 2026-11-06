@@ -79,3 +79,4 @@ python eval/timing_summary.py runs/edge/<전> runs/edge/<후>
 - 녹화는 `runs/real/`, 탐지 결과는 `runs/edge/`, 실험 결과는 `runs/experiments/`에 둔다
 - 서버는 같은 session_id를 다시 받지 않는다 (409)
 - 메시지 양식: `docs/specs/message-spec.md`
+- 보호구 판별 방식·데이터셋: `docs/specs/ppe-dataset.md`
