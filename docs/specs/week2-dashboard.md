@@ -27,10 +27,27 @@
 
 `GET /dashboard/cameras`는 설정된 조건의 카메라를 반환한다. `world=-Rᵀt`, yaw는 월드 +X 기준 반시계 각도다. 영상 중앙과 좌우 끝 광선을 카메라 자세로 월드에 돌려 XY 시야각을 계산한다. precise는 렌즈 왜곡을 보정하고 basic은 기존 알고리즘처럼 raw K를 사용한다. 수직 광축처럼 평면 방향이 정의되지 않으면 yaw/fov는 null이다. 도면상의 시야각은 지면 가시영역 전체를 뜻하지 않는다.
 
-`last_frame`은 `frame_id`, `captured_at_ms`, `server_observed_at_ms`, `detection_count`다. server 관측 시각은 snapshot을 구성한 서버 시각이며 카메라 노출·엣지 수신 시각이 아니다. 성공 저장된 빈 프레임도 기록한다. 이 시각으로 `frame_status=recent/stale`(1000ms)를 표시하고 기록이 없으면 unknown이다. `online=null`은 heartbeat·엣지 연결 판정을 아직 하지 않았다는 뜻이다. 프레임 상태만으로 실제 카메라 연결을 확정하지 않는다.
+`last_frame`은 `frame_id`, `captured_at_ms`, `server_observed_at_ms`, `detection_count`다. server 관측 시각은 snapshot을 구성한 서버 시각이며 카메라 노출·엣지 수신 시각이 아니다. 성공 저장된 빈 프레임도 기록한다. 이 시각으로 `frame_status=recent/stale`(1000ms)를 표시하고 기록이 없으면 unknown이다. `online=null`은 heartbeat 기록이 없다는 뜻이다. 11/6 추가한 연결 판정은 아래 heartbeat 계약을 따른다. 프레임 상태만으로 실제 카메라 연결을 확정하지 않는다.
 
 ## 남은 연동·검증
 
 로컬 검증: backend/edge 합계 **138개 테스트 통과**. 다각형 경계·주의 거리·오목/역방향, 조건 분리·204/422/503, 중복/커밋 실패 시 발행 금지, seq 유지, 빈 프레임·카메라 unknown/stale, 구역 버전 충돌·무효화, SSE 현재 snapshot·재접속·대기 취소를 포함한다. 임시 SQLite의 기존 0010 모델에서 0011 upgrade → alembic check → downgrade → upgrade를 통과했다. 빈 SQLite에 전체 과거 이력을 적용하는 검사는 기존 0007의 ALTER 제약조건 미지원으로 실패했다. PostgreSQL 전체 이력 적용 성공으로 보고하지 않는다. FE 의존성이 설치되지 않아 빌드는 실행하지 않았다.
 
 기존 서버와 동일하게 인증이 추가되지 않은 로컬 API다. 공개 배포 전에 접근 권한·수정 권한·구독 조건을 확정한다. 자동 배포하지 않았다. 카메라 heartbeat 계약·timeout은 AI와, 실제 마커 원점 지도·FE adapter와 SSE 재접속 화면은 담당자와 확인한다. PostgreSQL 다중 worker·동시 구역 수정, reverse proxy SSE buffering, 실제 v8/cdfg 성능·큐 최신성 정책은 실습 환경 검증이 남는다. 영속 alert/ack는 별도 후속이며 이 구현에 포함하지 않는다.
+
+
+## 11/6 heartbeat 후속 (#71)
+
+`POST /edge/heartbeat`는 탐지 큐·지도 설정과 독립적으로 아래 JSON을 저장하고 204를 반환한다. session/camera 단위이며 calibration/algorithm과 무관하다. 백엔드에서 `python -m alembic upgrade head`로 0012까지 적용한다.
+
+```json
+{"session_id":"demo","camera_id":"cam1","edge_run_id":"unique-per-run","source":"rtsp","last_recv_ms":8000,"sent_at_ms":8100,"dropped_count":0,"max_queue_age_ms":0}
+```
+
+엣지는 카메라마다 1초 주기로 탐지 큐와 분리해 보낸다. `source`는 rtsp/folder이며 folder의 online은 재생 프로세스 응답 상태다. 최초 프레임 전 `last_recv_ms=null`을 허용한다. 시각·통계는 음수가 아니며 last_recv는 sent_at 이하이다. 같은 run에서 sent_at이 같거나 과거인 요청은 204로 무시하며 서버 수신 시각을 갱신하지 않는다. 새 run은 시계와 통계를 초기화할 수 있다. 카메라마다 송신 요청을 직렬화하고 이전 run의 송신을 종료한 뒤 새 run을 시작해야 한다. 서로 다른 run의 지연 요청 순서는 서버가 판별하지 않으므로 동시에 여러 송신자가 같은 session/camera를 쓰면 안 된다.
+
+`GET /dashboard/cameras`의 online은 서버 수신 후 3000ms 미만이면 true, 이후 false, 기록이 없으면 null이다. `receive_status`는 `(sent_at_ms-last_recv_ms) + 서버 수신 이후 경과`가 2000ms 미만이면 recent, 이후 stale, 최초 프레임 전이면 unknown이다. 엣지·서버 절대 시각은 서로 빼지 않는다. 네트워크 편도 지연은 이 계산에 포함되지 않으므로 실제 노출 최신성을 보장하지 않는다. 원본 heartbeat와 `server_received_at_ms`도 반환한다. 성공 탐지 기반 frame_status와 별개이며 snapshot seq를 갱신하지 않는다. source/drop/queue 통계는 그대로 제공한다.
+
+1주 차 릴리스 #80에는 이 2주 차 기능을 포함하지 않는다. 3초/2초 기준은 AI 제안값이며 유선 실측 뒤 재검토한다. 공개 배포 전 인증·카메라 소유권 확인은 여전히 필요하다.
+
+11/6 검증: backend 102개·edge 37개 통과. 임시 SQLite의 0011 모델에서 0012 upgrade → check → downgrade → upgrade → check를 통과했다. PostgreSQL 실제 동시 실행과 엣지 송신 연동은 검증하지 않았다. pytest 캐시 경로 권한 경고 2개가 각 실행에 있었으며 테스트 실패는 없었다.

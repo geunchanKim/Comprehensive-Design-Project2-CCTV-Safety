@@ -208,6 +208,15 @@ class DashboardState(Base):
     observations: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class EdgeHeartbeat(Base):
+    __tablename__ = "edge_heartbeats"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    camera_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    received_at_ms: Mapped[int] = mapped_column(BigInteger)
+
+
 class GroundTruth(Base):
     __tablename__ = "ground_truth"
     __table_args__ = (UniqueConstraint("session_id", "frame"),)

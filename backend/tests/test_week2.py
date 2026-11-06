@@ -182,3 +182,40 @@ async def test_sse_wait_cancels_without_new_snapshot(configured):
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def test_heartbeat_clock_timeout_and_isolation(configured, monkeypatch):
+    from backend import heartbeat as module
+    from backend.models import EdgeHeartbeat
+
+    key, _ = configured
+    now = 1_000_000
+    monkeypatch.setattr(module.time, "time_ns", lambda: now * 1_000_000)
+    body = {"session_id": key["session_id"], "camera_id": "cam1", "edge_run_id": "run-1",
+            "source": "rtsp", "last_recv_ms": 8_000, "sent_at_ms": 8_000,
+            "dropped_count": 12, "max_queue_age_ms": 600}
+    assert client.post("/edge/heartbeat", json=body).status_code == 204
+    def cameras():
+        return client.get("/dashboard/cameras", params=key).json()["cameras"]
+    assert cameras()[0]["online"] is True
+    assert cameras()[0]["receive_status"] == "recent"
+    assert cameras()[0]["frame_status"] == "unknown"
+    assert cameras()[1]["online"] is None
+    now += 2000
+    assert cameras()[0]["online"] is True
+    assert cameras()[0]["receive_status"] == "stale"
+    now += 1000
+    assert cameras()[0]["online"] is False
+    # Delayed/duplicate heartbeats cannot extend the same run's timeout.
+    assert client.post("/edge/heartbeat", json=body).status_code == 204
+    assert client.post("/edge/heartbeat", json={**body, "sent_at_ms": 7999, "last_recv_ms": 7999}).status_code == 204
+    assert cameras()[0]["online"] is False
+    assert client.post("/edge/heartbeat", json={**body, "edge_run_id": "run-2", "sent_at_ms": 100,
+                                               "last_recv_ms": None, "source": "folder"}).status_code == 204
+    assert cameras()[0]["online"] is True
+    assert cameras()[0]["receive_status"] == "unknown"
+    assert client.get("/dashboard/snapshot", params=key).status_code == 204
+    with SessionLocal() as db:
+        assert db.get(EdgeHeartbeat, (key["session_id"], "cam1")).payload["edge_run_id"] == "run-2"
+    assert client.post("/edge/heartbeat", json={**body, "last_recv_ms": 8001}).status_code == 422
+    assert client.post("/edge/heartbeat", json={**body, "dropped_count": -1}).status_code == 422

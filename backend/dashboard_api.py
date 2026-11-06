@@ -18,12 +18,14 @@ from starlette.concurrency import run_in_threadpool
 try:
     from .dashboard import ContractModel, DashboardMap, DashboardSnapshot, ZoneSet, build_snapshot
     from .database import SessionLocal, get_db
-    from .models import Camera, DashboardState
+    from .models import Camera, DashboardState, EdgeHeartbeat
+    from .heartbeat import connection_state
     from .schemas import CalibrationProfile, DetectionBundleOut
 except ImportError:
     from dashboard import ContractModel, DashboardMap, DashboardSnapshot, ZoneSet, build_snapshot
     from database import SessionLocal, get_db
-    from models import Camera, DashboardState
+    from models import Camera, DashboardState, EdgeHeartbeat
+    from heartbeat import connection_state
     from schemas import CalibrationProfile, DetectionBundleOut
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -190,6 +192,8 @@ def cameras(key=Depends(condition), db: Session = Depends(get_db)):
     row = require_state(db, key)
     now = time.time_ns() // 1_000_000
     result = []
+    heartbeats = {item.camera_id: item for item in db.scalars(
+        select(EdgeHeartbeat).where(EdgeHeartbeat.session_id == key[0]))}
     for camera in db.scalars(select(Camera).where(Camera.session_id == key[0], Camera.calibration_profile == key[1]).order_by(Camera.id)):
         rotation = np.asarray(camera.rotation_matrix, dtype=float)
         center = -rotation.T @ np.asarray(camera.translation_vector, dtype=float)
@@ -210,6 +214,7 @@ def cameras(key=Depends(condition), db: Session = Depends(get_db)):
         result.append({"camera_id": camera.id, "world": dict(zip(("x", "y", "z"), center.tolist())),
                        "yaw_deg": yaw, "horizontal_fov_deg": fov,
                        "frame_status": ("recent" if now - observed["server_observed_at_ms"] < 1000 else "stale")
-                       if observed else "unknown", "online": None, "last_frame": observed})
+                       if observed else "unknown", "last_frame": observed,
+                       **connection_state(heartbeats.get(camera.id), now)})
     return {"coordinate_frame_id": row.map_config["coordinate_frame_id"], "cameras": result,
             "observed_at_ms": now, "frame_stale_after_ms": 1000}
