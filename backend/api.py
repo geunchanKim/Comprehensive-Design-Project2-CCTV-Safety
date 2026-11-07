@@ -552,6 +552,15 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
 
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+    # Flush can fail before commit; apply the same rollback/409 contract.
+    try:
+        return _store_detections(body, db, algorithm)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+
+
+def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
     timer = StageTimer()
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
@@ -951,15 +960,12 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
                              captured_at_ms=max(frame.ts for frame in frames), **risk))
     timer.mark("risk_ms")
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+    # Preserve the ID before commit expires ORM attributes.
+    bundle_id = bundle.id
+    db.commit()
     timer.mark("commit_ms")
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
-    bundle_id = bundle.id
     timer.mark("response_prepare_ms")
     timings = timer.result()
     logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({

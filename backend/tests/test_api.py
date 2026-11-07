@@ -948,3 +948,54 @@ def test_time_offset_correction_moves_position_to_later_photo_time():
     assert np.linalg.norm(corrected[:2] - late[:2]) < 0.01
     same_time = api_module._time_corrected_position(raw, [1.0, 0.0], normalized, [1100, 1100], 1100, calibrations)
     assert np.allclose(same_time, raw)
+
+
+def test_ingest_flush_conflict_rolls_back_and_returns_409(monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    session_id = "ingest-flush-conflict"
+    put_camera("cam1", [0, 2, 0], session_id)
+    put_camera("cam2", [-1, 2, 0], session_id)
+    payload = detection_payload(session_id=session_id)
+
+    with monkeypatch.context() as patch:
+        def fail_flush(self, *args, **kwargs):
+            raise IntegrityError("simulated concurrent insert", {}, Exception("unique constraint"))
+        patch.setattr(Session, "flush", fail_flush)
+        response = client.post("/detections", json=payload)
+    assert response.status_code == 409
+    with SessionLocal() as db:
+        assert db.scalar(select(FrameBundle).where(FrameBundle.session_id == session_id)) is None
+        assert db.get(SessionSettings, (session_id, "basic", "baseline")) is None
+    assert client.post("/detections", json=payload).status_code == 201
+
+
+def test_ingest_does_not_query_after_commit():
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    session_id = "ingest-no-refresh"
+    put_camera("cam1", [0, 2, 0], session_id)
+    put_camera("cam2", [-1, 2, 0], session_id)
+    committed = False
+    queries = []
+
+    def on_commit(db):
+        nonlocal committed
+        committed = True
+
+    def on_sql(conn, cursor, statement, parameters, context, executemany):
+        if committed and statement.lstrip().upper().startswith("SELECT"):
+            queries.append(statement)
+
+    event.listen(Session, "after_commit", on_commit)
+    event.listen(engine, "before_cursor_execute", on_sql)
+    try:
+        response = client.post("/detections", json=detection_payload(session_id=session_id))
+    finally:
+        event.remove(Session, "after_commit", on_commit)
+        event.remove(engine, "before_cursor_execute", on_sql)
+    assert response.status_code == 201, response.text
+    assert committed
+    assert queries == []
