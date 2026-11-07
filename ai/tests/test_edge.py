@@ -12,11 +12,13 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - 실시간 속도: Sender가 짝마다 시간을 기록하는지, timing_summary가 표를 맞게 계산하는지
   - 녹화 폴더 재생: 녹화한 사진을 기록한 시각 간격대로 흘려보내는지
   - 녹화 여러 개 재생(replay_all): 녹화 폴더를 순서대로 찾는지
+  - clock: 시스템 시계가 뒤로 가도 엣지 시각은 뒤로 가지 않는지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
 
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -30,6 +32,7 @@ sys.path.insert(0, str(AI_DIR / "eval"))
 import pytest  # noqa: E402
 from bundle import build_bundle, build_frame, check_session_id, clean_detections  # noqa: E402
 import camera_source  # noqa: E402
+import clock  # noqa: E402
 from camera_source import Frame  # noqa: E402
 from eval_position import evaluate  # noqa: E402
 from feet import LEFT_ANKLE, RIGHT_ANKLE, attach_feet  # noqa: E402
@@ -681,3 +684,25 @@ def test_sender_catches_rejection_that_arrives_while_closing(tmp_path):
     assert sender.stop_reason                                  # 종료 대기 중 온 거절도 멈춘 이유로 남음
     assert exit_code(sender) == 2                              # → realtime.py 종료 코드 2 → replay_all 이 멈춤
     assert exit_code(None) == 0
+
+
+# ---------- clock: 뒤로 가지 않는 엣지 시각 ----------
+
+def test_clock_starts_near_system_time():
+    before = int(time.time() * 1000)
+    c = clock.EdgeClock()
+    assert abs(c.now_ms() - before) < 1000
+
+
+def test_clock_ignores_system_time_going_back(monkeypatch):
+    c = clock.EdgeClock()
+    first = c.now_ms()
+    # 시스템 시계가 1시간 뒤로 보정돼도 엣지 시각은 그대로 앞으로 간다
+    real_time = time.time
+    monkeypatch.setattr(clock.time, "time", lambda: real_time() - 3600)
+    assert c.now_ms() >= first
+
+
+def test_clock_never_decreases():
+    values = [clock.now_ms() for _ in range(1000)]
+    assert values == sorted(values)
