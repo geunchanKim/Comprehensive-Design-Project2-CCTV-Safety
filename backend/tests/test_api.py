@@ -999,3 +999,40 @@ def test_ingest_does_not_query_after_commit():
     assert response.status_code == 201, response.text
     assert committed
     assert queries == []
+
+
+@pytest.mark.parametrize("count", [1, 5, 10])
+def test_stable_track_links_use_one_select_per_bundle(count):
+    from sqlalchemy import event
+
+    session_id = f"batch-track-links-{count}"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    def payload(pair):
+        body = detection_payload(pair_id=pair, session_id=session_id, ts2=pair * 1000)
+        for frame, dx in zip(body["frames"], (0, -100)):
+            frame["ts"] = pair * 1000
+            frame["detections"] = [
+                {"track_id": i + 1, "cls": "chair", "conf": 0.9,
+                 "bbox": [950 - i * 25 + dx, 400, 970 - i * 25 + dx, 540]}
+                for i in range(count)]
+        return body
+
+    first = client.post("/detections", json=payload(1))
+    assert first.status_code == 201, first.text
+    queries = []
+    def capture(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "FROM track_links" in statement:
+            queries.append(statement)
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        second = client.post("/detections", json=payload(2))
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert second.status_code == 201, second.text
+    assert len(queries) == 1
+    before, after = first.json()["matches"], second.json()["matches"]
+    assert len(before) == len(after) == count
+    for key in ("object_id", "world", "camera_tracks"):
+        assert [m[key] for m in before] == [m[key] for m in after]
