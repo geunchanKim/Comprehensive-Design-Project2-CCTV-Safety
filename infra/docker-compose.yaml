@@ -42,9 +42,12 @@ services:
       BOX_FOOT_Z_MIN: ${BOX_FOOT_Z_MIN:--0.35}
       BOX_FOOT_Z_MAX: ${BOX_FOOT_Z_MAX:-0.2}
       ANKLE_FOOT_Z_MIN: ${ANKLE_FOOT_Z_MIN:--0.1}
-      ANKLE_FOOT_Z_MAX: ${ANKLE_FOOT_Z_MAX:-0.4}
+      ANKLE_FOOT_Z_MAX: ${ANKLE_FOOT_Z_MAX:-0.15}
       BBOX_POSITION_METHOD: ${BBOX_POSITION_METHOD:-triangulate}
-      MAX_GROUND_DISTANCE_M: ${MAX_GROUND_DISTANCE_M:-2.0}
+      MAX_GROUND_DISTANCE_M: ${MAX_GROUND_DISTANCE_M:-1.5}
+      GROUND_ANKLE_Z_M: ${GROUND_ANKLE_Z_M:-0.08}
+      SINGLE_CAMERA_ANKLE_Z_M: ${SINGLE_CAMERA_ANKLE_Z_M:-0.08}
+      FLOOR_TRACK_GATE_M: ${FLOOR_TRACK_GATE_M:-0.8}
       ENABLE_KALMAN_FILTER: ${ENABLE_KALMAN_FILTER:-true}
       ENABLE_TRACK_PAIR_HOLD: ${ENABLE_TRACK_PAIR_HOLD:-true}
       TRACK_PAIR_CONFIRM_FRAMES: ${TRACK_PAIR_CONFIRM_FRAMES:-3}
@@ -62,6 +65,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: cctv_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-32123}:80"
+    depends_on:
+      - backend
 
 volumes:
   db_data:

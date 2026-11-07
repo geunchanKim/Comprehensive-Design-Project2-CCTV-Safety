@@ -7,6 +7,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test_cctv.db")
 os.environ.setdefault("APP_COMMIT_SHA", "test-commit")
 os.environ.setdefault("MAX_EPIPOLAR_ERROR_PX", "50")
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from sqlalchemy import select
@@ -23,7 +25,12 @@ def setup_module():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
 
-
+@pytest.fixture(autouse=True)
+def synthetic_ankle_height(monkeypatch):
+    """테스트용 가상 장면은 발목이 바닥에서 0.3m 높이에 놓인다.
+    실측으로 정한 기본 상한(0.15m)을 쓰면 발목 쌍이 모두 걸러지므로, 이 파일에서는 예전 상한 0.4m를 쓴다."""
+    monkeypatch.setattr(api_module, "ANKLE_FOOT_Z_MAX", 0.4)
+    
 client = TestClient(app)
 K = [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]]
 SESSION = "unity-classroom-01"
@@ -52,6 +59,30 @@ def detection_payload(pair_id=1, session_id=SESSION, ts2=1020):
          "detections": [{"track_id": 9, "cls": "person", "conf": 0.9,
                          "bbox": [850, 400, 870, 540]}]},
     ]}
+
+
+def test_processing_timings_exposed_and_logged(caplog):
+    import logging
+    session_id = "week1-timing"
+    put_camera("cam1", [0, 2, 0], session_id)
+    put_camera("cam2", [-1, 2, 0], session_id)
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        response = client.post("/detections", json=detection_payload(session_id=session_id))
+    assert response.status_code == 201, response.text
+    timings = response.json()["timings_ms"]
+    assert set(timings) == {
+        "validation_ms", "calibration_bundle_ms", "ingest_undistort_ms",
+        "matching_position_tracking_ms", "floor_tracking_ms", "risk_ms", "commit_ms",
+        "response_prepare_ms", "total_ms",
+    }
+    assert all(value >= 0 for value in timings.values())
+    assert timings["total_ms"] >= sum(value for key, value in timings.items() if key != "total_ms")
+    assert any("detection_timing " in r.message and session_id in r.message for r in caplog.records)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        duplicate = client.post("/detections", json=detection_payload(session_id=session_id))
+    assert duplicate.status_code == 409
+    assert not any("detection_timing " in r.message for r in caplog.records)
 
 
 def create_improved(payload):
@@ -917,3 +948,91 @@ def test_time_offset_correction_moves_position_to_later_photo_time():
     assert np.linalg.norm(corrected[:2] - late[:2]) < 0.01
     same_time = api_module._time_corrected_position(raw, [1.0, 0.0], normalized, [1100, 1100], 1100, calibrations)
     assert np.allclose(same_time, raw)
+
+
+def test_ingest_flush_conflict_rolls_back_and_returns_409(monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    session_id = "ingest-flush-conflict"
+    put_camera("cam1", [0, 2, 0], session_id)
+    put_camera("cam2", [-1, 2, 0], session_id)
+    payload = detection_payload(session_id=session_id)
+
+    with monkeypatch.context() as patch:
+        def fail_flush(self, *args, **kwargs):
+            raise IntegrityError("simulated concurrent insert", {}, Exception("unique constraint"))
+        patch.setattr(Session, "flush", fail_flush)
+        response = client.post("/detections", json=payload)
+    assert response.status_code == 409
+    with SessionLocal() as db:
+        assert db.scalar(select(FrameBundle).where(FrameBundle.session_id == session_id)) is None
+        assert db.get(SessionSettings, (session_id, "basic", "baseline")) is None
+    assert client.post("/detections", json=payload).status_code == 201
+
+
+def test_ingest_does_not_query_after_commit():
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    session_id = "ingest-no-refresh"
+    put_camera("cam1", [0, 2, 0], session_id)
+    put_camera("cam2", [-1, 2, 0], session_id)
+    committed = False
+    queries = []
+
+    def on_commit(db):
+        nonlocal committed
+        committed = True
+
+    def on_sql(conn, cursor, statement, parameters, context, executemany):
+        if committed and statement.lstrip().upper().startswith("SELECT"):
+            queries.append(statement)
+
+    event.listen(Session, "after_commit", on_commit)
+    event.listen(engine, "before_cursor_execute", on_sql)
+    try:
+        response = client.post("/detections", json=detection_payload(session_id=session_id))
+    finally:
+        event.remove(Session, "after_commit", on_commit)
+        event.remove(engine, "before_cursor_execute", on_sql)
+    assert response.status_code == 201, response.text
+    assert committed
+    assert queries == []
+
+
+@pytest.mark.parametrize("count", [1, 5, 10])
+def test_stable_track_links_use_one_select_per_bundle(count):
+    from sqlalchemy import event
+
+    session_id = f"batch-track-links-{count}"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+
+    def payload(pair):
+        body = detection_payload(pair_id=pair, session_id=session_id, ts2=pair * 1000)
+        for frame, dx in zip(body["frames"], (0, -100)):
+            frame["ts"] = pair * 1000
+            frame["detections"] = [
+                {"track_id": i + 1, "cls": "chair", "conf": 0.9,
+                 "bbox": [950 - i * 25 + dx, 400, 970 - i * 25 + dx, 540]}
+                for i in range(count)]
+        return body
+
+    first = client.post("/detections", json=payload(1))
+    assert first.status_code == 201, first.text
+    queries = []
+    def capture(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "FROM track_links" in statement:
+            queries.append(statement)
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        second = client.post("/detections", json=payload(2))
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert second.status_code == 201, second.text
+    assert len(queries) == 1
+    before, after = first.json()["matches"], second.json()["matches"]
+    assert len(before) == len(after) == count
+    for key in ("object_id", "world", "camera_tracks"):
+        assert [m[key] for m in before] == [m[key] for m in after]

@@ -1,0 +1,455 @@
+{
+  "$defs": {
+    "DashboardMap": {
+      "additionalProperties": false,
+      "properties": {
+        "coordinate_system": {
+          "const": "world_xy_m",
+          "default": "world_xy_m",
+          "title": "Coordinate System",
+          "type": "string"
+        },
+        "coordinate_frame_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Coordinate Frame Id",
+          "type": "string"
+        },
+        "bounds": {
+          "$ref": "#/$defs/MapBounds"
+        }
+      },
+      "required": [
+        "coordinate_frame_id",
+        "bounds"
+      ],
+      "title": "DashboardMap",
+      "type": "object"
+    },
+    "DashboardObject": {
+      "additionalProperties": false,
+      "properties": {
+        "object_id": {
+          "title": "Object Id",
+          "type": "integer"
+        },
+        "cls": {
+          "enum": [
+            "person",
+            "chair",
+            "cart",
+            "desk",
+            "suitcase",
+            "backpack"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "world": {
+          "$ref": "#/$defs/WorldPoint"
+        },
+        "velocity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorldPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "camera_tracks": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Camera Tracks",
+          "type": "object"
+        },
+        "vest": {
+          "$ref": "#/$defs/VestState"
+        },
+        "zone_states": {
+          "items": {
+            "$ref": "#/$defs/ZoneState"
+          },
+          "title": "Zone States",
+          "type": "array"
+        }
+      },
+      "required": [
+        "object_id",
+        "cls",
+        "world",
+        "camera_tracks"
+      ],
+      "title": "DashboardObject",
+      "type": "object"
+    },
+    "MapBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "x_min": {
+          "title": "X Min",
+          "type": "number"
+        },
+        "x_max": {
+          "title": "X Max",
+          "type": "number"
+        },
+        "y_min": {
+          "title": "Y Min",
+          "type": "number"
+        },
+        "y_max": {
+          "title": "Y Max",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min",
+        "x_max",
+        "y_min",
+        "y_max"
+      ],
+      "title": "MapBounds",
+      "type": "object"
+    },
+    "RiskResult": {
+      "properties": {
+        "object1_id": {
+          "title": "Object1 Id",
+          "type": "integer"
+        },
+        "object2_id": {
+          "title": "Object2 Id",
+          "type": "integer"
+        },
+        "distance_m": {
+          "title": "Distance M",
+          "type": "number"
+        },
+        "ttc_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ttc S"
+        },
+        "level": {
+          "enum": [
+            "safe",
+            "warning",
+            "danger"
+          ],
+          "title": "Level",
+          "type": "string"
+        }
+      },
+      "required": [
+        "object1_id",
+        "object2_id",
+        "distance_m",
+        "ttc_s",
+        "level"
+      ],
+      "title": "RiskResult",
+      "type": "object"
+    },
+    "RiskZone": {
+      "additionalProperties": false,
+      "properties": {
+        "zone_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Zone Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "vertices": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 64,
+          "minItems": 3,
+          "title": "Vertices",
+          "type": "array"
+        },
+        "warning_distance_m": {
+          "minimum": 0,
+          "title": "Warning Distance M",
+          "type": "number"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "zone_id",
+        "name",
+        "vertices",
+        "warning_distance_m"
+      ],
+      "title": "RiskZone",
+      "type": "object"
+    },
+    "VestState": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "default": "unknown",
+          "enum": [
+            "wearing",
+            "not_wearing",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "observed_at_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At Ms"
+        }
+      },
+      "title": "VestState",
+      "type": "object"
+    },
+    "WorldPoint": {
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "z": {
+          "title": "Z",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "title": "WorldPoint",
+      "type": "object"
+    },
+    "ZoneState": {
+      "additionalProperties": false,
+      "properties": {
+        "zone_id": {
+          "title": "Zone Id",
+          "type": "string"
+        },
+        "status": {
+          "default": "unknown",
+          "enum": [
+            "outside",
+            "warning",
+            "intrusion",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "distance_m": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance M"
+        }
+      },
+      "required": [
+        "zone_id"
+      ],
+      "title": "ZoneState",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "event": {
+      "const": "snapshot",
+      "default": "snapshot",
+      "title": "Event",
+      "type": "string"
+    },
+    "stream_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Stream Id",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "map": {
+      "$ref": "#/$defs/DashboardMap"
+    },
+    "stale_after_ms": {
+      "default": 1000,
+      "minimum": 1,
+      "title": "Stale After Ms",
+      "type": "integer"
+    },
+    "supported_classes": {
+      "items": {
+        "enum": [
+          "person",
+          "chair",
+          "cart",
+          "desk",
+          "suitcase",
+          "backpack"
+        ],
+        "type": "string"
+      },
+      "title": "Supported Classes",
+      "type": "array"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "calibration_profile": {
+      "enum": [
+        "basic",
+        "precise"
+      ],
+      "title": "Calibration Profile",
+      "type": "string"
+    },
+    "algorithm": {
+      "title": "Algorithm",
+      "type": "string"
+    },
+    "pair_id": {
+      "title": "Pair Id",
+      "type": "integer"
+    },
+    "captured_at_ms": {
+      "minimum": 0,
+      "title": "Captured At Ms",
+      "type": "integer"
+    },
+    "emitted_at_ms": {
+      "minimum": 0,
+      "title": "Emitted At Ms",
+      "type": "integer"
+    },
+    "objects": {
+      "items": {
+        "$ref": "#/$defs/DashboardObject"
+      },
+      "title": "Objects",
+      "type": "array"
+    },
+    "collision_evaluated": {
+      "title": "Collision Evaluated",
+      "type": "boolean"
+    },
+    "risks": {
+      "items": {
+        "$ref": "#/$defs/RiskResult"
+      },
+      "title": "Risks",
+      "type": "array"
+    },
+    "zones": {
+      "items": {
+        "$ref": "#/$defs/RiskZone"
+      },
+      "title": "Zones",
+      "type": "array"
+    },
+    "zone_evaluated": {
+      "default": false,
+      "title": "Zone Evaluated",
+      "type": "boolean"
+    },
+    "vest_evaluated": {
+      "default": false,
+      "title": "Vest Evaluated",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "stream_id",
+    "seq",
+    "map",
+    "session_id",
+    "calibration_profile",
+    "algorithm",
+    "pair_id",
+    "captured_at_ms",
+    "emitted_at_ms",
+    "objects",
+    "collision_evaluated",
+    "risks",
+    "zones"
+  ],
+  "title": "DashboardSnapshot",
+  "type": "object"
+}
