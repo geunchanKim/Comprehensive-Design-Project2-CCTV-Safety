@@ -19,6 +19,8 @@
   - --sessions: 목록 파일을 주면 목록에 있는 이름인지도 확인
   - 캘리브레이션은 등록하지 않는다 (해민 담당). 항상 calibration_profile=basic 으로 보낸다
   - 탐지가 카메라보다 느리면 밀린 짝은 건너뛰고 가장 최근 짝을 탐지한다 (저장은 모든 짝을 함)
+  - 전송 큐에서 오래 기다린 짝은 버린다: 카메라 수신부터 --max-age-ms(기본 800ms)가 지나면 보내지 않는다
+    (화면까지 1초 목표. 0 이면 끄기)
   - 서버가 "캘리브레이션 없음(404)", "해상도 다름(422)", "중복(409)"으로 거절하면 이유를 말하고 멈춘다
     (기록·meta.json 을 남긴 뒤 종료 코드 2로 끝낸다)
   - 보낸 것·서버 응답·실패: runs/edge/<session_id>/ (sent_detections.jsonl, responses_detections.jsonl, failed.jsonl)
@@ -31,7 +33,8 @@
       age_ms     카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지 걸린 전체 시간
       queue_ms   전송 큐에서 기다린 시간
       rtt_ms     서버에 요청을 보낸 순간부터 응답을 받기까지 (노트북 단조 시계). dry-run 이면 null
-      status     서버 상태 코드(201 등), dry-run, network-error, dropped(큐가 꽉 차 버림)
+      status     서버 상태 코드(201 등), dry-run, network-error, dropped(큐가 꽉 차 버림),
+                 stale(카메라 수신부터 --max-age-ms 가 지나 보내지 않고 버림)
   - 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다 (기록이 섞이지 않게. 이름 버전을 올리거나 폴더를 지우기)
 
 실행 (ai/ 폴더에서)
@@ -252,7 +255,8 @@ class Sender:
                     "yolo_ms": yolo_ms, "pose_ms": pose_ms,
                     "age_ms": round(time.time() * 1000 - received_ms, 1)}
             self.client.send(build_bundle(self.session_id, n, frames,
-                                          max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections", meta=meta)
+                                          max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections", meta=meta,
+                             age_ms=meta["age_ms"])
             self.stats["sent"] += 1
             self.detect_ms.append(sum(detect_ms.values()))
             self._check_server()
@@ -294,7 +298,8 @@ def make_sender(args, recorder):
     if log_dir.exists() and any(log_dir.iterdir()):
         raise SystemExit(f"이미 전송 기록이 있어요: {log_dir}\n"
                          f"  기록이 섞이지 않게 멈춰요. session_id 버전을 올리거나(예: -v7) 폴더를 지우세요")
-    client = ServerClient(args.server, log_dir, dry_run=args.dry_run, drop_when_full=True)
+    client = ServerClient(args.server, log_dir, dry_run=args.dry_run, drop_when_full=True,
+                          max_age_ms=args.max_age_ms or None)
     if not client.check_server():
         raise SystemExit(f"서버 {args.server}/health 응답 없음")
     detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz,
@@ -332,6 +337,8 @@ def main():
     send.add_argument("--conf", type=float, default=0.4)
     send.add_argument("--imgsz", type=int, default=1280)
     send.add_argument("--foot", choices=["box", "ankle"], default="ankle")
+    send.add_argument("--max-age-ms", type=float, default=800,
+                      help="카메라 수신부터 이 시간이 지난 짝은 보내지 않고 버림 (0 = 끄기)")
     args = parser.parse_args()
 
     if args.send:
@@ -340,6 +347,8 @@ def main():
         check_session_id(args.session, args.sessions)
         if args.tol_ms < 0 or args.tol_ms > 10_000:
             raise SystemExit("--tol-ms 는 0~10000ms 범위여야 해요")
+        if args.max_age_ms < 0:
+            raise SystemExit("--max-age-ms 는 0 이상이어야 해요 (0 = 끄기)")
         if not args.dry_run and not args.server:
             raise SystemExit("--server 주소를 주거나 --dry-run 으로 실행하세요")
 

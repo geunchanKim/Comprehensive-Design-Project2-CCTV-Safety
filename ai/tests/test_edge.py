@@ -13,6 +13,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - 녹화 폴더 재생: 녹화한 사진을 기록한 시각 간격대로 흘려보내는지
   - 녹화 여러 개 재생(replay_all): 녹화 폴더를 순서대로 찾는지
   - clock: 시스템 시계가 뒤로 가도 엣지 시각은 뒤로 가지 않는지
+  - 오래된 짝 버리기: max_age_ms 를 넘긴 짝은 보내지 않고 stale 로 남기는지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -446,7 +447,7 @@ def test_sender_writes_timing_per_pair(tmp_path):
         def __init__(self):
             self.sent = []
 
-        def send(self, message, path, meta=None):
+        def send(self, message, path, meta=None, age_ms=0.0):
             self.sent.append(message)
             self.on_done(meta, 201, 12.5, 0.3)
 
@@ -668,7 +669,7 @@ def test_sender_catches_rejection_that_arrives_while_closing(tmp_path):
         last_failure = None
         on_done = None
 
-        def send(self, message, path, meta=None):
+        def send(self, message, path, meta=None, age_ms=0.0):
             pass
 
         def close(self, wait=None):
@@ -706,3 +707,34 @@ def test_clock_ignores_system_time_going_back(monkeypatch):
 def test_clock_never_decreases():
     values = [clock.now_ms() for _ in range(1000)]
     assert values == sorted(values)
+
+
+# ---------- 오래된 짝 버리기 (max_age_ms) ----------
+
+def test_server_client_drops_stale_pair(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True, max_age_ms=100)
+    results = []
+    client.on_done = lambda meta, status, rtt_ms, queue_ms: results.append((meta, status))
+    client.send({"pair_id": 1}, "/detections", meta=1, age_ms=150)   # 이미 100ms를 넘김 → 버림
+    client.send({"pair_id": 2}, "/detections", meta=2, age_ms=10)    # 아직 신선함 → 보냄
+    client.close()
+    assert results == [(1, "stale"), (2, "dry-run")]
+    sent = [json.loads(line)["pair_id"] for line in (tmp_path / "sent_detections.jsonl").read_text().splitlines()]
+    assert sent == [2]
+    assert client.stats["stale"] == 1 and client.dropped_total == 1
+
+
+def test_server_client_keeps_old_pair_when_policy_off(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)               # max_age_ms 없음 = 끄기
+    client.send({"pair_id": 1}, "/detections", age_ms=10_000)
+    client.close()
+    assert client.stats["stale"] == 0
+    assert len((tmp_path / "sent_detections.jsonl").read_text().splitlines()) == 1
+
+
+def test_server_client_max_queue_age_resets_after_pop(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)
+    client._note_queue_age(42.4)
+    client._note_queue_age(7.0)
+    assert client.pop_max_queue_age_ms() == 42
+    assert client.pop_max_queue_age_ms() == 0
