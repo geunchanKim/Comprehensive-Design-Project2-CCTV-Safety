@@ -20,7 +20,19 @@
   - 캘리브레이션은 등록하지 않는다 (해민 담당). 항상 calibration_profile=basic 으로 보낸다
   - 탐지가 카메라보다 느리면 밀린 짝은 건너뛰고 가장 최근 짝을 탐지한다 (저장은 모든 짝을 함)
   - 서버가 "캘리브레이션 없음(404)", "해상도 다름(422)", "중복(409)"으로 거절하면 이유를 말하고 멈춘다
+    (기록·meta.json 을 남긴 뒤 종료 코드 2로 끝낸다)
   - 보낸 것·서버 응답·실패: runs/edge/<session_id>/ (sent_detections.jsonl, responses_detections.jsonl, failed.jsonl)
+  - 짝마다 걸린 시간: runs/edge/<session_id>/timings.jsonl (실시간 속도 측정용). 서버 응답을 받으면 한 줄을 쓴다
+      frame      짝 번호 (= 서버로 보낸 pair_id. 응답 기록과 이 번호로 연결)
+      wait_ms    짝이 만들어진 뒤 탐지를 시작하기까지 기다린 시간
+      detect_ms  카메라별 탐지 전체 시간 (= yolo_ms + pose_ms + 정리 시간)
+      yolo_ms    카메라별 물체 검출·추적 시간
+      pose_ms    카메라별 발목(포즈) 시간. 사람이 없어 건너뛰면 0 근처
+      age_ms     카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지 걸린 전체 시간
+      queue_ms   전송 큐에서 기다린 시간
+      rtt_ms     서버에 요청을 보낸 순간부터 응답을 받기까지 (노트북 단조 시계). dry-run 이면 null
+      status     서버 상태 코드(201 등), dry-run, network-error, dropped(큐가 꽉 차 버림)
+  - 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다 (기록이 섞이지 않게. 이름 버전을 올리거나 폴더를 지우기)
 
 실행 (ai/ 폴더에서)
   python edge/realtime.py --cam1 0 --cam2 ~/Downloads/CCTVTEST.mp4 --seconds 20 --show            # 녹화만
@@ -29,6 +41,11 @@
   python edge/realtime.py --cam1 tapo:192.168.0.10 --cam2 tapo:192.168.0.11 --show \\
       --send --server http://<서버>:32130 --session classroom-1014-s2-t1 --sessions sessions/classroom-1014.txt
   끝내기: --seconds 가 지나거나, 미리보기 창에서 q, 또는 Ctrl+C
+
+녹화 다시 틀어 속도 재기 (새 촬영 없이 녹화 폴더를 녹화 때 속도 그대로 재생)
+  python edge/realtime.py --cam1 runs/real/classroom/s10/t1/cam1 --cam2 runs/real/classroom/s10/t1/cam2 \\
+      --no-save --send --server http://<서버>:32130 --session classroom-1014-s10-t1-v6
+  --no-save: 같은 사진을 다시 저장하지 않음. 녹화가 끝나면 남은 짝까지 처리하고 멈춘다
 
 녹화만 해 두고 나중에 보내기
   python edge/unity_reader.py runs/real/<폴더> --server http://... --only detections --calib none --session <session_id>
@@ -157,6 +174,11 @@ class Sender:
         self.stats = {"sent": 0, "skipped": 0, "removed": 0, "empty": 0, "errors": 0}
         self.stop_reason = None
         self._latest = None
+        self.detect_ms = deque(maxlen=100)          # 최근 100짝의 탐지 시간 (상태 줄의 중간값용)
+        self.rtt_ms = deque(maxlen=100)             # 최근 100짝의 서버 왕복 시간
+        self._timings = (client.out_dir / "timings.jsonl").open("a", encoding="utf-8")
+        self._timings_lock = threading.Lock()
+        client.on_done = self._write_timing        # 서버 응답을 받으면 그 짝의 시간 기록 한 줄을 완성
         self._cond = threading.Condition()
         self._closing = False
         self._thread = threading.Thread(target=self._run, name="sender", daemon=True)
@@ -171,10 +193,27 @@ class Sender:
             self._cond.notify()
 
     def close(self, wait: float = 10):
+        """탐지를 멈추고, 전송 큐가 빌 때까지 기다린 뒤 시간 기록을 닫는다"""
         with self._cond:
             self._closing = True
             self._cond.notify()
         self._thread.join(timeout=wait)
+        self.client.close(wait=wait)
+        self._check_server()                       # 마지막 요청의 거절(404 등)이 종료 대기 중에 와도 놓치지 않게
+        with self._timings_lock:
+            self._timings.close()
+
+    def _write_timing(self, meta, status, rtt_ms, queue_ms):
+        if meta is None:
+            return
+        row = {**meta, "queue_ms": round(queue_ms, 1),
+               "rtt_ms": None if rtt_ms is None else round(rtt_ms, 1), "status": status}
+        if rtt_ms is not None:
+            self.rtt_ms.append(rtt_ms)
+        with self._timings_lock:
+            if not self._timings.closed:
+                self._timings.write(json.dumps(row) + "\n")
+                self._timings.flush()
 
     def _run(self):
         while True:
@@ -185,11 +224,21 @@ class Sender:
                     return
                 n, f1, f2 = self._latest
                 self._latest = None
+            received_ms = max(f1.recv_ms, f2.recv_ms)
+            wait_ms = time.time() * 1000 - received_ms
+            detect_ms, yolo_ms, pose_ms = {}, {}, {}
             try:
                 frames = []
                 for f in (f1, f2):
                     h, w = f.image.shape[:2]
-                    dets, removed = clean_detections(self.detectors[f.camera](f.image), w, h)
+                    detector = self.detectors[f.camera]
+                    t0 = time.perf_counter()
+                    raw = detector(f.image)
+                    detect_ms[f.camera] = round((time.perf_counter() - t0) * 1000, 1)
+                    parts = getattr(detector, "last_ms", None) or {}
+                    yolo_ms[f.camera] = parts.get("yolo")
+                    pose_ms[f.camera] = parts.get("pose")
+                    dets, removed = clean_detections(raw, w, h)
                     self.stats["removed"] += removed
                     frames.append(build_frame(f.camera, n, self.recorder.corrected_ms(f), (w, h), dets,
                                               pts_ms=f.pts_ms, recv_ms=f.recv_ms))
@@ -199,9 +248,13 @@ class Sender:
                 continue
             if not any(fr["detections"] for fr in frames):
                 self.stats["empty"] += 1
+            meta = {"frame": n, "wait_ms": round(wait_ms, 1), "detect_ms": detect_ms,
+                    "yolo_ms": yolo_ms, "pose_ms": pose_ms,
+                    "age_ms": round(time.time() * 1000 - received_ms, 1)}
             self.client.send(build_bundle(self.session_id, n, frames,
-                                          max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections")
+                                          max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections", meta=meta)
             self.stats["sent"] += 1
+            self.detect_ms.append(sum(detect_ms.values()))
             self._check_server()
 
     def _check_server(self):
@@ -212,7 +265,14 @@ class Sender:
 
     def status(self) -> str:
         s = self.stats
-        return f"전송 {s['sent']} | 밀려서 건너뜀 {s['skipped']} | 서버 {self.client.summary()}"
+        det = f"{statistics.median(self.detect_ms):.0f}ms" if self.detect_ms else "-"
+        rtt = f" | 왕복 중간값 {statistics.median(self.rtt_ms):.0f}ms" if self.rtt_ms else ""
+        return f"전송 {s['sent']} | 밀려서 건너뜀 {s['skipped']} | 탐지 중간값 {det}{rtt} | 서버 {self.client.summary()}"
+
+
+def exit_code(sender) -> int:
+    """서버가 계속 거절할 이유로 멈췄으면 2, 아니면 0. sender.close() 뒤에 불러야 마지막 응답까지 반영된다"""
+    return 2 if sender is not None and sender.stop_reason else 0
 
 
 def preview(f1, f2, width=640):
@@ -230,7 +290,11 @@ def make_sender(args, recorder):
     from detector import Detector, parse_class_conf, parse_classes   # torch는 전송할 때만 불러옴
     from server_client import ServerClient
 
-    client = ServerClient(args.server, SEND_ROOT / args.session, dry_run=args.dry_run, drop_when_full=True)
+    log_dir = SEND_ROOT / args.session
+    if log_dir.exists() and any(log_dir.iterdir()):
+        raise SystemExit(f"이미 전송 기록이 있어요: {log_dir}\n"
+                         f"  기록이 섞이지 않게 멈춰요. session_id 버전을 올리거나(예: -v7) 폴더를 지우세요")
+    client = ServerClient(args.server, log_dir, dry_run=args.dry_run, drop_when_full=True)
     if not client.check_server():
         raise SystemExit(f"서버 {args.server}/health 응답 없음")
     detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz,
@@ -245,7 +309,7 @@ def make_sender(args, recorder):
 
 def main():
     parser = argparse.ArgumentParser(description="카메라 두 대 동시 녹화·실시간 전송")
-    parser.add_argument("--cam1", required=True, help="웹캠 번호, 영상 파일, tapo:IP, rtsp://...")
+    parser.add_argument("--cam1", required=True, help="웹캠 번호, 영상 파일, tapo:IP, rtsp://..., 녹화 폴더(.../cam1)")
     parser.add_argument("--cam2", required=True)
     parser.add_argument("--name", default=None,
                         help="녹화 폴더 이름 그대로 (예: t1). 안 주면 session_id(없으면 rec)-시각. 이미 있으면 멈춤")
@@ -332,14 +396,13 @@ def main():
                 rec.add(f)
         rec.close()
         if sender:
-            sender.close()
-            sender.client.close(wait=10)
+            sender.close()                     # 탐지 멈춤 → 전송 큐 비우기 → 시간 기록 닫기
         if args.show:
             cv2.destroyAllWindows()
 
     elapsed = time.time() - started
     meta = {
-        "name": name, "started": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
+        "name": out_dir.name, "started": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
         "seconds": round(elapsed, 1), "tol_ms": args.tol_ms, "cam2_offset_ms": args.cam2_offset_ms,
         "saved_images": not args.no_save,
         "pairs": rec.pairs, "pair_fps": round(rec.pairs / max(elapsed, 1e-9), 2),
@@ -367,6 +430,9 @@ def main():
             print(f"  멈춘 이유: {sender.stop_reason}")
         print(f"  전송 기록: {sender.client.out_dir}")
     print(f"저장 위치: {out_dir}")
+    code = exit_code(sender)                   # 기록은 다 남긴 뒤, 실패로 끝났음을 종료 코드로 알린다 (replay_all 이 멈추게)
+    if code:
+        raise SystemExit(code)
 
 
 if __name__ == "__main__":

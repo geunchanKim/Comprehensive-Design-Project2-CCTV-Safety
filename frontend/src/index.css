@@ -1,0 +1,61 @@
+/* 디자인 토큰 (시안 캔버스의 색 토큰과 같음). 관제 화면이라 다크 테마 고정 */
+:root {
+  --bg: #0d1117;
+  --bg-deep: #0a0e13;
+  --panel: #151a21;
+  --panel-2: #1b222b;
+  --plan: #10151b;
+  --line: #283039;
+  --line-strong: #3a4552;
+  --text: #e7ecf2;
+  --muted: #9ba6b4;
+  --subtle: #c9d2dd;
+  --warning: #f5b83d;
+  --danger: #ff5a55;
+  --danger-text: #ff7a75;
+  --ok: #3fb68b;
+  --accent: #6aa8ff;
+
+  --font-sans: 'IBM Plex Sans KR', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--text);
+}
+
+h1,
+h2 {
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+button,
+select,
+input {
+  font: inherit;
+}

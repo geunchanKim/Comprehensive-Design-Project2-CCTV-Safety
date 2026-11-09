@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -88,7 +89,7 @@ def update_kalman(state: KalmanState, position, timestamp_ms: int,
 # C 바닥 좌표 추적: 사람 번호를 카메라 트랙 번호가 아니라 바닥 위 움직임으로 이어 붙인다
 #   예측 위치에서 0.8m 안에 있는 사람만 같은 사람 후보, 20묶음(약 2초) 동안 안 보이면 지운다
 #   (Unity s2·s4 오프라인 시뮬로 정함, 2026-10-13)
-FLOOR_TRACK_GATE_M = 0.8
+FLOOR_TRACK_GATE_M = float(os.getenv("FLOOR_TRACK_GATE_M", "0.8"))
 FLOOR_TRACK_MAX_MISSED = 20
 
 

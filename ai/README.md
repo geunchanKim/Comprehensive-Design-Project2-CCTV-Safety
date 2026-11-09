@@ -1,56 +1,84 @@
 # ai/
 
-엣지(탐지·전송)와 성능 측정 코드. 모든 명령은 `ai/` 폴더에서 실행한다.
+엣지(탐지·추적·전송), 캘리브레이션, 성능 평가 코드. 모든 명령은 `ai/` 폴더에서 실행한다.
 
 ## 폴더 구조
 
 ```
 ai/
 ├── edge/                    실제 파이프라인
-│   ├── detector.py            YOLO v2 탐지 + 카메라별 ByteTrack 추적
-│   ├── unity_reader.py        Unity 폴더 읽기 → 캘리브레이션 등록 → 탐지·정답 서버 전송
-│   ├── unity_calibration.py   cameras.json → K, rvec, tvec 계산·검증
-│   └── server_client.py       서버 전송 (실패 기록, 서버 응답 저장)
-├── eval/                    성능 측정
-│   └── eval_position.py       서버 3D 좌표 vs 정답 좌표 오차
+│   ├── realtime.py            카메라 2대 수신 → 프레임 짝짓기(수신 시각 50ms) → 녹화·탐지·서버 전송
+│   ├── detector.py            YOLO11n(COCO) 탐지 + 카메라별 ByteTrack 추적
+│   ├── feet.py                발 위치: YOLO11n-pose 두 발목 중점 (신뢰도 낮으면 박스 하단)
+│   ├── bundle.py              서버로 보낼 탐지 묶음 만들기
+│   ├── camera_source.py       RTSP·웹캠·영상 입력
+│   ├── unity_reader.py        Unity·녹화 폴더 읽기 → 탐지 → 서버 전송
+│   ├── unity_calibration.py   Unity cameras.json → K, rvec, tvec
+│   └── server_client.py       서버 전송 (실패 기록, 응답 저장)
+├── calibration/             카메라 캘리브레이션
+│   ├── capture_charuco.py, calibrate_camera.py   ChArUco 렌즈 캘리브레이션
+│   ├── calibrate_grid.py, build_calibration.py   장소 캘리브레이션
+│   ├── register_calibration.py, recompute_sessions.py  서버 등록·조건별 재계산
+│   ├── results/               cam1·cam2 렌즈 값 (ChArUco)
+│   └── output/                장소별 캘리브레이션. 논문 최종은 calib-classroom-1014-2x2b.json
+├── eval/                    성능 평가
+│   ├── run_experiment.py      pack을 서버에 다시 보내 조건별 비교표 만들기
+│   ├── real_pack.py           실측 정지 프레임 pack 만들기
+│   ├── eval_position.py       추정 위치 vs 정답 오차
+│   ├── eval_detection.py      탐지 성능
+│   └── packs/                 저장한 탐지 묶음 (real-* = 실측 15개, s1~s4 = Unity)
+├── scripts/, train.py, configs/   자체 학습 데이터·모델 (최종 실험은 COCO 원본 사용)
+├── tests/                   단위 테스트
 ├── tools/                   테스트 보조 도구
-│   └── make_fake_unity_run.py 영상·웹캠으로 Unity 형식 가짜 폴더 만들기
-└── runs/                    (git 제외) 데이터와 결과
-    ├── unity/<장면>/          입력: Unity 출력 폴더 (cam1/, cam2/, frames.jsonl, cameras.json)
-    ├── edge/<장면>-runN/      결과: 전송 기록, 서버 응답, 오차표
-    └── train_v1/, train_v2/   YOLO 학습 결과
+├── datasets/                (git 제외) 자체 학습 데이터
+└── runs/                    (git 제외) 녹화·결과. 구성은 runs/README.md
 ```
 
-## 자주 쓰는 명령
+## 논문 실험 다시 돌리기 (실측 2×2)
 
 ```bash
-# 캘리브레이션 계산 + 검증
-python edge/unity_calibration.py runs/unity/unity-classroom-02 --check
+# 1. 녹화 → 탐지 (YOLO, 오래 걸림)
+python edge/unity_reader.py runs/real/classroom/s1/t1 --dry-run
 
-# 서버로 전송 (run 번호는 자동 증가)
-python edge/unity_reader.py runs/unity/unity-classroom-02 --server http://121.182.60.2:32130
+# 2. 탐지 + 정답 + 캘리브레이션 → pack
+python eval/real_pack.py --edge runs/edge/classroom-1014-s1-t1-v5 \
+    --gt runs/gt/classroom-1014-v2/diy-1014-s1-t1/frames.jsonl \
+    --calib calibration/output/calib-classroom-1014-2x2b.json --name real-s1-t1 --force
 
-# 서버 없이 시험
-python edge/unity_reader.py runs/unity/unity-classroom-02 --dry-run --save-every 1
+# 3. 네 조건 채점 (기준 방법, 렌즈 캘리브레이션, 매칭 알고리즘, 두 방법 결합)
+python eval/run_experiment.py run --server http://<서버>:32130 --packs real-s1-t1 --label real-2x2-v4
 
-# 서버 3D 좌표 오차 측정
-python eval/eval_position.py runs/edge/unity-classroom-02-run3
+# 4. 조건 간 통계 검정 (논문 Ⅳ장의 Wilcoxon·TOST p값)
+python eval/compare_conditions.py runs/experiments/real-2x2-v4
+
+# 5. 검출 예시 그림 (팩 이름, 프레임 쌍 번호 → runs/figures/)
+python eval/draw_detections.py real-s10-t1 604
 ```
 
-## 결과 폴더 (`runs/edge/<장면>-runN/`)
+## 실시간 속도 재기
 
-| 파일 | 내용 |
-|---|---|
-| `sent_calibration.jsonl` | 등록한 캘리브레이션 |
-| `sent_detections.jsonl` | 보낸 탐지 결과 |
-| `sent_ground-truth.jsonl` | 보낸 정답 좌표 |
-| `responses_detections.jsonl` | 서버 응답 (매칭, 3D 좌표) |
-| `failed.jsonl` | 실패한 요청 (상태 코드 + 응답) |
-| `position_errors.csv` | `eval_position.py` 결과 |
-| `vis/` | 박스를 그린 이미지 (`--save-every`) |
+녹화를 실제 속도로 다시 틀거나 카메라를 켠 채로 탐지·전송하고, 짝마다 걸린 시간을 표로 본다.
+
+```bash
+# 1-a. 10/14 녹화 15개를 차례로 재생 (서버 없이 엣지만 보려면 --dry-run)
+python edge/replay_all.py --version v6 --server http://<서버>:32130 \
+    --sessions calibration/sessions/classroom-1014-v6.txt
+
+# 1-b. 실제 카메라 (짝마다 시간이 runs/edge/<session_id>/timings.jsonl 에 쌓임)
+python edge/realtime.py --cam1 tapo:<cam1 IP> --cam2 tapo:<cam2 IP> --seconds 600 --show \
+    --send --server http://<서버>:32130 --session <session_id>
+
+# 2. 속도 표 (중간값 / 90% 값 / 최댓값, 앞 5짝은 모델 준비라 뺌)
+python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> ...]
+```
+
+- 기록 항목: 대기, 검출(`yolo_ms`), 포즈(`pose_ms`), 탐지 전체(`detect_ms`), 엣지 전체(`age_ms`), 서버 왕복(`rtt_ms`). 뜻은 `edge/realtime.py` 맨 위 설명
+- 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다. 다시 잴 때는 버전을 올린다 (예: v7)
+- "엣지 전체"(`age_ms`)는 프레임을 받은 뒤 전송 큐에 넣기까지, "서버 왕복"(`rtt_ms`)은 요청을 보낸 뒤 응답을 받기까지다. 둘 다 카메라 촬영부터 화면 표시까지의 전체 지연이 아니다
+- 상태·실패 건수는 예열 짝까지 모두 세고, 시간 통계만 앞 5짝을 뺀다
 
 ## 규칙
 
-- 입력은 `runs/unity/`, 결과는 `runs/edge/`에만 둔다
-- 같은 장면을 다시 보내면 `-runN`이 늘어난다. 서버는 같은 session_id를 다시 받지 않는다 (409)
+- 녹화는 `runs/real/`, 탐지 결과는 `runs/edge/`, 실험 결과는 `runs/experiments/`에 둔다
+- 서버는 같은 session_id를 다시 받지 않는다 (409)
 - 메시지 양식: `docs/specs/message-spec.md`

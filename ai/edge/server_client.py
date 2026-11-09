@@ -14,6 +14,13 @@ close()는 기본으로 큐가 빌 때까지 기다린다.
 - 보낸 메시지: sent_<경로>.jsonl  (예: sent_detections.jsonl, sent_ground-truth.jsonl)
 - /detections 서버 응답(매칭 결과, 3D 좌표): responses_detections.jsonl
 - 실패한 메시지: failed.jsonl — HTTP 상태 코드와 서버 응답 본문을 같이 저장 (BE 공유용)
+
+전송 결과 알림 (on_done)
+- send(message, path, meta=...) 로 보낸 메시지가 끝나면 on_done(meta, 상태, rtt_ms, queue_ms) 를 부른다
+    상태      서버 상태 코드(201 등), "network-error", "dry-run", "dropped"(큐가 꽉 차 버림)
+    rtt_ms    요청을 보낸 순간부터 응답을 받기까지 (단조 시계). dry-run·버림은 None
+    queue_ms  큐에 넣은 순간부터 실제로 보내기 시작하기까지
+- realtime.py 는 이걸로 timings.jsonl 한 줄을 완성한다
 """
 
 import json
@@ -41,6 +48,7 @@ class ServerClient:
         self.stats = {"sent": 0, "failed": 0, "dropped": 0}
         self.status_counts: Counter = Counter()      # (경로, 상태 코드) → 개수
         self.last_failure = None                     # (경로, 상태 코드, 응답) 가장 최근 실패. 실시간에서 멈출지 판단용
+        self.on_done = None                          # on_done(meta, 상태, rtt_ms, queue_ms). 위 설명 참고
 
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._session = requests.Session()
@@ -82,9 +90,10 @@ class ServerClient:
         print(f"[전송 실패] PUT {path} → {status} {str(text)[:200]}")
         return False
 
-    def send(self, message: dict, path: str = "/detections"):
-        """큐에 넣는다. 꽉 차면 기본은 자리가 날 때까지 기다리고, drop_when_full이면 가장 오래된 것을 버린다."""
-        item = (path, message)
+    def send(self, message: dict, path: str = "/detections", meta=None):
+        """큐에 넣는다. 꽉 차면 기본은 자리가 날 때까지 기다리고, drop_when_full이면 가장 오래된 것을 버린다.
+        meta 는 서버로 보내지 않고, 끝났을 때 on_done 에 그대로 돌려준다"""
+        item = (path, message, meta, time.perf_counter())
         if not self.drop_when_full:
             self._queue.put(item)
             return
@@ -92,12 +101,20 @@ class ServerClient:
             self._queue.put_nowait(item)
         except queue.Full:
             try:
-                self._queue.get_nowait()
+                old = self._queue.get_nowait()
                 self._queue.task_done()
                 self.stats["dropped"] += 1
+                self._done(old[2], "dropped", None, (time.perf_counter() - old[3]) * 1000)
             except queue.Empty:
                 pass
             self._queue.put_nowait(item)
+
+    def _done(self, meta, status, rtt_ms, queue_ms):
+        if self.on_done is not None:
+            try:
+                self.on_done(meta, status, rtt_ms, queue_ms)
+            except Exception as e:                 # 기록 실패로 전송 스레드가 죽지 않게
+                print(f"[기록 오류] {e}")
 
     def close(self, wait: float | None = None):
         """남은 메시지를 다 보낼 때까지 기다린다 (wait초를 주면 그만큼만). 못 보낸 게 있으면 경고"""
@@ -123,19 +140,25 @@ class ServerClient:
 
     def _worker(self):
         while True:
-            path, message = self._queue.get()
+            path, message, meta, queued_at = self._queue.get()
+            queue_ms = (time.perf_counter() - queued_at) * 1000
+            rtt_ms, status = None, None
             try:
                 if self.dry_run:
+                    status = "dry-run"
                     self._append(self._sent_path(path), message)
                     self.stats["sent"] += 1
                     self.status_counts[(path, "dry-run")] += 1
                     continue
+                t0 = time.perf_counter()
                 try:
                     r = self._session.post(f"{self.base_url}{path}", json=message, timeout=self.timeout)
                 except requests.RequestException as e:
                     status, body = "network-error", str(e)
                 else:
                     status, body = r.status_code, r.text
+                rtt_ms = (time.perf_counter() - t0) * 1000
+                if status != "network-error":
                     if r.ok:
                         self._append(self._sent_path(path), message)
                         if path == "/detections":   # 서버가 계산한 매칭·3D 좌표 (오차 측정용)
@@ -158,4 +181,5 @@ class ServerClient:
                 if self.status_counts[(path, status)] in (1, 10) or self.status_counts[(path, status)] % 100 == 0:
                     print(f"[전송 실패] {path} → {status} {str(body)[:200]}")
             finally:
+                self._done(meta, status, rtt_ms, queue_ms)   # task_done 전에 불러야 close() 뒤에 기록이 빠지지 않는다
                 self._queue.task_done()

@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import re
+import logging
 from itertools import combinations
 from typing import get_args
 
@@ -15,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 try:
+    from .profiling import StageTimer
     from .database import get_db
     from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                            in_front_of_both, match_by_cost, match_class, position_on_plane,
@@ -32,6 +34,7 @@ try:
                            update_kalman, update_pair_hysteresis)
     from .risk import WARNING_RELEASE_MARGIN_M, calculate_pair_risk, hysteresis_level
 except ImportError:  # Docker runs this directory as the import root.
+    from profiling import StageTimer
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
                           in_front_of_both, match_by_cost, match_class, position_on_plane,
@@ -55,9 +58,9 @@ MAX_EPIPOLAR_ERROR_PX = float(os.getenv("MAX_EPIPOLAR_ERROR_PX", "50"))
 BOX_FOOT_Z_MIN = float(os.getenv("BOX_FOOT_Z_MIN", "-0.35"))
 BOX_FOOT_Z_MAX = float(os.getenv("BOX_FOOT_Z_MAX", "0.2"))
 ANKLE_FOOT_Z_MIN = float(os.getenv("ANKLE_FOOT_Z_MIN", "-0.1"))
-ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.4"))
+ANKLE_FOOT_Z_MAX = float(os.getenv("ANKLE_FOOT_Z_MAX", "0.15"))
 BBOX_POSITION_METHOD = os.getenv("BBOX_POSITION_METHOD", "triangulate")
-MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "2.0"))
+MAX_GROUND_DISTANCE_M = float(os.getenv("MAX_GROUND_DISTANCE_M", "1.5"))
 ENABLE_KALMAN_FILTER = os.getenv("ENABLE_KALMAN_FILTER", "true").lower() in {"1", "true", "yes"}
 ENABLE_TRACK_PAIR_HOLD = os.getenv("ENABLE_TRACK_PAIR_HOLD", "true").lower() in {"1", "true", "yes"}
 TRACK_PAIR_CONFIRM_FRAMES = int(os.getenv("TRACK_PAIR_CONFIRM_FRAMES", "3"))
@@ -145,8 +148,11 @@ ALGORITHM_RE = re.compile(r"^(baseline|improved|f-[a-z]{1,12})$")
 FEATURES_NEEDING_FLOOR = ("d", "e")   # C의 트랙(예측 위치·속도)을 써야 동작
 
 # D 한 카메라 보완: 발목은 이 높이 평면, 박스 발은 바닥(0) 평면과 만나는 점을 위치로 쓴다.
+#   발목 높이 0.08m: 실측 2x2 데이터(사람 107명)에서 0.05~0.15m를 바꿔 보며 오차가 가장 작았던 값
+#   (삼각측량한 발목 높이 중앙값 0.073m와도 일치, 2026-10-19). 좌표 평면 매칭도 같은 높이를 쓴다
 #   한 카메라 위치는 덜 정확하니 칼만 측정 잡음을 크게 준다 (Unity s2·s4 오프라인 시뮬로 정함, 2026-10-13)
-SINGLE_CAMERA_ANKLE_Z_M = 0.15
+SINGLE_CAMERA_ANKLE_Z_M = float(os.getenv("SINGLE_CAMERA_ANKLE_Z_M", "0.08"))
+GROUND_ANKLE_Z_M = float(os.getenv("GROUND_ANKLE_Z_M", "0.08"))
 SINGLE_CAMERA_MEASUREMENT_NOISE = 0.05
 
 
@@ -208,6 +214,7 @@ def _experiment_settings(algorithm: Algorithm):
         "floor_track_gate_m": FLOOR_TRACK_GATE_M,
         "floor_track_max_missed": FLOOR_TRACK_MAX_MISSED,
         "single_camera_ankle_z_m": SINGLE_CAMERA_ANKLE_Z_M,
+        "ground_ankle_z_m": GROUND_ANKLE_Z_M,
         "single_camera_measurement_noise": SINGLE_CAMERA_MEASUREMENT_NOISE,
         "warning_release_margin_m": WARNING_RELEASE_MARGIN_M,
         "bbox_position_method": BBOX_POSITION_METHOD,
@@ -337,19 +344,23 @@ def solve_precise_calibration(camera_id: str, body: PnPCalibrationIn,
 
 def _object_id(db: Session, session_id, profile, algorithm,
                camera1, track1, camera2, track2, cls: str,
-               visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int]) -> int:
-    link = db.scalar(
-        select(TrackLink).where(
-            TrackLink.session_id == session_id,
-            TrackLink.calibration_profile == profile,
-            TrackLink.algorithm == algorithm,
-            TrackLink.camera1_id == camera1,
-            TrackLink.camera1_track_id == track1,
-            TrackLink.camera2_id == camera2,
-            TrackLink.camera2_track_id == track2,
-            TrackLink.cls == cls,
+               visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int],
+               exact_links=None) -> int:
+    if exact_links is not None:
+        link = exact_links().get((track1, track2, cls))
+    else:
+        link = db.scalar(
+            select(TrackLink).where(
+                TrackLink.session_id == session_id,
+                TrackLink.calibration_profile == profile,
+                TrackLink.algorithm == algorithm,
+                TrackLink.camera1_id == camera1,
+                TrackLink.camera1_track_id == track1,
+                TrackLink.camera2_id == camera2,
+                TrackLink.camera2_track_id == track2,
+                TrackLink.cls == cls,
+            )
         )
-    )
     if link and link.object_id not in used_object_ids:
         return link.object_id
 
@@ -545,9 +556,39 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
 
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+    # Flush can fail before commit; apply the same rollback/409 contract.
+    try:
+        return _store_detections(body, db, algorithm)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+
+
+def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+    timer = StageTimer()
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
     used_object_ids: set[int] = set()
+    # Request-local, lazy batch: no cache survives a request or configuration edit.
+    # The call site caps IN parameters and keeps single-object requests unchanged.
+    exact_link_cache = None
+
+    def exact_links():
+        nonlocal exact_link_cache
+        if exact_link_cache is None:
+            rows = db.scalars(select(TrackLink).where(
+                TrackLink.session_id == body.session_id,
+                TrackLink.calibration_profile == body.calibration_profile,
+                TrackLink.algorithm == algorithm,
+                TrackLink.camera1_id == frames[0].camera_id,
+                TrackLink.camera2_id == frames[1].camera_id,
+                TrackLink.camera1_track_id.in_(visible_tracks[0]),
+                TrackLink.camera2_track_id.in_(visible_tracks[1]),
+            )).all()
+            exact_link_cache = {(row.camera1_track_id, row.camera2_track_id, row.cls): row
+                                for row in rows}
+        return exact_link_cache
+
     profile = body.calibration_profile
     max_sync_delta_ms = body.max_sync_delta_ms if body.max_sync_delta_ms is not None else MAX_SYNC_DELTA_MS
     settings = {**_experiment_settings(algorithm),
@@ -588,6 +629,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         if tuple(frame.image_size) != (camera.image_width, camera.image_height):
             raise HTTPException(422, f"image_size does not match calibration for {frame.camera_id}")
 
+    timer.mark("validation_ms")
     calibrations = [_calibration(camera) for camera in cameras]
     essential = fundamental_matrix(*calibrations)
     pixel_scale = float(np.mean([c.K[0, 0] for c in calibrations] + [c.K[1, 1] for c in calibrations]))
@@ -597,6 +639,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
     db.add(bundle)
     db.flush()
 
+    timer.mark("calibration_bundle_ms")
     records = {}
     normalized = {}
     for frame, calibration in zip(frames, calibrations):
@@ -616,6 +659,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             records[frame.camera_id].append((item, record, foot, foot_source))
             normalized[frame.camera_id].append(undistort(foot, calibration))
 
+    timer.mark("ingest_undistort_ms")
     matches, used = [], [set(), set()]
     floor_entries = []   # C 바닥 좌표 추적에 넘길 사람 위치들
 
@@ -679,7 +723,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         def ground_cost(local1, local2):
             key = (local1, local2)
             point1, point2 = points_for_pair(local1, local2)
-            plane_z = 0.1 if source(0, local1) == source(1, local2) == "ankle" else 0.0
+            plane_z = GROUND_ANKLE_Z_M if source(0, local1) == source(1, local2) == "ankle" else 0.0
             positions = [position_on_plane(point, calibration, plane_z)
                          for point, calibration in zip((point1, point2), calibrations)]
             distance = float(np.linalg.norm(positions[0][:2] - positions[1][:2]))
@@ -844,7 +888,9 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             object_id = _object_id(db, body.session_id, profile, algorithm,
                                    frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class,
-                                   visible_tracks, used_object_ids)
+                                   visible_tracks, used_object_ids,
+                                   exact_links if (min(map(len, visible_tracks)) > 1
+                                                   and sum(map(len, visible_tracks)) <= 500) else None)
             used_object_ids.add(object_id)
             raw_world = np.asarray(world, dtype=float)
             timestamp_ms = max(frame.ts for frame in frames)
@@ -898,6 +944,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             match_stage(object_class, remaining, "box")
         else:
             match_stage(object_class, class_indexes)
+    timer.mark("matching_position_tracking_ms")
     if settings["floor_tracking"]:
         singles = []
         if settings["single_camera_fallback"]:   # 짝이 안 된 사람 탐지 (D가 C 트랙에 이어 붙일 후보)
@@ -910,6 +957,7 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         if floor_entries or singles:
             matches.extend(_apply_floor_tracking(db, body.session_id, profile, algorithm, settings,
                                                  floor_entries, singles, frames, calibrations))
+    timer.mark("floor_tracking_ms")
     risks = []
     hysteresis = settings["warning_hysteresis"]
     if ENABLE_RISK_ANALYSIS or hysteresis:
@@ -937,19 +985,27 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             risks.append(risk)
             db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
                              captured_at_ms=max(frame.ts for frame in frames), **risk))
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+    timer.mark("risk_ms")
+    # Preserve the ID before commit expires ORM attributes.
+    bundle_id = bundle.id
+    db.commit()
+    timer.mark("commit_ms")
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
-    return {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
+    timer.mark("response_prepare_ms")
+    timings = timer.result()
+    logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
+        "session_id": body.session_id, "pair_id": body.pair_id,
+        "calibration_profile": profile, "algorithm": algorithm,
+        "timings_ms": timings, "input_detections": sum(len(f.detections) for f in frames),
+        "match_count": len(matches), "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
+    }, allow_nan=False))
+    return {"bundle_id": bundle_id, "session_id": body.session_id, "pair_id": body.pair_id,
             "calibration_profile": profile, "sync_delta_ms": sync_delta,
             "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
             "sync_time_basis": sync_time_basis, "max_sync_delta_ms": max_sync_delta_ms,
             "matches": matches, "unmatched": unmatched,
-            "risks": risks, "settings": settings}
+            "risks": risks, "settings": settings, "timings_ms": timings}
 
 
 @router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
