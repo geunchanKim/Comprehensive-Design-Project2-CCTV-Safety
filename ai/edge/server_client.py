@@ -16,6 +16,11 @@ close()는 기본으로 큐가 빌 때까지 기다린다.
 - max_age_ms=None 이면 끄기 (기본). 버린 짝은 sent·failed 어디에도 쓰지 않는다
 - heartbeat 용으로 버린 수(dropped_total)와 큐에서 가장 오래 기다린 시간(pop_max_queue_age_ms)을 준다
 
+큐를 거치지 않는 POST (post_now)
+- heartbeat 처럼 큐가 밀려도 제때 가야 하는 요청. 탐지 전송과 다른 HTTP 세션을 써서 서로 기다리지 않는다
+- 실패해도 last_failure 에 넣지 않는다 (heartbeat 실패로 실시간 전송을 멈추지 않게)
+- dry-run 이면 sent_<경로>.jsonl 에 저장만 한다 (예: sent_edge_heartbeat.jsonl)
+
 - dry_run: 서버 없이 파일에 저장만 한다 (서버 준비 전 테스트용)
 - 보낸 메시지: sent_<경로>.jsonl  (예: sent_detections.jsonl, sent_ground-truth.jsonl)
 - /detections 서버 응답(매칭 결과, 3D 좌표): responses_detections.jsonl
@@ -62,6 +67,7 @@ class ServerClient:
         self._age_lock = threading.Lock()
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._session = requests.Session()
+        self._now_session = requests.Session()       # post_now 전용 (탐지 전송과 연결을 나눠 서로 막지 않게)
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
@@ -99,6 +105,25 @@ class ServerClient:
         self._append(self.failed_path, {"path": path, "status": status, "response": text, "message": body})
         print(f"[전송 실패] PUT {path} → {status} {str(text)[:200]}")
         return False
+
+    def post_now(self, path: str, body: dict, timeout: float = 0.5) -> bool:
+        """큐를 거치지 않고 바로 POST 한다. 성공(2xx·dry-run)이면 True. 위 설명 참고"""
+        if self.dry_run:
+            self._append(self._sent_path(path), body)
+            self.status_counts[(path, "dry-run")] += 1
+            return True
+        try:
+            r = self._now_session.post(f"{self.base_url}{path}", json=body, timeout=timeout)
+            status = r.status_code
+        except requests.RequestException:
+            status = "network-error"
+        self.status_counts[(path, status)] += 1
+        n = self.status_counts[(path, status)]
+        if not (isinstance(status, int) and 200 <= status < 300):
+            if n in (1, 10) or n % 100 == 0:
+                print(f"[전송 실패] POST {path} → {status} ({n}번째)")
+            return False
+        return True
 
     def send(self, message: dict, path: str = "/detections", meta=None, age_ms: float = 0.0):
         """큐에 넣는다. 꽉 차면 기본은 자리가 날 때까지 기다리고, drop_when_full이면 가장 오래된 것을 버린다.

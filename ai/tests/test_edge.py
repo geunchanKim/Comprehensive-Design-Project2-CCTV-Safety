@@ -14,6 +14,7 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - 녹화 여러 개 재생(replay_all): 녹화 폴더를 순서대로 찾는지
   - clock: 시스템 시계가 뒤로 가도 엣지 시각은 뒤로 가지 않는지
   - 오래된 짝 버리기: max_age_ms 를 넘긴 짝은 보내지 않고 stale 로 남기는지
+  - heartbeat: 카메라마다 계약 필드를 순서대로 보내는지, 첫 프레임 전 last_recv_ms 가 null 인지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
@@ -738,3 +739,71 @@ def test_server_client_max_queue_age_resets_after_pop(tmp_path):
     client._note_queue_age(7.0)
     assert client.pop_max_queue_age_ms() == 42
     assert client.pop_max_queue_age_ms() == 0
+
+
+# ---------- heartbeat ----------
+
+class FakeHeartbeatClient:                                  # ServerClient 대신: 보낸 것만 모아 둔다
+    def __init__(self):
+        self.posts = []
+        self.dropped_total = 3
+        self.pops = 0
+
+    def pop_max_queue_age_ms(self):
+        self.pops += 1
+        return 250
+
+    def post_now(self, path, body, timeout=0.5):
+        self.posts.append((path, body))
+        return True
+
+
+def test_heartbeat_sends_contract_fields_per_camera():
+    from heartbeat import Heartbeat
+    times = iter(range(1000, 2000, 10))
+    client = FakeHeartbeatClient()
+    hb = Heartbeat("classroom-1014-s1-t1", {"cam1": "rtsp", "cam2": "folder"}, client, now_ms=lambda: next(times))
+    hb.note_frame("cam1")                                    # cam1 만 프레임을 받음 (시각 1000)
+    hb.beat()
+    assert [p for p, _ in client.posts] == ["/edge/heartbeat", "/edge/heartbeat"]
+    cam1, cam2 = (b for _, b in client.posts)
+    assert set(cam1) == {"session_id", "camera_id", "edge_run_id", "source", "last_recv_ms", "sent_at_ms",
+                         "dropped_count", "max_queue_age_ms"}
+    assert cam1["camera_id"] == "cam1" and cam2["camera_id"] == "cam2"     # 카메라 순서대로
+    assert cam1["last_recv_ms"] == 1000 and cam1["sent_at_ms"] > 1000
+    assert cam2["last_recv_ms"] is None                                    # 첫 프레임 전
+    assert cam1["source"] == "rtsp" and cam2["source"] == "folder"
+    assert cam1["edge_run_id"] == cam2["edge_run_id"]
+    assert cam1["dropped_count"] == 3
+    assert cam1["max_queue_age_ms"] == cam2["max_queue_age_ms"] == 250
+    assert client.pops == 1                                                # 한 바퀴에 한 번만 꺼냄
+    assert hb.stats == {"sent": 2, "failed": 0}
+
+
+def test_heartbeat_new_run_id_each_start():
+    from heartbeat import Heartbeat
+    a = Heartbeat("s", {"cam1": "rtsp"}, FakeHeartbeatClient())
+    b = Heartbeat("s", {"cam1": "rtsp"}, FakeHeartbeatClient())
+    assert a.edge_run_id != b.edge_run_id
+
+
+def test_heartbeat_thread_beats_until_stopped():
+    import time
+    from heartbeat import Heartbeat
+    client = FakeHeartbeatClient()
+    hb = Heartbeat("s", {"cam1": "rtsp", "cam2": "rtsp"}, client, interval_s=0.05)
+    hb.start()
+    time.sleep(0.18)
+    hb.stop()
+    count = len(client.posts)
+    assert count >= 4                                        # 0.05초마다 두 카메라
+    time.sleep(0.1)
+    assert len(client.posts) == count                        # 멈춘 뒤에는 더 보내지 않음
+
+
+def test_server_client_post_now_dry_run_writes_file(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)
+    assert client.post_now("/edge/heartbeat", {"camera_id": "cam1"})
+    client.close()
+    lines = (tmp_path / "sent_edge_heartbeat.jsonl").read_text().splitlines()
+    assert [json.loads(line)["camera_id"] for line in lines] == ["cam1"]

@@ -21,6 +21,9 @@
   - 탐지가 카메라보다 느리면 밀린 짝은 건너뛰고 가장 최근 짝을 탐지한다 (저장은 모든 짝을 함)
   - 전송 큐에서 오래 기다린 짝은 버린다: 카메라 수신부터 --max-age-ms(기본 800ms)가 지나면 보내지 않는다
     (화면까지 1초 목표. 0 이면 끄기)
+  - 탐지 결과와 따로 카메라마다 1초에 한 번 heartbeat 를 보낸다 (heartbeat.py, POST /edge/heartbeat)
+    heartbeat 를 아직 받지 않는 서버에는 --no-heartbeat. 실패해도 탐지·전송은 멈추지 않는다
+    dry-run 이면 runs/edge/<session_id>/sent_edge_heartbeat.jsonl 에 저장
   - 서버가 "캘리브레이션 없음(404)", "해상도 다름(422)", "중복(409)"으로 거절하면 이유를 말하고 멈춘다
     (기록·meta.json 을 남긴 뒤 종료 코드 2로 끝낸다)
   - 보낸 것·서버 응답·실패: runs/edge/<session_id>/ (sent_detections.jsonl, responses_detections.jsonl, failed.jsonl)
@@ -339,6 +342,8 @@ def main():
     send.add_argument("--foot", choices=["box", "ankle"], default="ankle")
     send.add_argument("--max-age-ms", type=float, default=800,
                       help="카메라 수신부터 이 시간이 지난 짝은 보내지 않고 버림 (0 = 끄기)")
+    send.add_argument("--no-heartbeat", action="store_true",
+                      help="heartbeat 를 보내지 않음 (서버에 /edge/heartbeat 가 아직 없을 때)")
     args = parser.parse_args()
 
     if args.send:
@@ -364,8 +369,14 @@ def main():
         rec.on_pair = sender.offer
 
     cams = {"cam1": CameraSource(args.cam1, name="cam1"), "cam2": CameraSource(args.cam2, name="cam2")}
+    heartbeat = None
+    if sender and not args.no_heartbeat:
+        from heartbeat import Heartbeat
+        heartbeat = Heartbeat(args.session, {name: c.kind for name, c in cams.items()}, sender.client)
     for cam in cams.values():
         cam.start()
+    if heartbeat:
+        heartbeat.start()
     print(f"저장 위치: {out_dir}\n시작 (끝내기: q 또는 Ctrl+C)")
 
     started = time.time()
@@ -381,6 +392,8 @@ def main():
             for cam in cams.values():
                 f = cam.get(timeout=0.005)
                 if f is not None:
+                    if heartbeat:
+                        heartbeat.note_frame(f.camera)
                     latest[f.camera] = f
                     rec.add(f)
             if args.show and len(latest) == 2:
@@ -406,6 +419,8 @@ def main():
         rec.close()
         if sender:
             sender.close()                     # 탐지 멈춤 → 전송 큐 비우기 → 시간 기록 닫기
+        if heartbeat:
+            heartbeat.stop()                   # 전송이 다 끝난 뒤 멈춤 (마지막 요청까지 기다림)
         if args.show:
             cv2.destroyAllWindows()
 
@@ -424,7 +439,10 @@ def main():
     if sender:
         meta["send"] = {"session_id": args.session, "server": "dry-run" if args.dry_run else args.server,
                         **sender.stats, "server_result": sender.client.summary(),
-                        "stop_reason": sender.stop_reason, "log_dir": str(sender.client.out_dir)}
+                        "stop_reason": sender.stop_reason, "log_dir": str(sender.client.out_dir),
+                        "max_age_ms": args.max_age_ms or None,
+                        "heartbeat": None if heartbeat is None else {"edge_run_id": heartbeat.edge_run_id,
+                                                                     **heartbeat.stats}}
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(f"\n끝: {elapsed:.1f}초 | {rec.status()} | 짝 {meta['pair_fps']} fps")
@@ -435,6 +453,8 @@ def main():
         print(f"  전송: 보냄 {s['sent']} (탐지 0개 {s['empty']}) | 밀려서 건너뜀 {s['skipped']} | "
               f"탐지 오류 {s['errors']} | 뺀 탐지 {s['removed']}")
         print(f"  서버: {sender.client.summary()}")
+        if heartbeat:
+            print(f"  {heartbeat.summary()}")
         if sender.stop_reason:
             print(f"  멈춘 이유: {sender.stop_reason}")
         print(f"  전송 기록: {sender.client.out_dir}")
