@@ -121,6 +121,11 @@ def put_zones(body: ZoneSet, key=Depends(condition), db: Session = Depends(get_d
     if changed.rowcount != 1:
         db.rollback()
         raise HTTPException(412, "configuration revision changed")
+    try:
+        from .alerts import end_active
+    except ImportError:
+        from alerts import end_active
+    end_active(db, key, time.time_ns() // 1_000_000, kind="zone")
     db.commit()
     # Old decisions are invalid after edits. Wait for the next successful detection.
     return Response(body.model_dump_json(), media_type="application/json", headers={"ETag": f'"{revision + 1}"'})
@@ -166,12 +171,18 @@ def publish(db, body, algorithm, result):
         return
     now = time.time_ns() // 1_000_000
     row.seq += 1
-    row.snapshot = build_snapshot(
+    snapshot = build_snapshot(
         DetectionBundleOut.model_validate(result), algorithm=algorithm,
         captured_at_ms=max(frame.ts for frame in body.frames), emitted_at_ms=now,
         zones=ZoneSet.model_validate(row.zones), map_config=DashboardMap.model_validate(row.map_config),
         stream_id=row.stream_id, seq=row.seq, evaluate_zones=True,
-    ).model_dump(mode="json")
+    )
+    try:
+        from .alerts import sync_alerts
+    except ImportError:
+        from alerts import sync_alerts
+    snapshot.alerts = sync_alerts(db, key, snapshot, now)
+    row.snapshot = snapshot.model_dump(mode="json")
     row.observations = {**row.observations, **{
         frame.camera_id: {"server_observed_at_ms": now, "captured_at_ms": frame.ts,
                           "frame_id": frame.frame_id, "detection_count": len(frame.detections)}
@@ -181,6 +192,11 @@ def publish(db, body, algorithm, result):
 def reset_stream(db, session_id, profile, algorithm):
     row = db.scalar(state_query((session_id, profile, algorithm)).with_for_update())
     if row is not None:
+        try:
+            from .alerts import end_active
+        except ImportError:
+            from alerts import end_active
+        end_active(db, (session_id, profile, algorithm), time.time_ns() // 1_000_000)
         row.stream_id = str(uuid4())
         row.seq = 0
         row.snapshot = None

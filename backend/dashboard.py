@@ -115,6 +115,24 @@ class DashboardMap(ContractModel):
     bounds: MapBounds
 
 
+class AlertState(ContractModel):
+    alert_id: str
+    stream_id: str
+    kind: Literal["collision", "zone"]
+    object_ids: list[int]
+    zone_id: str | None = None
+    distance_m: float | None = None
+    level: Literal["warning", "danger"]
+    reached_danger: bool
+    started_at_ms: int
+    last_seen_at_ms: int
+    ended_at_ms: int | None
+    active: bool
+    acknowledged: bool
+    acknowledged_at_ms: int | None
+    action: Literal["radio", "dispatch", "false-positive"] | None
+
+
 class DashboardSnapshot(ContractModel):
     schema_version: Literal["1.0"] = "1.0"
     event: Literal["snapshot"] = "snapshot"
@@ -135,6 +153,7 @@ class DashboardSnapshot(ContractModel):
     zones: list[RiskZone]
     zone_evaluated: bool = False
     vest_evaluated: bool = False
+    alerts: list[AlertState] = Field(default_factory=list)
 
 
 def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
