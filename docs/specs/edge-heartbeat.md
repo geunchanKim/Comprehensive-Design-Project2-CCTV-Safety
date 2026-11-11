@@ -46,7 +46,22 @@
 - `folder`의 `online`은 재생 프로세스가 살아 있는지를 뜻한다.
 - 공개 배포 전에 인증·소유권 검토가 필요하다.
 
-## 엣지 구현 일정
+## 엣지 구현 (feat/edge-week2-freshness)
 
-- 2주 차 전송 큐 최신성 정책과 함께 구현해 11/11(수) develop에 올린다.
-- 서버 PR이 먼저 올라오면 로컬에서 실제 송신으로 연동을 확인한다.
+| 파일 | 내용 |
+| --- | --- |
+| `ai/edge/clock.py` | 시작 시각 + monotonic 경과 시간으로 만든 epoch ms. 시스템 시계가 뒤로 가도 뒤로 가지 않는다 |
+| `ai/edge/heartbeat.py` | 1초마다 카메라를 하나씩 순서대로 보내는 스레드. 실행마다 새 `edge_run_id` |
+| `ai/edge/server_client.py` | `post_now()`: 전송 큐를 거치지 않고 별도 HTTP 세션으로 바로 보낸다. 실패해도 실시간 전송을 멈추지 않는다 |
+| `ai/edge/realtime.py` | `--send`이면 heartbeat를 함께 켠다. 전송을 모두 끝낸 뒤 멈춘다. `meta.json`에 `edge_run_id`와 보낸·실패 수를 남긴다 |
+
+- `last_recv_ms`는 메인 루프가 카메라 큐에서 프레임을 꺼낸 순간의 `clock.now_ms()`다. 기존 탐지 메시지의 `recv_ms`(시스템 시계)와는 다른 값이다.
+- `source`: 웹캠·RTSP는 `"rtsp"`, 녹화 폴더·영상 파일은 `"folder"`.
+- 전송 큐는 두 카메라가 함께 쓰므로 `max_queue_age_ms`는 한 바퀴에 한 번 꺼내 두 카메라에 같은 값을 넣는다.
+- 서버에 `/edge/heartbeat`가 아직 없으면 `--no-heartbeat`로 끈다. 켜 두면 매초 404를 세기만 하고 탐지 전송은 계속한다.
+- dry-run이면 `runs/edge/<session_id>/sent_edge_heartbeat.jsonl`에 저장한다.
+
+## 남은 확인
+
+- 녹화 재생으로 `dropped_count`·`max_queue_age_ms` 값 확인 (`--max-age-ms` 600·800 비교)
+- 서버 push 후 실제 송신으로 `online`·`receive_status` 연동 확인
