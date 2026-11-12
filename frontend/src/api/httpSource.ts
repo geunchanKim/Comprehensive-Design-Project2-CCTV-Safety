@@ -2,17 +2,13 @@ import { getJson, postJson } from './client'
 import type { DataSource } from './source'
 import type { Alert, AreaConfig, AreaSnapshot, AreaSummary, Camera, ClassInfo, TrackedObject, Vec2 } from './types'
 
-interface ApiArea {
-  area_id?: string
-  areaId?: string
-  name: string
-  rect?: { x: number; y: number; w: number; h: number }
-  status?: AreaSummary['status']
-  people?: number | null
-  cameras?: { online: number; total: number }
-  updated_at_ms?: number
-  updatedAtMs?: number
-}
+// 서버에 구역 목록 API가 생기기 전까지는 구역 하나로 운영한다.
+// 구역이 늘면 이 목록을 서버 응답(GET /dashboard/areas 등)으로 바꾸면 된다.
+// 서버 응답에 area_id가 없을 때는 첫 구역으로 본다.
+const AREAS: Pick<AreaSummary, 'areaId' | 'name' | 'rect'>[] = [
+  { areaId: 'A', name: '구역 A', rect: { x: 0, y: 0, w: 0, h: 0 } },
+]
+const DEFAULT_AREA_ID = AREAS[0].areaId
 
 interface ApiCamera {
   camera_id?: string
@@ -100,7 +96,6 @@ interface ApiZone {
 }
 
 const value = <T>(snake: T | undefined, camel: T | undefined, fallback: T): T => snake ?? camel ?? fallback
-const idOf = (item: { area_id?: string; areaId?: string }) => value(item.area_id, item.areaId, '')
 
 const queryFor = (areaId?: string) => {
   const query = new URLSearchParams()
@@ -197,7 +192,7 @@ interface ApiAlert {
 
 const mapAlert = (alert: ApiAlert): Alert => ({
   alertId: value(alert.alert_id, alert.alertId, ''),
-  areaId: value(alert.area_id, alert.areaId, ''),
+  areaId: value(alert.area_id, alert.areaId, DEFAULT_AREA_ID),
   kind: alert.kind,
   level: alert.level,
   object1Id: alert.object_ids?.[0] ?? value(alert.object1_id, alert.object1Id, undefined),
@@ -219,14 +214,14 @@ const classInfo = (cls: string): ClassInfo => ({
 })
 
 const mapSnapshot = (snapshot: ApiSnapshot, alerts: Alert[]): AreaSnapshot => {
-  const areaId = value(snapshot.area_id, snapshot.areaId, '')
+  const areaId = value(snapshot.area_id, snapshot.areaId, DEFAULT_AREA_ID)
   const bounds = mapBounds(snapshot.map.bounds)
   const classes = value(snapshot.supported_classes, snapshot.supportedClasses, []).map(classInfo)
   const zones = (snapshot.zones ?? []).map(mapZone)
 
   const config: AreaConfig = {
     areaId,
-    name: value(snapshot.area_name, snapshot.areaName, areaId),
+    name: value(snapshot.area_name, snapshot.areaName, AREAS.find((area) => area.areaId === areaId)?.name ?? areaId),
     coordinateFrameId: value(snapshot.map.coordinate_frame_id, snapshot.map.coordinateFrameId, ''),
     bounds,
     background: { kind: 'blocks' },
@@ -248,24 +243,26 @@ const mapSnapshot = (snapshot: ApiSnapshot, alerts: Alert[]): AreaSnapshot => {
   }
 }
 
-const mapArea = (area: ApiArea): AreaSummary => {
-  const areaId = idOf(area)
-  return {
-    areaId,
-    name: area.name,
-    rect: area.rect ?? { x: 0, y: 0, w: 0, h: 0 },
-    status: area.status ?? 'offline',
-    people: area.people ?? null,
-    cameras: area.cameras ?? { online: 0, total: 0 },
-  }
+// 구역 상태: 미확인 위험 > 주의 > 카메라가 모두 연결돼 있으면 정상, 아니면 감시 불가
+const areaStatus = (alerts: Alert[], cameras: Camera[]): AreaSummary['status'] => {
+  if (alerts.some((alert) => alert.level === 'danger')) return 'danger'
+  if (alerts.some((alert) => alert.level === 'warning')) return 'warning'
+  return cameras.length > 0 && cameras.every((camera) => camera.online === true) ? 'ok' : 'offline'
 }
-
-const areasFrom = (response: ApiArea[] | { areas: ApiArea[] }) =>
-  (Array.isArray(response) ? response : response.areas).map(mapArea)
 
 const httpSource: DataSource = {
   async listAreas(signal) {
-    return areasFrom(await getJson<ApiArea[] | { areas: ApiArea[] }>('/dashboard/areas', signal))
+    const alerts = await httpSource.listActiveAlerts(signal)
+    return Promise.all(AREAS.map(async (area) => {
+      const cameras = await httpSource.listCameras(area.areaId, signal)
+      const areaAlerts = alerts.filter((alert) => alert.areaId === area.areaId)
+      return {
+        ...area,
+        status: areaStatus(areaAlerts, cameras),
+        people: null,
+        cameras: { online: cameras.filter((camera) => camera.online === true).length, total: cameras.length },
+      }
+    }))
   },
 
   async getAreaSnapshot(areaId, signal) {
