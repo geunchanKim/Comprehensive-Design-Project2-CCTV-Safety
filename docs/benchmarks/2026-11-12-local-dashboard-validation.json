@@ -22,5 +22,14 @@
   "schema_check": "passed",
   "browser_ui_verified": false,
   "team_frontend_verified": false,
-  "external_access_verified": false
+  "external_access_verified": false,
+  "restart_validation": {
+    "passed": true,
+    "snapshot_seq": 536,
+    "stored_bundles": 536,
+    "stored_alerts": 9,
+    "acknowledged_alerts": 1,
+    "database_health_http": 200,
+    "diagnostic_page_http": 200
+  }
 }

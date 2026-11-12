@@ -28,3 +28,19 @@
 - 팀 프론트 연결, 외부 PC 접속, 실제 영상·heartbeat 종단 리허설, Unity sc10, 실제 관제 화면 캡처와 리뷰·배포는 남아 있다.
 
 이 결과는 CI PostgreSQL 검증과 별개로 이 PC에서 직접 실행한 기록이다. PR 생성·push는 develop 병합이나 실습 서버 배포 완료를 의미하지 않는다.
+
+## 구성된 PC에서 시작·종료
+
+저장소 루트의 PowerShell에서 실행한다. 이미 설치·초기화된 `.local-demo/`와 그 안의 설정·점검 도구를 사용하는 관리 스크립트이며 다른 PC의 설치를 자동화하지 않는다. 비밀번호를 명령행에 입력하거나 출력하지 않는다.
+
+```powershell
+./scripts/manage-local-dashboard-demo.ps1 -Action status
+./scripts/manage-local-dashboard-demo.ps1 -Action stop
+./scripts/manage-local-dashboard-demo.ps1 -Action start
+```
+
+start는 PostgreSQL·API·점검 페이지를 숨김 프로세스로 실행하고 준비 응답을 확인한다. 실행 중인 관리 프로세스는 다시 시작하지 않는다. stop은 저장한 PID의 실행 파일·명령행을 검사한 뒤 해당 데모 Python 프로세스와 전용 DB만 종료하고 DB 파일은 보존한다. PID가 다른 프로세스에 재사용됐으면 종료를 거부한다. DB 인증 정보·프로세스 기록은 계속 Git에서 제외한다.
+
+실제로 stop → start 후 snapshot seq 536, 저장 입력 536개, 경고 9개, ack 1개의 보존을 확인했다. start를 다시 호출해 기존 서비스가 유지되는 것도 확인했다. API DB health와 점검 페이지는 각각 HTTP 200을 반환했다. 이 확인은 브라우저 시각 검증을 대신하지 않는다.
+
+프론트 연결은 현재 `.local-demo/condition.json`의 session_id·calibration_profile·algorithm을 세 쿼리로 모두 전달한다. 재생 스크립트가 새 세션을 만들면 이 파일의 값도 바뀐다. 서버 프로세스 시작 시의 기본 세션과 새 재생 세션이 다를 수 있으므로 조회 조건을 생략하지 않는다. 재생이 끝나면 오래된 위치와 offline이 남는 것이 정상이며 현재 실시간 카메라 관측으로 해석하지 않는다.
