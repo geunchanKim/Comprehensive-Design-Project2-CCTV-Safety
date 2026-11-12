@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { dataSource } from '../api/source'
-import type { AreaSnapshot, ClassInfo, VestState, ZoneState } from '../api/types'
+import type { AreaSnapshot, Camera, ClassInfo, VestState, ZoneState } from '../api/types'
 import AlertCard from '../components/AlertCard'
 import { useShell } from '../hooks/useShell'
 import FloorPlan, { type FloorPlanLayers } from '../components/FloorPlan'
@@ -22,6 +22,9 @@ export default function AreaPage() {
 function AreaView({ areaId }: { areaId: string }) {
   const { nowMs, areas, acknowledge } = useShell()
   const [snapshot, refresh] = usePolling((signal) => dataSource.getAreaSnapshot(areaId, signal), 500)
+  // 카메라는 snapshot과 따로 polling한다. snapshot이 204(데이터 대기)여도 연결 상태는 갱신된다
+  const [cameraPoll] = usePolling((signal) => dataSource.listCameras(areaId, signal), 500)
+  const cameras = cameraPoll.state === 'ok' ? cameraPoll.data : []
   const [layers, setLayers] = useState<FloorPlanLayers>({ trail: true, fov: true, zones: true })
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const summary = areas.find((a) => a.areaId === areaId)
@@ -29,10 +32,15 @@ function AreaView({ areaId }: { areaId: string }) {
   if (snapshot.state === 'loading') return <p className="page-message">불러오는 중…</p>
   if (snapshot.state === 'error') {
     const noData = snapshot.detail === 'no data' || (snapshot.detail.includes('204') && snapshot.detail.includes('No Content'))
-    return <p className="page-message">{noData ? '구역 데이터가 없습니다.' : `구역 데이터를 불러오지 못했습니다: ${snapshot.detail}`}</p>
+    return (
+      <div className="page">
+        {cameras.length > 0 && <div className="chip-row"><CameraChips cameras={cameras} /></div>}
+        <p className="page-message">{noData ? '구역 데이터가 없습니다.' : `구역 데이터를 불러오지 못했습니다: ${snapshot.detail}`}</p>
+      </div>
+    )
   }
 
-  const { config, cameras, classes, objects, alerts, evaluated, capturedAtMs, staleAfterMs } = snapshot.data
+  const { config, classes, objects, alerts, evaluated, capturedAtMs, staleAfterMs } = snapshot.data
   // 마지막 snapshot이 기준보다 오래되면 화면이 멈춘 것. 안전으로 보이지 않게 표시한다
   const stale = nowMs - capturedAtMs > staleAfterMs
   const notEvaluated = (Object.keys(EVALUATED_TEXT) as (keyof typeof EVALUATED_TEXT)[]).filter((k) => !evaluated[k])
@@ -56,12 +64,7 @@ function AreaView({ areaId }: { areaId: string }) {
           <h1>{config.name}</h1>
         </div>
         <div className="chip-row">
-          {cameras.map((c) => (
-            <span key={c.cameraId} className="chip">
-              <span className={`status-dot status-dot--${c.online === true ? 'ok' : c.online === false ? 'offline' : 'unknown'}`} aria-hidden="true" />
-              {c.cameraId.toUpperCase()} {c.online === true ? '연결' : c.online === false ? '끊김' : '상태 미확인'}
-            </span>
-          ))}
+          <CameraChips cameras={cameras} />
           {stale && <span className="chip warning-text">갱신 지연 {((nowMs - capturedAtMs) / 1000).toFixed(0)}초</span>}
           {notEvaluated.length > 0 && (
             <span className="chip muted" title="판단이 꺼져 있어 경고가 없어도 안전하다는 뜻이 아닙니다">
@@ -161,6 +164,16 @@ function AreaView({ areaId }: { areaId: string }) {
       {summary?.status === 'offline' && <p className="page-message">카메라가 끊겨 이 구역은 감시 불가 상태입니다.</p>}
     </div>
   )
+}
+
+// online null은 heartbeat 미수신(상태 미확인). false(끊김)와 구분한다
+function CameraChips({ cameras }: { cameras: Camera[] }) {
+  return cameras.map((c) => (
+    <span key={c.cameraId} className="chip">
+      <span className={`status-dot status-dot--${c.online === true ? 'ok' : c.online === false ? 'offline' : 'unknown'}`} aria-hidden="true" />
+      {c.cameraId.toUpperCase()} {c.online === true ? '연결' : c.online === false ? '끊김' : '상태 미확인'}
+    </span>
+  ))
 }
 
 function countByClass(list: string[], classes: ClassInfo[]) {

@@ -125,7 +125,6 @@ export interface AreaSummary {
 
 export interface AreaSnapshot {
   config: AreaConfig
-  cameras: Camera[]
   classes: ClassInfo[]
   objects: TrackedObject[]
   alerts: Alert[]

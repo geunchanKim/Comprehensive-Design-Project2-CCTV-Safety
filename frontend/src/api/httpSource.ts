@@ -218,7 +218,7 @@ const classInfo = (cls: string): ClassInfo => ({
   protected: cls === 'person',
 })
 
-const mapSnapshot = (snapshot: ApiSnapshot, cameras: Camera[], alerts: Alert[]): AreaSnapshot => {
+const mapSnapshot = (snapshot: ApiSnapshot, alerts: Alert[]): AreaSnapshot => {
   const areaId = value(snapshot.area_id, snapshot.areaId, '')
   const bounds = mapBounds(snapshot.map.bounds)
   const classes = value(snapshot.supported_classes, snapshot.supportedClasses, []).map(classInfo)
@@ -235,7 +235,6 @@ const mapSnapshot = (snapshot: ApiSnapshot, cameras: Camera[], alerts: Alert[]):
 
   return {
     config,
-    cameras,
     classes,
     objects: snapshot.objects.map(mapObject),
     alerts: alerts.filter((alert) => alert.areaId === areaId),
@@ -270,14 +269,17 @@ const httpSource: DataSource = {
   },
 
   async getAreaSnapshot(areaId, signal) {
-    const [snapshot, camerasResponse, alertsResponse] = await Promise.all([
+    const [snapshot, alertsResponse] = await Promise.all([
       getJson<ApiSnapshot>(pathWithQuery('/dashboard/snapshot', areaId), signal),
-      getJson<ApiCamera[] | ApiCamerasResponse>(pathWithQuery('/dashboard/cameras', areaId), signal),
       getJson<ApiAlert[] | { alerts: ApiAlert[] }>(pathWithQuery('/alerts'), signal),
     ])
-    const cameras = Array.isArray(camerasResponse) ? camerasResponse : camerasResponse.cameras
     const alerts = (Array.isArray(alertsResponse) ? alertsResponse : alertsResponse.alerts).map(mapAlert)
-    return mapSnapshot(snapshot, cameras.map(mapCamera), alerts)
+    return mapSnapshot(snapshot, alerts)
+  },
+
+  async listCameras(areaId, signal) {
+    const response = await getJson<ApiCamera[] | ApiCamerasResponse>(pathWithQuery('/dashboard/cameras', areaId), signal)
+    return (Array.isArray(response) ? response : response.cameras).map(mapCamera)
   },
 
   async listActiveAlerts(signal) {
