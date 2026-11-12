@@ -17,12 +17,17 @@ interface ApiArea {
 interface ApiCamera {
   camera_id?: string
   cameraId?: string
-  position: Vec2
+  // 서버(GET /dashboard/cameras)는 world {x,y,z}와 horizontal_fov_deg를 준다
+  world?: Vec2 & { z?: number }
+  position?: Vec2
   yaw_deg?: number
   yawDeg?: number
+  horizontal_fov_deg?: number | null
   fov_deg?: number
   fovDeg?: number
+  // null은 heartbeat 미수신(상태 미확인). false(끊김)와 구분한다
   online: boolean | null
+  last_frame?: { server_observed_at_ms: number } | null
   last_frame_at_ms?: number | null
   lastFrameAtMs?: number | null
 }
@@ -129,11 +134,11 @@ const mapBounds = (bounds: ApiSnapshot['map']['bounds']) => ({
 
 const mapCamera = (camera: ApiCamera): Camera => ({
   cameraId: value(camera.camera_id, camera.cameraId, ''),
-  position: camera.position,
+  position: camera.position ?? (camera.world ? { x: camera.world.x, y: camera.world.y } : { x: 0, y: 0 }),
   yawDeg: value(camera.yaw_deg, camera.yawDeg, 0),
-  fovDeg: value(camera.fov_deg, camera.fovDeg, 0),
-  online: camera.online,
-  lastFrameAtMs: value(camera.last_frame_at_ms, camera.lastFrameAtMs, null),
+  fovDeg: camera.horizontal_fov_deg ?? value(camera.fov_deg, camera.fovDeg, 0),
+  online: camera.online ?? null,
+  lastFrameAtMs: camera.last_frame?.server_observed_at_ms ?? value(camera.last_frame_at_ms, camera.lastFrameAtMs, null),
 })
 
 const mapZone = (zone: ApiZone) => ({
@@ -170,6 +175,8 @@ interface ApiAlert {
   areaId?: string
   kind: Alert['kind']
   level: Alert['level']
+  // 서버(GET /alerts)는 정렬된 객체 ID 배열을 준다. 충돌은 2개, 구역은 1개
+  object_ids?: number[]
   object1_id?: number
   object1Id?: number
   object2_id?: number
@@ -193,8 +200,8 @@ const mapAlert = (alert: ApiAlert): Alert => ({
   areaId: value(alert.area_id, alert.areaId, ''),
   kind: alert.kind,
   level: alert.level,
-  object1Id: value(alert.object1_id, alert.object1Id, undefined),
-  object2Id: value(alert.object2_id, alert.object2Id, undefined),
+  object1Id: alert.object_ids?.[0] ?? value(alert.object1_id, alert.object1Id, undefined),
+  object2Id: alert.object_ids?.[1] ?? value(alert.object2_id, alert.object2Id, undefined),
   zoneId: value(alert.zone_id, alert.zoneId, undefined),
   distanceM: value(alert.distance_m, alert.distanceM, undefined),
   ttcS: value(alert.ttc_s, alert.ttcS, undefined),
@@ -278,8 +285,9 @@ const httpSource: DataSource = {
     return (Array.isArray(response) ? response : response.alerts).map(mapAlert)
   },
 
+  // ack도 snapshot·cameras·alerts와 같은 세 조건을 붙여야 서버가 같은 경고를 찾는다 (없으면 404)
   acknowledgeAlert(alertId, action) {
-    return postJson(`/alerts/${encodeURIComponent(alertId)}/ack`, { action })
+    return postJson(pathWithQuery(`/alerts/${encodeURIComponent(alertId)}/ack`), { action })
   },
 }
 
