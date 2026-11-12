@@ -66,14 +66,16 @@ snapshot과 같은 운영 조건의 카메라 정보를 반환한다. `area_id`�
 
 ## 3. 전체 활성 경고
 
-### `GET /dashboard/alerts`
+### `GET /alerts`
 
 snapshot과 같은 운영 조건의 모든 구역 현재 활성 경고를 반환한다.
 전체 화면의 위험 팝업은 이 API의 응답을 사용한다.
 
 - `danger` 경고는 확인 전까지 반환한다.
 - 응답의 각 항목은 snapshot의 `alerts`와 같은 형식을 사용한다.
-- 1초 polling으로 조회할 수 있어야 한다.
+- snapshot·cameras와 같은 운영 조건으로 500ms polling할 수 있어야 한다.
+- `session_id`, `calibration_profile`, `algorithm`을 사용하는 경우 세 값을 모두
+  같은 query로 전달한다.
 
 ## 4. 경고 확인
 

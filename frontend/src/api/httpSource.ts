@@ -37,6 +37,7 @@ interface ApiSnapshot {
     coordinateFrameId?: string
     bounds: { x_min?: number; x_max?: number; y_min?: number; y_max?: number; xMin?: number; xMax?: number; yMin?: number; yMax?: number }
   }
+
   stale_after_ms?: number
   staleAfterMs?: number
   supported_classes?: string[]
@@ -49,6 +50,10 @@ interface ApiSnapshot {
   evaluated?: { collision: boolean; zone: boolean; vest: boolean }
   captured_at_ms?: number
   capturedAtMs?: number
+}
+
+interface ApiCamerasResponse {
+  cameras: ApiCamera[]
 }
 
 interface ApiObject {
@@ -95,6 +100,18 @@ const idOf = (item: { area_id?: string; areaId?: string }) => value(item.area_id
 const queryFor = (areaId?: string) => {
   const query = new URLSearchParams()
   if (areaId) query.set('area_id', areaId)
+  const conditions = [
+    ['session_id', import.meta.env.VITE_SESSION_ID],
+    ['calibration_profile', import.meta.env.VITE_CALIBRATION_PROFILE],
+    ['algorithm', import.meta.env.VITE_ALGORITHM],
+  ] as const
+  const configuredCount = conditions.filter(([, condition]) => Boolean(condition)).length
+  if (configuredCount !== 0 && configuredCount !== conditions.length) {
+    throw new Error('VITE_SESSION_ID, VITE_CALIBRATION_PROFILE, and VITE_ALGORITHM must be set together')
+  }
+  for (const [key, condition] of conditions) {
+    if (condition) query.set(key, condition)
+  }
   return query.toString()
 }
 
@@ -194,7 +211,7 @@ const classInfo = (cls: string): ClassInfo => ({
   protected: cls === 'person',
 })
 
-const mapSnapshot = (snapshot: ApiSnapshot, cameras: Camera[]): AreaSnapshot => {
+const mapSnapshot = (snapshot: ApiSnapshot, cameras: Camera[], alerts: Alert[]): AreaSnapshot => {
   const areaId = value(snapshot.area_id, snapshot.areaId, '')
   const bounds = mapBounds(snapshot.map.bounds)
   const classes = value(snapshot.supported_classes, snapshot.supportedClasses, []).map(classInfo)
@@ -214,7 +231,7 @@ const mapSnapshot = (snapshot: ApiSnapshot, cameras: Camera[]): AreaSnapshot => 
     cameras,
     classes,
     objects: snapshot.objects.map(mapObject),
-    alerts: [],
+    alerts: alerts.filter((alert) => alert.areaId === areaId),
     evaluated: snapshot.evaluated ?? {
       collision: snapshot.collision_evaluated ?? false,
       zone: snapshot.zone_evaluated ?? false,
@@ -246,15 +263,18 @@ const httpSource: DataSource = {
   },
 
   async getAreaSnapshot(areaId, signal) {
-    const [snapshot, cameras] = await Promise.all([
+    const [snapshot, camerasResponse, alertsResponse] = await Promise.all([
       getJson<ApiSnapshot>(pathWithQuery('/dashboard/snapshot', areaId), signal),
-      getJson<ApiCamera[]>(pathWithQuery('/dashboard/cameras', areaId), signal),
+      getJson<ApiCamera[] | ApiCamerasResponse>(pathWithQuery('/dashboard/cameras', areaId), signal),
+      getJson<ApiAlert[] | { alerts: ApiAlert[] }>(pathWithQuery('/alerts'), signal),
     ])
-    return mapSnapshot(snapshot, cameras.map(mapCamera))
+    const cameras = Array.isArray(camerasResponse) ? camerasResponse : camerasResponse.cameras
+    const alerts = (Array.isArray(alertsResponse) ? alertsResponse : alertsResponse.alerts).map(mapAlert)
+    return mapSnapshot(snapshot, cameras.map(mapCamera), alerts)
   },
 
   async listActiveAlerts(signal) {
-    const response = await getJson<ApiAlert[] | { alerts: ApiAlert[] }>('/dashboard/alerts', signal)
+    const response = await getJson<ApiAlert[] | { alerts: ApiAlert[] }>(pathWithQuery('/alerts'), signal)
     return (Array.isArray(response) ? response : response.alerts).map(mapAlert)
   },
 
