@@ -13,7 +13,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 
-import requests
+import httpx
 
 from backend.schemas import CameraCalibrationIn, DetectionBundleIn
 
@@ -118,11 +118,11 @@ def main():
     if not args.send:
         print(json.dumps(report))
         return
-    http = requests.Session()
+    http = httpx.Client()
 
     def call(method, path, **kwargs):
         response = http.request(method, args.server.rstrip("/")+path, timeout=30, **kwargs)
-        if not response.ok:
+        if not response.is_success:
             raise RuntimeError(f"{method} {path}: HTTP {response.status_code}: {response.text[:500]}")
         return response
 
