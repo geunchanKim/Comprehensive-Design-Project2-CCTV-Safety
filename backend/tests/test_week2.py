@@ -40,6 +40,38 @@ def configured():
     return key, config
 
 
+@pytest.mark.parametrize("second_class", ["person", "chair"])
+def test_detection_pair_reaches_dashboard_alert_and_ack(configured, monkeypatch, second_class):
+    import backend.api as api
+
+    monkeypatch.setattr(api, "ENABLE_RISK_ANALYSIS", True)
+    monkeypatch.setattr(api, "ANKLE_FOOT_Z_MAX", 0.4)  # Synthetic scene only.
+    key, _ = configured
+    payload = detection_payload(session_id=key["session_id"])
+    for frame in payload["frames"]:
+        original = frame["detections"][0]
+        frame["detections"].append({
+            "track_id": 99, "cls": second_class, "conf": 0.9,
+            "bbox": list(original["bbox"]),
+        })
+    response = client.post("/detections", json=payload)
+    assert response.status_code == 201, response.text
+    assert len(response.json()["matches"]) == 2
+    snapshot = client.get("/dashboard/snapshot", params=key).json()
+    assert snapshot["collision_evaluated"]
+    collision = [item for item in snapshot["alerts"] if item["kind"] == "collision"]
+    assert len(collision) == 1
+    alert = collision[0]
+    assert alert["active"] and not alert["acknowledged"]
+    assert alert["level"] == "danger"
+    assert alert in client.get("/alerts", params=key).json()
+    assert client.post(f'/alerts/{alert["alert_id"]}/ack', params=key,
+                       json={"action": None}).status_code == 204
+    saved = next(item for item in client.get("/alerts", params=key).json()
+                 if item["alert_id"] == alert["alert_id"])
+    assert saved["acknowledged"] and saved["active"]
+
+
 def test_alert_ack_retention_recurrence_and_isolation(configured):
     from backend.models import DashboardAlert
 
