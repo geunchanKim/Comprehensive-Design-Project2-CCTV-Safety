@@ -80,6 +80,7 @@
 .status-dot--warning { background: var(--warning); }
 .status-dot--danger { background: var(--danger); }
 .status-dot--offline { border: 1.5px solid var(--muted); }
+.status-dot--unknown { border: 1.5px dashed var(--muted); }
 
 .status-text--warning { color: var(--warning); }
 .status-text--danger { color: var(--danger); }

@@ -21,13 +21,16 @@ export default function AreaPage() {
 
 function AreaView({ areaId }: { areaId: string }) {
   const { nowMs, areas, acknowledge } = useShell()
-  const [snapshot, refresh] = usePolling((signal) => dataSource.getAreaSnapshot(areaId, signal), 1000)
+  const [snapshot, refresh] = usePolling((signal) => dataSource.getAreaSnapshot(areaId, signal), 500)
   const [layers, setLayers] = useState<FloorPlanLayers>({ trail: true, fov: true, zones: true })
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const summary = areas.find((a) => a.areaId === areaId)
 
   if (snapshot.state === 'loading') return <p className="page-message">불러오는 중…</p>
-  if (snapshot.state === 'error') return <p className="page-message">구역 데이터를 불러오지 못했습니다: {snapshot.detail}</p>
+  if (snapshot.state === 'error') {
+    const noData = snapshot.detail === 'no data' || (snapshot.detail.includes('204') && snapshot.detail.includes('No Content'))
+    return <p className="page-message">{noData ? '구역 데이터가 없습니다.' : `구역 데이터를 불러오지 못했습니다: ${snapshot.detail}`}</p>
+  }
 
   const { config, cameras, classes, objects, alerts, evaluated, capturedAtMs, staleAfterMs } = snapshot.data
   // 마지막 snapshot이 기준보다 오래되면 화면이 멈춘 것. 안전으로 보이지 않게 표시한다
@@ -55,8 +58,8 @@ function AreaView({ areaId }: { areaId: string }) {
         <div className="chip-row">
           {cameras.map((c) => (
             <span key={c.cameraId} className="chip">
-              <span className={`status-dot status-dot--${c.online ? 'ok' : 'offline'}`} aria-hidden="true" />
-              {c.cameraId.toUpperCase()} {c.online ? '연결' : '끊김'}
+              <span className={`status-dot status-dot--${c.online === true ? 'ok' : c.online === false ? 'offline' : 'unknown'}`} aria-hidden="true" />
+              {c.cameraId.toUpperCase()} {c.online === true ? '연결' : c.online === false ? '끊김' : '상태 미확인'}
             </span>
           ))}
           {stale && <span className="chip warning-text">갱신 지연 {((nowMs - capturedAtMs) / 1000).toFixed(0)}초</span>}

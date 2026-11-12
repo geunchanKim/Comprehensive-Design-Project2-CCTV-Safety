@@ -55,7 +55,7 @@ export interface Camera {
   position: Vec2
   yawDeg: number
   fovDeg: number
-  online: boolean
+  online: boolean | null
   lastFrameAtMs: number | null
 }
 

@@ -117,7 +117,7 @@ export default function FloorPlan({
           return (
             <g key={`cam-${c.cameraId}`}>
               <rect x={p.x - 11 * px} y={p.y - 11 * px} width={22 * px} height={22 * px} rx={6 * px}
-                fill="#1B2A40" stroke={c.online ? 'var(--accent)' : 'var(--muted)'} strokeWidth={px} />
+                fill="#1B2A40" stroke={c.online === true ? 'var(--accent)' : 'var(--muted)'} strokeWidth={px} />
               <text x={p.x} y={p.y + 4 * px} fontSize={10 * px} textAnchor="middle" fill="var(--accent)" fontFamily="var(--font-mono)">
                 {c.cameraId.replace('cam', 'C')}
               </text>

@@ -1,8 +1,7 @@
-import { mockSource } from './mock/mockSource'
+import httpSource from './httpSource'
 import type { Alert, AreaSnapshot, AreaSummary } from './types'
 
-// 화면은 이 인터페이스만 본다. 지금은 mock 하나뿐이고,
-// 백엔드 읽기 API가 생기면 http 구현을 추가해 VITE_DATA_SOURCE로 고른다
+// 화면은 이 인터페이스만 본다.
 export interface DataSource {
   listAreas(signal?: AbortSignal): Promise<AreaSummary[]>
   getAreaSnapshot(areaId: string, signal?: AbortSignal): Promise<AreaSnapshot>
@@ -11,4 +10,4 @@ export interface DataSource {
   acknowledgeAlert(alertId: string, action: string | null): Promise<void>
 }
 
-export const dataSource: DataSource = mockSource
+export const dataSource: DataSource = httpSource
