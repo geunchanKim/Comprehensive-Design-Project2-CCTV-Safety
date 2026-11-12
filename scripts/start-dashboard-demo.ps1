@@ -1,8 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$DatabaseUrl,
     [Parameter(Mandatory = $true)][string]$SessionId,
-    [ValidateSet('basic', 'precise')][string]$CalibrationProfile = 'precise',
-    [string]$Algorithm = 'improved',
+    [ValidateSet('basic', 'precise')][string]$CalibrationProfile = 'basic',
+    [ValidateSet('baseline')][string]$Algorithm = 'baseline',
     [ValidateRange(1024, 65535)][int]$Port = 8001,
     [string]$BindAddress = '127.0.0.1'
 )

@@ -83,7 +83,7 @@ snapshot·cameras·alerts 조회는 500ms polling으로 시작한다. 아래 모
 
 ```powershell
 python -m pip install -r backend/requirements.txt
-./scripts/start-dashboard-demo.ps1 -DatabaseUrl 'postgresql://USER:PASSWORD@localhost:5432/cctv_demo' -SessionId 'sw-demo-1112' -CalibrationProfile precise -Algorithm improved
+./scripts/start-dashboard-demo.ps1 -DatabaseUrl 'postgresql://USER:PASSWORD@localhost:5432/cctv_demo' -SessionId 'sw-demo-1112' -CalibrationProfile basic -Algorithm baseline
 ```
 
 스크립트는 알고리즘을 확인하고 지정 DB에 Alembic head(현재 0013)를 적용한 뒤 127.0.0.1:8001에서 실행한다. 위험 분석은 이 프로세스에서 켜며 종료 시 환경변수를 복구한다. 카메라 캘리브레이션·지도·영상은 자동 생성하거나 등록하지 않는다. 실제 재생 전에 근찬과 세션/카메라 ID·캘리브레이션·algorithm을 맞춰 등록한다. 새 세션을 쓰면 해당 세션의 카메라 캘리브레이션도 필요하다.
@@ -95,3 +95,7 @@ python -m pip install -r backend/requirements.txt
 전달할 값은 서버 주소, session_id, calibration_profile, algorithm, coordinate_frame_id와 지도 bounds다. `/health`, `/health/db`를 확인한 뒤 지도 등록 → 카메라 캘리브레이션 등록 → 승인된 녹화/Unity 재생 → 위치·heartbeat·근접 경고·ack 순서로 확인한다. 지도와 구역은 같은 coordinate_frame_id를 사용하고, 근접 경고만 확인하면 zones=[]로 시작한다. `/docs`의 DashboardConfiguration 스키마를 사용한다.
 
 11/12 현재 이 PC는 Docker 명령이 없고 원격 GitHub 연결도 실패했다. 따라서 실행 스크립트 준비와 로컬 자동 검증을 완료 상태로 구분하며, PostgreSQL 마이그레이션 실행·접속 가능한 서버 주소·실제 재생·프론트 확인은 완료로 보고하지 않는다.
+
+### Live ingestion condition (11/12 correction)
+
+`POST /detections` always stores algorithm=baseline. The demo launcher therefore uses basic/baseline by default and accepts only baseline for live ingestion. The calibration_profile must match the actual edge payload. Improved results currently require the session recompute API; selecting improved in the dashboard does not run improved processing on incoming frames. Do not repeatedly recompute a live session to simulate a stream.
