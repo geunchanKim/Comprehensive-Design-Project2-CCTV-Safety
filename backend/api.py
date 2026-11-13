@@ -344,19 +344,23 @@ def solve_precise_calibration(camera_id: str, body: PnPCalibrationIn,
 
 def _object_id(db: Session, session_id, profile, algorithm,
                camera1, track1, camera2, track2, cls: str,
-               visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int]) -> int:
-    link = db.scalar(
-        select(TrackLink).where(
-            TrackLink.session_id == session_id,
-            TrackLink.calibration_profile == profile,
-            TrackLink.algorithm == algorithm,
-            TrackLink.camera1_id == camera1,
-            TrackLink.camera1_track_id == track1,
-            TrackLink.camera2_id == camera2,
-            TrackLink.camera2_track_id == track2,
-            TrackLink.cls == cls,
+               visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int],
+               exact_links=None) -> int:
+    if exact_links is not None:
+        link = exact_links().get((track1, track2, cls))
+    else:
+        link = db.scalar(
+            select(TrackLink).where(
+                TrackLink.session_id == session_id,
+                TrackLink.calibration_profile == profile,
+                TrackLink.algorithm == algorithm,
+                TrackLink.camera1_id == camera1,
+                TrackLink.camera1_track_id == track1,
+                TrackLink.camera2_id == camera2,
+                TrackLink.camera2_track_id == track2,
+                TrackLink.cls == cls,
+            )
         )
-    )
     if link and link.object_id not in used_object_ids:
         return link.object_id
 
@@ -552,10 +556,39 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
 
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+    # Flush can fail before commit; apply the same rollback/409 contract.
+    try:
+        return _store_detections(body, db, algorithm)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+
+
+def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
     timer = StageTimer()
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
     used_object_ids: set[int] = set()
+    # Request-local, lazy batch: no cache survives a request or configuration edit.
+    # The call site caps IN parameters and keeps single-object requests unchanged.
+    exact_link_cache = None
+
+    def exact_links():
+        nonlocal exact_link_cache
+        if exact_link_cache is None:
+            rows = db.scalars(select(TrackLink).where(
+                TrackLink.session_id == body.session_id,
+                TrackLink.calibration_profile == body.calibration_profile,
+                TrackLink.algorithm == algorithm,
+                TrackLink.camera1_id == frames[0].camera_id,
+                TrackLink.camera2_id == frames[1].camera_id,
+                TrackLink.camera1_track_id.in_(visible_tracks[0]),
+                TrackLink.camera2_track_id.in_(visible_tracks[1]),
+            )).all()
+            exact_link_cache = {(row.camera1_track_id, row.camera2_track_id, row.cls): row
+                                for row in rows}
+        return exact_link_cache
+
     profile = body.calibration_profile
     max_sync_delta_ms = body.max_sync_delta_ms if body.max_sync_delta_ms is not None else MAX_SYNC_DELTA_MS
     settings = {**_experiment_settings(algorithm),
@@ -855,7 +888,9 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             object_id = _object_id(db, body.session_id, profile, algorithm,
                                    frames[0].camera_id, item1.track_id,
                                    frames[1].camera_id, item2.track_id, object_class,
-                                   visible_tracks, used_object_ids)
+                                   visible_tracks, used_object_ids,
+                                   exact_links if (min(map(len, visible_tracks)) > 1
+                                                   and sum(map(len, visible_tracks)) <= 500) else None)
             used_object_ids.add(object_id)
             raw_world = np.asarray(world, dtype=float)
             timestamp_ms = max(frame.ts for frame in frames)
@@ -951,15 +986,12 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
             db.add(RiskEvent(bundle_id=bundle.id, session_id=body.session_id,
                              captured_at_ms=max(frame.ts for frame in frames), **risk))
     timer.mark("risk_ms")
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
+    # Preserve the ID before commit expires ORM attributes.
+    bundle_id = bundle.id
+    db.commit()
     timer.mark("commit_ms")
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
-    bundle_id = bundle.id
     timer.mark("response_prepare_ms")
     timings = timer.result()
     logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
