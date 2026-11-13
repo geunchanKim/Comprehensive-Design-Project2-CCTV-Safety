@@ -84,3 +84,32 @@ sc10 원본이 이 PC의 Git 제외 경로 `ai/runs/week1-prep/unity-grid-sc10.z
 sc10은 위 원본으로 엣지 탐지를 수행한 `sent_detections.jsonl`과 실제 사용 session_id를 받는다. session_id는 엣지 담당자가 규칙에 맞춰 확정하며, 기존 GT 기반 세션과 구분한다. 원본 존재·압축 무결성 확인을 이미지 디코딩·YOLO 추론·실제 화면 리허설 완료로 해석하지 않는다.
 
 남은 작업은 PR 리뷰 후 별도 데모 DB·프로세스 실행과 외부 접근 검증, 실제 s10 heartbeat 재생, sc10 탐지 결과 수신, 프론트 종단 검증이다. push·merge·배포는 별도 컨펌 전 수행하지 않는다.
+
+## 11/13 별도 실습 데모 실행 완료
+
+사용자가 제공한 실습 서버 사용 안내로 SSH 접속 경로를 확인하고, 데모 실행 요청에 따라 기존 운영 경로와 분리해서 실행했다. 접속 비밀번호는 Git·문서·댓글에 저장하지 않았다. 앞 절의 외부 데모 주소 미확보 상태는 아래 결과로 갱신한다.
+
+- 팀 접속 API: **http://121.182.60.2:32132**, Swagger: **http://121.182.60.2:32132/docs**. 이 PC에서 실제 외부 HTTP 응답을 확인했다.
+- 백엔드 소스: Git archive의 `348f5ff`. 서버 원본 checkout과 bind mount를 사용하지 않고 `/home/vendor/cctv-dashboard-demo-348f5ff`의 별도 소스로 이미지를 빌드했다.
+- Compose project `cctv-dashboard-demo`, 별도 PostgreSQL 컨테이너·네트워크·`demo_db_data` 볼륨. DB 포트는 외부에 노출하지 않는다. 데모 비밀번호는 해당 서버 디렉터리 아래 `.local-demo/isolated-compose/db-password`에 별도 생성·보관하며 재시작 시 유지한다.
+- 공개 API 32130, 프론트 32123, pgAdmin 32131은 이미 사용 중이어서 32132를 선택했다. 기존 API는 `ff68630`, baseline risk_analysis=false를 그대로 유지하는 것을 재확인했다.
+- 데모 health·DB·dashboard/heartbeat/alerts/ack 경로 정상, baseline risk_analysis=true. 전체 migration은 Dockerfile 시작 명령으로 수행했다.
+- `classroom-1014-s10-t1-v91` / basic / baseline: cam1·cam2 1920×1080 basic 캘리브레이션 등록 완료. 지도는 `classroom-diagnostic-xy`, -15~15m 진단 범위, zones=[]이며 실제 도면 정합이 아니다.
+- 이 세션은 snapshot 204, heartbeat 미수신으로 준비했다. 실제 근찬의 재생과 섞이지 않도록 v91에 탐지나 합성 heartbeat를 보내지 않았다.
+- 별도 합성 점검 세션에서 두 카메라의 heartbeat POST 204, online=true·receive_status=recent, 송신 중단 3.2초 후 online=false를 실제 공개 HTTP로 확인했다. 실제 엣지/YOLO·프론트 종단 검증과 구분한다.
+
+공유 가능한 증거는 [데모 준비 결과](../benchmarks/2026-11-13-public-demo-readiness.json)다. 새 Compose의 서버 config 검사와 실제 빌드·기동·외부 HTTP 점검, 시작 스크립트의 Bash 구문 검사를 통과했다. 로컬 PC에는 Docker가 없어 로컬 Docker 실행 검증은 하지 않았다.
+
+### 별도 실행 구성과 재시작
+
+`infra/docker-compose.demo.yaml`과 `scripts/start-isolated-dashboard-demo.sh`를 사용한다. 운영 Compose 파일과 합쳐 실행하지 않는다. 기본 listener는 localhost:32132이며 실습 서버에서는 승인된 서비스 포트 범위(32123~32199)를 확인하고 아래처럼 실행한다. Git archive 사용 시 `DEMO_COMMIT_SHA`를 명시한다.
+
+```bash
+cd /home/vendor/cctv-dashboard-demo-348f5ff
+DEMO_COMMIT_SHA=348f5ff DEMO_BIND_ADDRESS=0.0.0.0 DEMO_PORT=32132 bash scripts/start-isolated-dashboard-demo.sh
+docker ps --filter label=com.docker.compose.project=cctv-dashboard-demo
+```
+
+현재 컨테이너는 unless-stopped 재시작 정책을 사용한다. 데모 정지가 필요하면 해당 프로젝트 컨테이너만 대상으로 한다. 기존 운영 DB·볼륨과 데모 비밀번호 파일은 삭제하지 않는다. 외부 HTTP API에는 아직 인증이 없으므로 승인된 테스트 데이터 리허설에 사용하고 추가 공개·권한 변경은 별도 결정한다.
+
+다음은 근찬의 실제 s10 heartbeat 재생 및 warning 확인, sc10 실제 탐지 결과와 session_id 수신, 성윤의 HTTP adapter 연결·danger 팝업·ack 검증이다. FE 리뷰에서는 응답 필드 매핑·조건 쿼리·카메라 분리 조회를 수정했다고 회신했으며 실제 공개 데모 연결은 아직 검증하지 않았다. PR #83의 `348f5ff` CI 네 항목은 모두 성공했다. PR 병합과 기존 운영 자동 배포는 수행하지 않았다.
