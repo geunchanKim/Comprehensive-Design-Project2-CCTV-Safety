@@ -59,3 +59,28 @@ Windows에서는 기존 `scripts/start-dashboard-demo.ps1`에 별도 DB 주소�
 6. 실제 관제 화면·팝업을 캡처하고 재생 조건, 서버 commit, source, DB migration, 확인 결과를 명세서에 반영한다. 현재 팀 프론트 소스는 mock이므로 API 점검 화면 결과로 이 항목을 대체하지 않는다.
 
 남은 외부 의존성은 실습 서버에서의 데모 프로세스 실행 경로/권한, 프론트 HTTP adapter 연결, 실제 엣지 재생과 지도 정합이다. 서버 주소만 확인됐다고 이 항목들을 완료로 표시하지 않는다. 팀 전달은 이 문서 준비까지이며 메시지·댓글은 자동 전송하지 않았다.
+
+## 11/13 재확인: 엣지 인계와 sc10 원본
+
+Git 원격 조회 결과 `develop`은 `ff68630`, `feat/server-week2-dashboard`와 PR #83 HEAD는 `496f54b`였다. 아래 결과는 해당 코드와 실행 중인 서버를 구분한 재확인이다.
+
+- 공개 실습 API `http://121.182.60.2:32130`: `/health`, `/health/db` 응답 정상, commit `ff68630`, baseline risk_analysis=false. OpenAPI에 `/dashboard/cameras`, `/edge/heartbeat`, `/alerts`, `/alerts/{alert_id}/ack`가 모두 없다. 엣지 heartbeat 리허설용 주소로 전달하지 않는다.
+- 로컬 API `http://127.0.0.1:8001`: health·DB 정상, 위 네 API 존재, baseline risk_analysis=true. 실행 프로세스의 commit 표시는 `32f3be0`으로 현재 checkout과 다르다. 외부 PC 접속을 확인한 주소가 아니다.
+- 로컬 v91/basic/baseline 조회: cam1·cam2 등록과 기존 마지막 frame 2034를 확인했다. 두 카메라 모두 frame_status=stale, online=null, receive_status=unknown, heartbeat=null이다. 이 세션의 실제 엣지 heartbeat 리허설은 아직 수행하지 않았다.
+- 현재 코드에서 `python -m pytest --confcutdir=backend/tests backend/tests/test_week2.py -q`: 19개 통과. heartbeat 시각·중복 요청·timeout·조건 격리 검증을 포함한다. 상위 `C:/conftest.py`의 별도 의존성을 피하도록 테스트 탐색 경계를 지정했다. pytest의 상위 cache 쓰기 권한 경고 2개가 있었으며 테스트는 통과했다.
+
+### sc10 전달 자료
+
+sc10 원본이 이 PC의 Git 제외 경로 `ai/runs/week1-prep/unity-grid-sc10.zip`에 존재한다. 메타데이터만 있는 상태가 아니므로 성윤에게 원본을 다시 요청할 필요는 없다.
+
+- 기존 Unity 담당자 공유 출처: [이슈 #72](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/72)
+- 팀 다운로드 링크: [unity-grid-sc10.zip](https://drive.google.com/file/d/1YUGeZL7-I1aA7zUTQXisRXhiP9FJH3ZZ/view?usp=sharing). 기존 공유 링크를 재전달하며, 이번에 Drive 접근 권한을 별도로 검증한 것은 아니다.
+- ZIP 크기 137,397,212 bytes, CRC 전체 검사 통과.
+- `unity-grid-sc10/cam1/`, `cam2/`에 JPG 각 130장, `cameras.json`, `frames.jsonl` 포함. frames.jsonl은 130행이다.
+- SHA256: `17ece87b52f4e36644659d20440396e5b6586b322bb15fdef4ed9b06b4a91c95`
+
+근찬의 s10 직접 재생은 `classroom-1014-s10-t1-v91` / basic / baseline, 카메라별 1초 heartbeat, source=folder를 유지한다. 실제 접근 가능한 데모 주소가 준비된 뒤 단일 송신자로 실행하고 재생 중 online=true·receive_status=recent, 마지막 heartbeat 수신 후 3000ms 이상에서 online=false를 확인한다. frame_status=recent는 성공 저장 프레임의 별도 상태다.
+
+sc10은 위 원본으로 엣지 탐지를 수행한 `sent_detections.jsonl`과 실제 사용 session_id를 받는다. session_id는 엣지 담당자가 규칙에 맞춰 확정하며, 기존 GT 기반 세션과 구분한다. 원본 존재·압축 무결성 확인을 이미지 디코딩·YOLO 추론·실제 화면 리허설 완료로 해석하지 않는다.
+
+남은 작업은 PR 리뷰 후 별도 데모 DB·프로세스 실행과 외부 접근 검증, 실제 s10 heartbeat 재생, sc10 탐지 결과 수신, 프론트 종단 검증이다. push·merge·배포는 별도 컨펌 전 수행하지 않는다.
