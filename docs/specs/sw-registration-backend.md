@@ -14,7 +14,7 @@ flowchart LR
     geometry --> decision[근접·위험구역 판단]
     decision --> db[(PostgreSQL)]
     db --> delivery[위치·카메라·경고 API]
-    delivery --> frontend[관제 화면: 팀 연동 검증 예정]
+    delivery --> frontend[관제 화면: s10 수신 확인·sc10 확인 예정]
     frontend -->|경고 확인| api
 ```
 
@@ -88,6 +88,20 @@ DB 변경은 Alembic으로 관리한다. 이번 관제 구현은 0011~0013을 �
 
 백엔드는 Python, FastAPI, SQLAlchemy, Alembic, NumPy, OpenCV, SciPy, PostgreSQL을 사용한다. Docker 백엔드 기준 Python은 3.11이며 로컬 데모는 Windows Python 3.12·PostgreSQL 16.15로 검증했다. YOLO는 엣지 담당 구성이고 React·TypeScript는 프론트 담당 구성이므로 서버가 직접 추론·화면 렌더링을 수행하는 것으로 기술하지 않는다.
 
-현재 백엔드 자동 테스트는 112개 통과했다. [로컬 PostgreSQL 검증 기록](../benchmarks/2026-11-12-local-dashboard-validation.md)에서는 저장된 강의실 탐지 536개 전송·위치 snapshot 536개·경고 발생 ID 9개·ack 저장 1개와 pack 송신 heartbeat 상태 전환을 확인했다. 서버 재시작 후 데이터 보존도 검증했다. 이 수치는 위치 정확도·실시간 처리 속도·전체 기능 종단 성공률이 아니다.
+11/12 당시 백엔드 자동 테스트 112개 통과 기록이 있으며, 후속 검증 기록에는 재생 도구 테스트가 포함돼 있다. 최신 문서 커밋 `aac8562`의 backend-test·backend-postgres-test·edge-test·frontend-test CI는 모두 성공했다. [로컬 PostgreSQL 검증 기록](../benchmarks/2026-11-12-local-dashboard-validation.md)에서는 저장된 강의실 탐지 536개 전송·위치 snapshot 536개·경고 발생 ID 9개·ack 저장 1개와 pack 송신 heartbeat 상태 전환을 확인했다. 서버 재시작 후 데이터 보존도 검증했다. 이 수치는 위치 정확도·실시간 처리 속도·전체 기능 종단 성공률이 아니다.
 
-명세서 최종본에서 별도로 채울 항목은 실제 관제 화면과 팝업 캡처, 실제 영상·heartbeat → 서버 → 프론트 리허설 결과, Unity sc10 확인, 실제 지도 정합, 팀 서버 실행 환경과 창작 완성일이다. 미검증 항목을 구현·연동 완료로 기재하지 않는다.
+### 11/13 실제 강의실 리허설 결과
+
+별도 실습 데모는 Ubuntu 24.04 서버에서 Docker Compose와 Python 3.11 백엔드 이미지, PostgreSQL 16-alpine으로 실행했다. 소스 commit은 `348f5ff`이며 기존 실험 서버·DB와 분리했다. 전체 위험 분석은 이 데모 프로세스에서만 true다. 운영 서버의 false 설정은 유지했다.
+
+근찬의 s10-t1 실제 엣지 folder 재생을 `classroom-1014-s10-t1-v91` / basic / baseline 조건으로 수신했다. [서버 관찰 결과](../benchmarks/2026-11-13-s10-live-integration.md)에서 두 카메라 online·recent, 위치 snapshot 갱신과 warning을 확인했다. 마지막 snapshot은 seq 949 / pair 2043이고 첫 offline 관측은 마지막 heartbeat 수신 후 3.300초·3.273초였다. folder heartbeat는 재생 프로그램의 응답 상태다. 프론트 수신은 팀 회신으로 확인했으며 서버 담당이 화면 영상을 직접 검토한 것은 아니다.
+
+엣지 PR #82의 송신 보고는 탐지 201 응답 949건·heartbeat 204 응답 176건·실패 0이다. 서버 문서의 polling 표본과 구분한다. 이전 저장 파일 재생 822쌍·최소 0.61594m와 이번 실제 재생 결과를 같은 실험 수치로 합치지 않는다.
+
+### 11/14 sc10 준비와 미완료 항목
+
+[준비 증거](../benchmarks/2026-11-14-sc10-live-readiness.json)에 따라 실제 탐지 ZIP의 130묶음과 cam1·cam2 캘리브레이션을 검증하고, `unity-grid-sc10-run1` / basic / baseline에 캘리브레이션·`unity-world-xzy` 지도·합의된 Unity 검토 구역을 등록했다. 근찬의 직접 재생용으로 탐지·heartbeat·ack는 보내지 않았고 snapshot 204 상태다. 이는 danger 발생·팝업·확인 완료를 뜻하지 않는다.
+
+기존 Unity 구역(X/Y 각각 3~4m, 주의 거리 0.5m)으로 sc10 GT 사람 위치 390개를 대조하면 모두 outside다. 따라서 sc10 근접 경고 리허설만으로 위험구역 침입의 실제 장면 검증까지 완료했다고 적을 수 없다. 자동 API 검증과 실제 장면 검증을 구분하고, 합의된 구역과 허용 데이터 중 진입 장면을 확인해야 한다. 강의실은 실제 마커 원점·구역 좌표가 아직 없으므로 기존 진단 지도와 빈 zones를 유지한다.
+
+명세서 최종본에서 별도로 채울 항목은 실제 관제 화면과 팝업 캡처·영상 검토, Unity sc10 danger·ack 종단 결과, 실제 위험구역 진입 장면 검증, 실제 지도 정합, 프로그램 이름·창작 완성일·저작자와 소스코드 제출 범위다. SSE 실환경 검증은 이번 최소 기능 리허설의 필수 완료 조건으로 추가하지 않는다. 보호구 판별·깊은 성능 및 정확도 개선은 스프린트 후속 범위다. PR 병합과 정식 운영 배포는 별도이며 현재의 데모 실행으로 대체 완료 처리하지 않는다.
