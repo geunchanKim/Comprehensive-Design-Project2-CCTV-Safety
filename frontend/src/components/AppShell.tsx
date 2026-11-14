@@ -9,7 +9,7 @@ import Sidebar from './Sidebar'
 // 모든 화면 공통: 사이드바(구역 목록) + 위험 팝업. 경고는 1초마다 다시 불러온다
 export default function AppShell() {
   const [areas] = usePolling((signal) => dataSource.listAreas(signal), 5000)
-  const [alerts, refreshAlerts] = usePolling((signal) => dataSource.listActiveAlerts(signal), 1000)
+  const [alerts, refreshAlerts] = usePolling((signal) => dataSource.listActiveAlerts(signal), 500)
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
