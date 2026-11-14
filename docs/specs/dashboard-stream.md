@@ -1,5 +1,7 @@
 # 대시보드 실시간 메시지 초안
 
+2026-11-05 구현 갱신: 로컬 2주 차 브랜치에 GET·SSE·구역 API와 영속 snapshot을 추가했다. 아래 1주 차의 미구현 표기는 당시 상태이며 현재 API·저장·오류 계약과 남은 연동은 [2주 차 구현 문서](week2-dashboard.md)를 따른다. 이 변경은 배포 완료를 뜻하지 않는다.
+
 1주 차 서버 결과물. 성윤은 이 형식으로 화면 입력을 준비하고, 근찬은 안전복 결과 형식을 검토한다. 11/3 #72 FE 회신으로 SSE 우선·GET 선연결과 지도 경계 표시안을 합의했다. 현재 공개된 실시간 엔드포인트는 없으며, `backend/dashboard.py`에 검증 스키마와 기존 결과 변환 함수가 있다. 아래 GET 규칙은 2주 차 구현을 위한 BE 계약 결정이며 아직 동작하는 API가 아니다.
 
 ## 좌표와 메시지 범위
@@ -72,4 +74,21 @@ Unity 평가 지도는 `coordinate_frame_id=unity-world-xzy`, X 2.79~7.79m, Y 1.
 
 지도는 기존 bounds/frame ID를 유지한다. 지도 밖 객체는 서버 snapshot에 남기고 FE가 `지도 밖 n`으로 알린다. 경고 목록은 필터링하지 않으며 해당 항목·위험 팝업에 `지도 밖` 배지를 붙인다. 구역/주의 띠는 원래 좌표로 판정하고 그리기만 클리핑하며 잘리는 길이(현재 왼쪽 0.29m)를 표식으로 알린다. 좌표나 주의 거리를 표시 때문에 바꾸지 않는다.
 
-구역 저장 API는 #74의 2주 차 후속으로, ZoneSet 전체 검증에 맞춘 전체 교체 PUT을 우선 검토한다. 아직 경로·검증 오류 코드·동시 수정 정책을 확정하거나 구현하지 않았다. FE의 400 요구와 FastAPI 검증 422 일관성을 해당 API 설계에서 맞춘다.
+구역 저장 API는 `PUT /dashboard/zones` 전체 교체이며 ETag/If-Match와 검증 오류 422를 사용한다. 상세는 [2주 차 구현](week2-dashboard.md)을 따른다.
+
+## 11/10 경고 영속화·확인 (#74)
+
+로컬 구현이며 push·배포 전이다. `backend`에서 `python -m alembic upgrade head`로 0013까지 적용한다. 기존 `risks`·`zone_states`를 유지하면서 snapshot에 공통 `alerts` 배열을 추가한다. 충돌 warning/danger와 구역 warning/intrusion을 저장하며 intrusion은 danger로 대응한다. vest는 여전히 unknown이며 경고를 생성하지 않는다. 전체 위험 분석을 자동 활성화하지 않는다.
+
+- `GET /alerts`: dashboard와 동일한 세 조건 쿼리 또는 운영 조건을 사용한다. 활성 경고와 종료된 미확인 danger 이력을 반환하며 결과 없음은 `[]`다. 다른 조건의 경고는 섞지 않는다.
+- `POST /alerts/{alert_id}/ack`: 같은 조건을 지정하고 `{"action":"radio"}`를 보낸다. action은 radio/dispatch/false-positive/null 중 하나이며 필수다. 성공 204/body 없음, 해당 조건에서 찾지 못하면 404, 잘못된 body/부분 조건은 422다. 확인 시각은 서버 epoch ms로 저장한다. 중복 확인은 최초 시각·조치를 유지하고 204를 반환한다.
+- 경고는 `alert_id`, `stream_id`, `kind`, `object_ids`, `zone_id`, `distance_m`, `level`, `reached_danger`, `started_at_ms`, `last_seen_at_ms`, `ended_at_ms`, `active`, `acknowledged`, `acknowledged_at_ms`, `action`을 제공한다. 시작·관측·종료는 서버 처리 시각이며 입력 프레임의 노출 시각이 아니다.
+- 충돌은 정렬된 객체 ID 쌍, 구역은 객체 ID+구역 ID로 연속 발생을 식별한다. warning→danger도 ID·시작 시각을 유지한다. 확인된 warning이 danger로 상승하면 확인 시각·조치를 초기화해 다시 확인하도록 한다. danger→warning에서도 `reached_danger=true`를 보존한다.
+- 성공 저장된 다음 프레임에서 위험이 없어지거나 객체가 사라지면 종료한다. 입력 자체가 멈춘 경우는 종료를 추정하지 않고 화면의 stale로 구분한다. 종료된 warning-only는 목록에서 빠지고, 한 번이라도 danger였던 미확인 경고는 남는다. 종료된 danger 확인 후에는 목록에서 빠지지만 DB 기록은 보존한다. 다시 발생하면 이전 미확인 경고와 별도로 새 ID를 만든다.
+- 구역 교체는 기존 활성 구역 경고를 종료하고 snapshot을 무효화한다. stream 재설정도 기존 활성 경고를 종료한다. 과거 미확인 danger는 이전 stream ID와 객체 ID를 보존하므로 현재 객체가 없어도 표시·확인이 가능해야 한다.
+
+**확인 상태 조회는 `GET /alerts`가 기준이다.** snapshot의 alerts는 해당 탐지를 저장한 시점의 값이다. ack만으로 snapshot·seq·emitted_at을 바꾸거나 새 snapshot SSE를 발행하지 않는다. FE는 경고 목록을 별도로 polling하고 ack 성공 직후 재조회한다. 요청을 직렬화하거나 세대 번호로 역순 응답을 무시한다. alert 조회·확인으로 탐지 stale 타이머를 연장하지 않는다. 다음 탐지 snapshot에는 최신 확인 상태가 포함된다.
+
+탐지·snapshot·경고 생성은 같은 트랜잭션이며 실패·중복 탐지는 경고를 생성하지 않는다. 발행·구역 변경·ack는 PostgreSQL의 동일 dashboard 조건 행 잠금 순서를 사용한다. 로컬 SQLite는 단일 쓰기 검증이며 PostgreSQL 동시 실행을 검증한 것은 아니다. 인증·권한은 기존 API와 동일하게 아직 없으므로 공개 배포 전 별도 확정한다.
+
+11/10 검증: backend·edge 전체 147개 통과. ID 유지·재발, warning→danger 재확인, 종료된 미확인 danger 보존, 조건 분리, null/잘못된 action, 중복 ack 최초 조치 유지, ack/탐지 저장 실패 롤백, 구역 교체·stream 재설정을 포함한다. 임시 SQLite의 0012 모델에서 0013 upgrade → alembic check → downgrade → upgrade → check를 통과했다. PostgreSQL 전체 마이그레이션·동시 실행 및 FE 실제 연동은 미검증이다.

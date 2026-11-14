@@ -1,0 +1,151 @@
+{
+  "condition": {
+    "session_id": "classroom-1014-s10-t1-v91",
+    "calibration_profile": "basic",
+    "algorithm": "baseline"
+  },
+  "server_commit": "348f5ff",
+  "provenance": "actual edge folder replay observed through sequential HTTP polling; not raw ingress log",
+  "observed_from_kst": "2026-11-13T17:33:12.347840+09:00",
+  "observed_until_kst": "2026-11-13T17:35:01.648994+09:00",
+  "polling_sleep_s": 0.5,
+  "poll_samples": 191,
+  "http_status_counts": {
+    "200": 543,
+    "204": 30
+  },
+  "request_errors": [],
+  "cameras": {
+    "cam1": {
+      "transitions": [
+        {
+          "observed_at_kst": "2026-11-13T17:33:12.347840+09:00",
+          "online": null,
+          "receive_status": "unknown",
+          "frame_status": "unknown"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:33:26.699835+09:00",
+          "online": true,
+          "receive_status": "unknown",
+          "frame_status": "unknown"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:33:27.276127+09:00",
+          "online": true,
+          "receive_status": "recent",
+          "frame_status": "unknown"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:33:29.570122+09:00",
+          "online": true,
+          "receive_status": "recent",
+          "frame_status": "recent"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:34:54.789422+09:00",
+          "online": true,
+          "receive_status": "recent",
+          "frame_status": "stale"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:34:55.360393+09:00",
+          "online": true,
+          "receive_status": "stale",
+          "frame_status": "stale"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:34:56.509760+09:00",
+          "online": false,
+          "receive_status": "stale",
+          "frame_status": "stale"
+        }
+      ],
+      "first_offline_heartbeat_age_ms": 3300,
+      "last_frame_id": 2043,
+      "final_heartbeat": {
+        "source": "folder",
+        "dropped_count": 1,
+        "max_queue_age_ms": 48,
+        "server_received_at_ms": 1794558893257
+      }
+    },
+    "cam2": {
+      "transitions": [
+        {
+          "observed_at_kst": "2026-11-13T17:33:12.347840+09:00",
+          "online": null,
+          "receive_status": "unknown",
+          "frame_status": "unknown"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:33:26.699835+09:00",
+          "online": true,
+          "receive_status": "unknown",
+          "frame_status": "unknown"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:33:27.276127+09:00",
+          "online": true,
+          "receive_status": "recent",
+          "frame_status": "unknown"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:33:29.570122+09:00",
+          "online": true,
+          "receive_status": "recent",
+          "frame_status": "recent"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:34:54.789422+09:00",
+          "online": true,
+          "receive_status": "recent",
+          "frame_status": "stale"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:34:55.360393+09:00",
+          "online": true,
+          "receive_status": "stale",
+          "frame_status": "stale"
+        },
+        {
+          "observed_at_kst": "2026-11-13T17:34:56.509760+09:00",
+          "online": false,
+          "receive_status": "stale",
+          "frame_status": "stale"
+        }
+      ],
+      "first_offline_heartbeat_age_ms": 3273,
+      "last_frame_id": 2043,
+      "final_heartbeat": {
+        "source": "folder",
+        "dropped_count": 1,
+        "max_queue_age_ms": 48,
+        "server_received_at_ms": 1794558893284
+      }
+    }
+  },
+  "first_observed_snapshot": {
+    "seq": 4,
+    "pair_id": 68
+  },
+  "last_observed_snapshot": {
+    "seq": 949,
+    "pair_id": 2043
+  },
+  "sampled_unique_warning_alert_ids": 51,
+  "sampled_risk_levels": {
+    "safe": 571,
+    "warning": 101
+  },
+  "sampled_minimum_distance_m": 0.5836090289495452,
+  "final_alerts": [],
+  "raw_log_sha256": "5b47677977739a8283f22c8c8f9869d9bf98d21eebd7c22778b667e504df5dc1",
+  "limitations": [
+    "Polling samples can miss short-lived alerts and intermediate snapshots; counts and minimum are sampled observations, not complete event totals or global extrema.",
+    "Sequential cameras/snapshot/alerts requests are not an atomic server snapshot.",
+    "Folder heartbeat represents playback process liveness, not physical camera hardware.",
+    "Frontend video and actual rendering were not inspected by the server observer.",
+    "sc10 detector replay, danger popup/ack and surveyed floor-map alignment are outside this run."
+  ]
+}

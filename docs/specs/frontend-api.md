@@ -1,5 +1,17 @@
 # 프론트엔드 백엔드 API 요청
 
+## 현재 구현과 후속 요청 (11/14 통합)
+
+아래 본문에는 초기 요청과 후속 제안이 포함되어 있다. 현재 구현 계약은 [2주 차 API](week2-dashboard.md)와 [경고 계약](dashboard-stream.md#1110-경고-영속화확인-74)을 우선한다.
+
+- snapshot GET·SSE, 별도 cameras 조회, 구역 전체 교체, 영속 alerts 조회·ack를 구현했다. 프론트 HTTP adapter가 연결되었으며 실제 서버 화면 종단 검증은 남아 있다.
+- snapshot/cameras/alerts 및 ack는 동일한 `session_id`, `calibration_profile`, `algorithm` 세 조건을 함께 전달한다. 모두 생략하면 서버 운영 조건을 사용하며 미설정 시 503이다. polling은 500ms이며 snapshot 204 중에도 cameras와 alerts를 별도로 조회한다.
+- 카메라 실제 응답은 `world`, `horizontal_fov_deg`, `last_frame.server_observed_at_ms`다. 아래 `position`, `fov_deg`, `last_frame_at_ms` 예시는 초기 요청 형식이다. `online=null`은 heartbeat 기록이 없어 상태 미확인이다.
+- `/dashboard/areas` 및 `area_id`별 필터는 아직 구현하지 않았다. 프론트는 조건 하나를 기본 구역 A로 표시한다. 아래 다중 구역 목록·필터는 후속 요청이다.
+- warning→danger 승격은 같은 alert_id를 유지하면서 재확인을 요구한다. ack 204 뒤 `/alerts`를 재조회하며 종료된 미확인 danger도 확인할 때까지 유지한다.
+- 위험구역·안전조끼 경고 및 클래스 쌍별 판정 설정은 후속이다. 현재 영속 경고는 근접 판정 대상이며 운영 `ENABLE_RISK_ANALYSIS=false`를 유지한다.
+- 충돌 거리는 객체 중심점 간 거리다. 경고음 반복과 브라우저 오디오 활성화는 화면에서 처리한다.
+
 프론트엔드 대시보드에서 필요한 백엔드 API를 정리한다.
 snapshot 데이터 형식은 [dashboard-stream.md](dashboard-stream.md)의 계약을 따른다.
 

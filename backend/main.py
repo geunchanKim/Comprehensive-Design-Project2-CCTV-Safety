@@ -9,14 +9,23 @@ try:
                       BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, MAX_SYNC_DELTA_MS,
                       FEATURE_CODES, _experiment_settings, router)
     from .database import get_db
+    from .dashboard_api import router as dashboard_router
+    from .heartbeat import router as heartbeat_router
+    from .alerts import router as alerts_router
 except ImportError:  # Docker runs this directory as the import root.
     from api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
                      BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, MAX_SYNC_DELTA_MS,
                      FEATURE_CODES, _experiment_settings, router)
     from database import get_db
+    from dashboard_api import router as dashboard_router
+    from heartbeat import router as heartbeat_router
+    from alerts import router as alerts_router
 
 app = FastAPI(title="CCTV Safety Monitor API")
 app.include_router(router)
+app.include_router(dashboard_router)
+app.include_router(heartbeat_router)
+app.include_router(alerts_router)
 
 
 @app.get("/health")
