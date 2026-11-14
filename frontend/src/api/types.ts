@@ -55,7 +55,7 @@ export interface Camera {
   position: Vec2
   yawDeg: number
   fovDeg: number
-  online: boolean
+  online: boolean | null
   lastFrameAtMs: number | null
 }
 
@@ -125,7 +125,6 @@ export interface AreaSummary {
 
 export interface AreaSnapshot {
   config: AreaConfig
-  cameras: Camera[]
   classes: ClassInfo[]
   objects: TrackedObject[]
   alerts: Alert[]
