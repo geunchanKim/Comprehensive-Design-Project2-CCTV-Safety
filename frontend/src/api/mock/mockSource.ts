@@ -38,7 +38,6 @@ export const mockSource: DataSource = {
     delay(
       {
         config: configOf(areaId),
-        cameras: (CAMERAS[areaId] ?? []).map((c) => ({ ...c, lastFrameAtMs: c.online ? Date.now() - 30 : null })),
         classes: CLASSES,
         objects: OBJECTS[areaId] ?? [],
         alerts: alerts.filter((a) => a.areaId === areaId),
@@ -49,6 +48,9 @@ export const mockSource: DataSource = {
       },
       signal,
     ),
+
+  listCameras: (areaId, signal) =>
+    delay((CAMERAS[areaId] ?? []).map((c) => ({ ...c, lastFrameAtMs: c.online ? Date.now() - 30 : null })), signal),
 
   listActiveAlerts: (signal) => delay(alerts, signal),
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { dataSource } from '../api/source'
-import type { Alert, AreaSnapshot, AreaSummary } from '../api/types'
+import type { Alert, AreaSnapshot, AreaSummary, Camera } from '../api/types'
 import { alertTitle, formatClock, KIND_TEXT } from '../lib/safety'
 import FloorPlan from './FloorPlan'
 
@@ -37,6 +37,7 @@ interface AlertProps {
 
 function DangerAlert({ alert, moreCount, area, nowMs, onAcknowledge }: AlertProps) {
   const [snapshot, setSnapshot] = useState<AreaSnapshot | null>(null)
+  const [cameras, setCameras] = useState<Camera[]>([])
   const [action, setAction] = useState('')
   const [busy, setBusy] = useState(false)
   // 구역으로 이동하면 팝업을 오른쪽 아래로 접는다. 확인 전까지는 사라지지 않는다
@@ -46,6 +47,7 @@ function DangerAlert({ alert, moreCount, area, nowMs, onAcknowledge }: AlertProp
   useEffect(() => {
     const ctrl = new AbortController()
     dataSource.getAreaSnapshot(alert.areaId, ctrl.signal).then(setSnapshot).catch(() => {})
+    dataSource.listCameras(alert.areaId, ctrl.signal).then(setCameras).catch(() => {})
     confirmRef.current?.focus()
     return () => ctrl.abort()
   }, [alert.areaId])
@@ -104,7 +106,7 @@ function DangerAlert({ alert, moreCount, area, nowMs, onAcknowledge }: AlertProp
           <figure className="danger-modal__snapshot">
             <figcaption className="muted small">발생 순간 평면도{area ? ` · ${area.name}` : ''}</figcaption>
             {snapshot ? (
-              <FloorPlan compact label={`${area?.name ?? ''} 평면도, ${title}`} config={snapshot.config} cameras={snapshot.cameras}
+              <FloorPlan compact label={`${area?.name ?? ''} 평면도, ${title}`} config={snapshot.config} cameras={cameras}
                 classes={snapshot.classes} objects={snapshot.objects} alerts={[alert]}
                 layers={{ trail: false, fov: false, zones: true }} />
             ) : (

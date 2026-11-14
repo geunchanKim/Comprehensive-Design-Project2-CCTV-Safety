@@ -1,29 +1,43 @@
 <div align="center">
 
-![CCTV Safety](docs/assets/readme-hero.svg)
+![CCTV Safety — 두 카메라 기반 위치 추정과 안전 관제](docs/assets/readme-hero.svg)
 
 ### 일반 IP 카메라 2대로 작업자의 실제 바닥 위치를 추정하는 산업현장 안전 모니터링 시스템
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white&style=flat-square)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white&style=flat-square)](https://fastapi.tiangolo.com/)
 [![YOLO](https://img.shields.io/badge/YOLO-11-111F68?style=flat-square)](https://github.com/ultralytics/ultralytics)
+[![React](https://img.shields.io/badge/React-TypeScript-149ECA?logo=react&logoColor=white&style=flat-square)](frontend/)
 [![Unity](https://img.shields.io/badge/Unity-Simulation-000000?logo=unity&logoColor=white&style=flat-square)](unity-sim/)
 [![CI](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml/badge.svg)](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/workflows/ci.yml)
 ![Research](https://img.shields.io/badge/status-research_prototype-38B2AC?style=flat-square)
 
-[**연구 배경**](#-연구-배경) · [**주요 기능**](#-주요-기능) · [**시스템 구조**](#-시스템-구조) · [**실험 결과**](#-실험-결과) · [**빠른 시작**](#-빠른-시작) · [**실험 재현**](#-실험-재현) · [**문제 해결**](#-문제-해결)
+[**현재 상태**](#현재-상태) · [**연구 배경**](#연구-배경) · [**주요 기능**](#주요-기능) · [**시스템 구조**](#시스템-구조) · [**실험 결과**](#실험-결과) · [**빠른 시작**](#빠른-시작) · [**실험 재현**](#실험-재현) · [**문제 해결**](#문제-해결)
 
 </div>
 
 ---
 
-## 🔎 한눈에 보기
+## 한눈에 보기
 
 CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지하고, 서로 다른 화면의 동일인을 연결해 실제 바닥 좌표를 계산합니다. 한 카메라에서 작업자가 가려진 경우에는 이전 이동 경로를 이용해 위치 소실을 보완하고, 추정 좌표로 작업자와 장비 사이의 거리 및 충돌 위험을 판단합니다.
 
-<p align="center">
-  <code>사람 탐지</code> → <code>카메라별 추적</code> → <code>동일인 매칭</code> → <code>바닥 위치 추정</code> → <code>거리·TTC</code> → <code>위험 경고</code>
-</p>
+![두 카메라 입력에서 위치 추정·저장·관제 화면까지의 데이터 흐름](docs/assets/system-flow.svg)
+
+## 현재 상태
+
+**2026-11-14 · develop `a16adcb` 기준.** 관제 API·엣지 heartbeat·프론트 HTTP adapter가 통합됐고, 해당 커밋의 CI와 자동 배포 워크플로가 성공했습니다. 실제 화면에서 danger 팝업과 확인까지 이어지는 종단 검증은 남아 있습니다.
+
+![현재 통합된 기능과 검증이 남은 범위](docs/assets/integration-status.svg)
+
+| 영역 | 현재 제공 | 남은 확인 |
+| --- | --- | --- |
+| 엣지 | 탐지·포즈 시간 분리, 오래된 전송 짝 버림, 카메라별 1초 heartbeat | 실제 재생에서 timeout·재시작·최신성 검증 |
+| 서버 | snapshot GET·SSE, 지도·구역 설정/판정, 카메라 상태, 영속 경고·확인 API | 실환경 전달 지연·부하 검증 |
+| 프론트 | snapshot·cameras·alerts 500ms polling, 위험 팝업·확인 HTTP 연결 | 실제 엣지→화면→ack 종단 리허설 |
+| 보호구·판정 설정 | 미판단 상태 표현, 전체 위험 분석 기본 비활성 | 보호구 결과 연결, 클래스 쌍별 판정 설정 |
+
+실시간 `POST /detections`는 **baseline**으로 저장합니다. `improved`는 저장된 세션의 재계산 경로이며, `IMPROVED_FEATURES=cdfg`가 실시간 입력을 improved로 바꾸지는 않습니다. 전체 위험 분석 기본값은 `false`입니다.
 
 ### 실험 결과 요약
 
@@ -47,15 +61,15 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 
 ### 세 가지 핵심 접근
 
-| 📐 렌즈 왜곡 보정 | 🔗 카메라 간 동일인 매칭 | 🛡️ 폐색 상황 보완 |
+| 렌즈 왜곡 보정 | 카메라 간 동일인 매칭 | 폐색 상황 보완 |
 | --- | --- | --- |
 | ChArUco로 내부 파라미터와 왜곡 계수를 추정해 화면 가장자리 좌표를 보정합니다. | 발 위치를 좌표 평면에 투영하고 헝가리안 알고리즘으로 두 화면의 작업자를 1:1 연결합니다. | 한 카메라에서 놓친 작업자는 기존 궤적의 예측 위치를 이용해 일시적인 위치 소실을 막습니다. |
 
-> 📄 **관련 논문**<br>
+> **관련 논문**<br>
 > 「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」<br>
-> 2026 한국정보기술학회 추계 종합학술대회 제출 준비
+> 아래 실험 결과는 실제 CCTV 정지 장면의 위치 추정 평가입니다. 관제 종단 검증과 평가 범위가 다릅니다.
 
-## 🎯 연구 배경
+## 연구 배경
 
 한 대의 CCTV에서 얻은 2D 화면 좌표만으로는 작업자와 장비 사이의 실제 거리를 계산하기 어렵습니다. 카메라를 두 대 사용해도 광각 렌즈의 왜곡은 화면 가장자리 좌표를 밀어내고, 가림과 밀집은 동일 작업자 대응을 어렵게 만듭니다. 이 프로젝트는 고가의 전용 센서 없이 일반 IP 카메라와 컴퓨터 비전만으로 이 문제를 해결할 수 있는지 검증합니다.
 
@@ -68,49 +82,24 @@ CCTV Safety는 두 대의 **TP-Link Tapo C200** 영상에서 작업자를 탐지
 
 > Unity는 초기 파이프라인 개발과 반복 가능한 가상 데이터 생성에 사용했습니다. 논문의 정량 결과는 렌즈 왜곡과 센서 노이즈가 포함된 **실제 촬영 영상**으로 산출했습니다.
 
-## ✨ 주요 기능
+## 주요 기능
 
 | 영역 | 구현 내용 | 상태 |
 | --- | --- | :---: |
-| **탐지** | YOLO11n 객체 탐지, YOLO11n-pose 발목 추출 | ✅ 완료 |
-| **추적** | 카메라별 ByteTrack, 바닥 좌표 기반 통합 ID | ✅ 완료 |
-| **입력** | Unity 폴더·영상·웹캠·Tapo RTSP 스트림, 동시 녹화 | ✅ 완료 |
-| **캘리브레이션** | Unity 파라미터 변환, ChArUco·ArUco 실측 보정 | ✅ 완료 |
-| **매칭** | 렌즈 왜곡 보정, 에피폴라 제약, 좌표 평면 기반 1:1 대응 | ✅ 완료 |
-| **위치 추정** | 발목 삼각측량, 폐색 보완(단일 카메라 투영) | ✅ 완료 |
-| **안전 판단** | Kalman 속도 추정, 거리·TTC 계산, 경고 유지 | ✅ 완료 |
-| **평가** | 2×2 조건별 성공률·오차·통계 검정 자동 분석 | ✅ 완료 |
-| **관제 화면** | 실시간 관제 및 결과 시각화 | 🚧 개발 중 |
+| **탐지** | YOLO11n 객체 탐지, YOLO11n-pose 발목 추출 | 구현 |
+| **추적** | 카메라별 ByteTrack, 바닥 좌표 기반 통합 ID | 구현 |
+| **입력** | Unity 폴더·영상·웹캠·Tapo RTSP 스트림, 동시 녹화 | 구현 |
+| **캘리브레이션** | Unity 파라미터 변환, ChArUco·ArUco 실측 보정 | 구현 |
+| **매칭** | 렌즈 왜곡 보정, 에피폴라 제약, 좌표 평면 기반 1:1 대응 | 구현 |
+| **위치 추정** | 발목 삼각측량, 폐색 보완(단일 카메라 투영) | 구현 |
+| **안전 판단** | 거리·TTC, 구역 판정, 경고 저장·확인 | 구현 · 전체 위험 분석 기본 비활성 |
+| **평가** | 2×2 조건별 성공률·오차·통계 검정 자동 분석 | 구현 |
+| **관제 화면** | 위치·카메라·경고 조회, 위험 팝업·확인 | HTTP 연결 구현 · 종단 검증 대기 |
 
-## 🧩 시스템 구조
+## 시스템 구조
 
-```mermaid
-flowchart LR
-    subgraph SOURCE[입력]
-        CAM[📹 Tapo C200 × 2]
-        UNITY[🎮 Unity GT]
-    end
-    subgraph EDGE[엣지]
-        SYNC[프레임 동기화]
-        DET[YOLO 탐지<br/>ByteTrack 추적]
-    end
-    subgraph SERVER[FastAPI 서버]
-        MATCH[동일인 1:1 매칭]
-        POS[바닥 위치 추정]
-        SAFE[거리 · 속도 · TTC]
-    end
-    CAL[📐 ChArUco<br/>ArUco 보정] --> MATCH
-    CAM --> SYNC --> DET --> MATCH
-    UNITY -. 검증 .-> POS
-    MATCH --> POS --> SAFE --> DB[(PostgreSQL)]
+입력과 탐지 처리는 엣지에서, 매칭·좌표 계산·영속화는 FastAPI에서 수행합니다. 관제 화면은 저장된 snapshot과 카메라·경고 상태를 각각 조회합니다. SSE는 서버가 제공하며 현재 프론트는 polling을 사용합니다.
 
-    classDef source fill:#102a43,stroke:#54e2d0,color:#fff
-    classDef process fill:#163b55,stroke:#82b8ff,color:#fff
-    classDef safety fill:#0a5b63,stroke:#54e2d0,color:#fff
-    class CAM,UNITY,CAL source
-    class SYNC,DET,MATCH,POS process
-    class SAFE,DB safety
-```
 
 | 단계 | 처리 내용 |
 | --- | --- |
@@ -132,7 +121,7 @@ flowchart LR
 
 </details>
 
-## 📊 실험 결과
+## 실험 결과
 
 > 아래 내용은 논문 「IP 카메라 기반 사람 위치 추정에서 렌즈 캘리브레이션과 매칭 알고리즘의 효과 분석」의 실험 결과입니다.
 
@@ -171,6 +160,9 @@ flowchart LR
 | P90 오차 (cm) | 12.2 | 11.7 | 13.3 | 11.8 |
 | 15 cm 이내 (%) | 84.1 | 90.7 | 91.6 | **96.3** |
 
+<details>
+<summary><strong>영상 위치별 상세 결과와 해석</strong></summary>
+
 ### 영상 내 위치별 결과
 
 주점에서 정답 지점까지의 정규화 거리(0: 중심, 1: 모서리)로 구간을 나누고, 두 카메라 중 큰 값을 사용했습니다.
@@ -192,12 +184,14 @@ flowchart LR
 
 > **매칭 알고리즘은 추정 가능한 대상을 늘리고, 렌즈 캘리브레이션은 특히 화면 가장자리의 정확도를 회복합니다.** 가운데 구간에서 캘리브레이션으로 줄어든 약 1 cm는 통계적 차이가 있었지만(Wilcoxon p = 0.034), ±2 cm 동등성 범위 안에서는 실질적으로 같은 수준이었습니다(TOST p = 0.020).
 
+</details>
+
 ### 한계
 
 - 가장자리 결과는 두 십자 마커 위의 9명에 한정됩니다.
 - 평가는 한 장소의 정지 장면에서만 수행했으며, 보행 장면의 실시간 위치 정확도와 추적 성능 평가는 향후 과제입니다.
 
-## 🚀 빠른 시작
+## 빠른 시작
 
 > 아래 명령 블록은 각각 **저장소 루트에서 시작하는 새 터미널**을 기준으로 작성했습니다.
 
@@ -207,12 +201,13 @@ flowchart LR
 | --- | --- | --- |
 | 파이프라인을 빠르게 확인 | [Unity 샘플 Dry Run](#3-서버-없이-먼저-확인하기) | Python, 모델 가중치, Unity 출력 폴더 |
 | API·DB까지 통합 실행 | [Docker Compose 실행](#4-백엔드와-데이터베이스-실행) | 위 구성 + Docker Desktop |
-| 실제 CCTV 연결 | [카메라 캘리브레이션](#-실제-카메라-캘리브레이션) | Tapo C200 2대, ChArUco·ArUco 보드 |
+| 실제 CCTV 연결 | [카메라 캘리브레이션](#실제-카메라-캘리브레이션) | Tapo C200 2대, ChArUco·ArUco 보드 |
 
 ### 준비 사항
 
 - Python 3.11 이상
 - Docker Desktop 및 Docker Compose
+- 프론트 로컬 개발: Node.js 22, npm (CI 기준)
 - Git
 
 ### 1. 저장소와 서브모듈 받기
@@ -233,7 +228,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-v2 모델 가중치를 `ai/runs/train_v2/weights/best.pt`에 둡니다. 직접 학습하려면 데이터셋을 준비한 뒤 `python train.py --version v2`를 실행합니다.
+기본 모델은 COCO `yolo11n.pt`와 `yolo11n-pose.pt`이며 첫 실행 시 다운로드가 필요합니다. `--model v2`를 선택할 때만 `ai/runs/train_v2/weights/best.pt`가 필요합니다. 직접 학습하려면 데이터셋을 준비한 뒤 `python train.py --version v2`를 실행합니다.
 
 ### 3. 서버 없이 먼저 확인하기
 
@@ -258,24 +253,10 @@ python edge/unity_reader.py <Unity_출력_폴더> --dry-run --max-frames 10 --sa
 
 ### 4. 백엔드와 데이터베이스 실행
 
-`infra/.env` 파일을 만들고 아래 값을 입력합니다. 비밀번호는 로컬 환경에 맞게 바꿔 주세요.
+저장소 루트에서 예시 환경 파일을 복사하고 `infra/.env`의 DB·pgAdmin 비밀번호를 로컬 값으로 바꿉니다. 기존 `.env`가 있다면 유지하고 예시와 차이를 확인합니다.
 
-```dotenv
-POSTGRES_USER=cctv_user
-POSTGRES_PASSWORD=change-me
-POSTGRES_DB=cctv_safety_db
-PGADMIN_DEFAULT_EMAIL=admin@example.com
-PGADMIN_DEFAULT_PASSWORD=change-me
-BACKEND_PORT=8000
-PGADMIN_PORT=5050
-
-# 선택: 위치 추정 알고리즘 설정
-MAX_EPIPOLAR_ERROR_PX=50
-BOX_FOOT_Z_MIN=-0.35
-BOX_FOOT_Z_MAX=0.2
-ANKLE_FOOT_Z_MIN=-0.1
-ANKLE_FOOT_Z_MAX=0.4
-BBOX_POSITION_METHOD=triangulate
+```powershell
+Copy-Item infra/.env.example infra/.env
 ```
 
 ```powershell
@@ -286,6 +267,9 @@ docker compose up --build
 - API 상태: <http://localhost:8000/health>
 - Swagger UI: <http://localhost:8000/docs>
 - pgAdmin: <http://localhost:5050>
+- Compose 프론트: <http://localhost:32123>
+
+백엔드 컨테이너는 시작 시 Alembic migration을 head(`0013`)까지 적용합니다. 지도·카메라 캘리브레이션·탐지 입력이 자동 생성되지는 않습니다.
 
 ### 5. 백엔드까지 연결해 실행하기
 
@@ -296,7 +280,44 @@ python edge/unity_reader.py <Unity_출력_폴더> --server http://localhost:8000
 
 실행할 때마다 폴더 이름에 `-runN`이 붙은 새 `session_id`가 만들어집니다. 엣지는 두 카메라의 캘리브레이션을 먼저 등록한 뒤 탐지 결과와 정답 좌표를 전송합니다.
 
-## 📐 실제 카메라 캘리브레이션
+### 6. 관제 화면 연결하기
+
+개발 서버를 쓸 때는 저장소 루트의 새 터미널에서 실행합니다. 기존 `frontend/.env`가 있다면 덮어쓰지 않고 필요한 값을 추가합니다.
+
+```powershell
+cd frontend
+Copy-Item .env.example .env
+npm ci
+npm run dev
+```
+
+`frontend/.env`의 `VITE_BACKEND_URL`을 API 주소로 지정합니다. 프론트는 `/api` 프록시를 통해 요청하며 프록시가 접두사를 제거합니다. Vite가 출력한 로컬 주소로 접속합니다.
+
+| 설정 | 방법 |
+| --- | --- |
+| 프론트에서 조건 지정 | `VITE_SESSION_ID`, `VITE_CALIBRATION_PROFILE`, `VITE_ALGORITHM` 세 값을 함께 설정 |
+| 서버 운영 조건 사용 | 위 세 값 모두 생략하고 `infra/.env`의 `DASHBOARD_SESSION_ID`, `DASHBOARD_CALIBRATION_PROFILE`, `DASHBOARD_ALGORITHM` 지정 |
+| 지도 초기 설정 | 같은 조건으로 `PUT /dashboard/configuration`에 map·zones 등록 ([계약](docs/specs/week2-dashboard.md)) |
+
+조건 미설정은 503, 아직 snapshot이 없으면 204입니다. 카메라는 snapshot과 별도 조회하며 heartbeat 기록이 없는 `online=null`은 **상태 미확인**입니다. 현재 화면은 기본 구역 A 하나를 사용하고 `/dashboard/areas`는 제공하지 않습니다.
+
+### 운영 기본값
+
+환경변수 override가 우선합니다. 전체 목록은 [환경변수 예시](infra/.env.example), 실제 적용값은 `/health`에서 확인합니다.
+
+| 설정 | 기본값 | 의미 |
+| --- | --- | --- |
+| `ANKLE_FOOT_Z_MIN` / `ANKLE_FOOT_Z_MAX` | −0.1 / **0.15 m** | 삼각측량 발목 높이 범위 |
+| `BOX_FOOT_Z_MIN` / `BOX_FOOT_Z_MAX` | −0.35 / 0.2 m | bbox 하단 높이 범위 |
+| `MAX_GROUND_DISTANCE_M` | 1.5 m | 개선 매칭 거리 |
+| `GROUND_ANKLE_Z_M` / `SINGLE_CAMERA_ANKLE_Z_M` | 0.08 / 0.08 m | 발목 평면 투영 높이; 상자 하단은 0 m |
+| `FLOOR_TRACK_GATE_M` | 0.8 m | 바닥 추적 연결 거리 |
+| `MAX_SYNC_DELTA_MS` / `MAX_EPIPOLAR_ERROR_PX` | 50 ms / 50 px | 프레임 동기화 / 기준 매칭 허용치 |
+| `IMPROVED_FEATURES` | `cdfg` | improved 재계산 기능 조합 |
+| `WARNING_DISTANCE_M` / `DANGER_DISTANCE_M` | 1.0 / 0.5 m | 주의 / 위험 거리 |
+| `ENABLE_RISK_ANALYSIS` | **false** | 전체 위험 분석 활성화는 별도 결정 |
+
+## 실제 카메라 캘리브레이션
 
 실제 CCTV는 ChArUco 보드로 내부 파라미터를 계산하고, 두 카메라가 함께 보는 18 cm ArUco 마커로 공통 월드 좌표계를 설정합니다.
 
@@ -320,7 +341,7 @@ python detect_aruco.py `
 
 카메라 2도 같은 `session_id`와 움직이지 않은 기준 마커를 사용해야 합니다. 전체 절차는 [실제 카메라 캘리브레이션 안내](ai/calibration/README.md)를 확인하세요.
 
-## 🔌 API 요약
+## API 요약
 
 | Method | Endpoint | 설명 |
 | --- | --- | --- |
@@ -329,6 +350,14 @@ python detect_aruco.py `
 | `PUT` | `/cameras/{camera_id}/calibration` | 세션별 카메라 캘리브레이션 등록 |
 | `POST` | `/detections` | 동기화된 두 카메라의 탐지 묶음 처리 |
 | `POST` | `/ground-truth` | Unity 정답 좌표 저장 |
+| `GET` | `/dashboard/snapshot` | 최신 저장 snapshot, 결과 없으면 204 |
+| `GET` | `/dashboard/events` | SSE snapshot 전달 |
+| `PUT` | `/dashboard/configuration` | 조건별 지도·구역 초기 설정 |
+| `GET` / `PUT` | `/dashboard/zones` | 구역 조회·ETag 기반 전체 교체 |
+| `GET` | `/dashboard/cameras` | 위치·시야·heartbeat·프레임 상태 |
+| `POST` | `/edge/heartbeat` | 탐지 큐와 독립적인 카메라 상태 수신 |
+| `GET` | `/alerts` | 활성 경고와 종료된 미확인 danger 조회 |
+| `POST` | `/alerts/{alert_id}/ack` | 확인·조치 저장, 성공 204 |
 
 - 월드 좌표는 `[X, Y, Z]`, 단위는 m이며 Z가 높이입니다.
 - Unity의 `(x, y, z)`는 엣지에서 `(x, z, y)`로 변환합니다.
@@ -338,22 +367,18 @@ python detect_aruco.py `
 
 전체 계약과 요청·응답 예시는 [메시지 명세](docs/specs/message-spec.md)와 [탐지·삼각측량 API 문서](docs/detections-api.md)를 참고하세요.
 
-### 주요 설정값
+### 경고의 수명과 확인
 
-| 환경변수 | 기본값 | 설명 |
-| --- | ---: | --- |
-| `MAX_EPIPOLAR_ERROR_PX` | `50` | 동일인 후보로 허용할 최대 에피폴라 거리(px) |
-| `BOX_FOOT_Z_MIN` / `BOX_FOOT_Z_MAX` | `-0.35` / `0.2` | bbox 하단점 삼각측량의 허용 높이 범위(m) |
-| `ANKLE_FOOT_Z_MIN` / `ANKLE_FOOT_Z_MAX` | `-0.1` / `0.4` | 발목 중간점 삼각측량의 허용 높이 범위(m) |
-| `BBOX_POSITION_METHOD` | `triangulate` | bbox 위치 계산 방식: `triangulate` 또는 `plane` |
+![경고 ID 유지, 위험 승격 재확인, 종료 후 미확인 위험 보존 흐름](docs/assets/alert-lifecycle.svg)
 
-현재 적용된 서버 설정은 `GET /health` 응답에서 확인할 수 있습니다. 실험 결과를 비교할 때는 코드 커밋뿐 아니라 이 설정값도 함께 기록해야 합니다.
+같은 발생 건은 warning→danger에서도 ID를 유지합니다. 확인했던 warning이 danger로 상승하면 재확인을 요구합니다. **ack는 확인 기록이며 위험 자체를 해제하지 않습니다.** 종료된 미확인 danger는 확인할 때까지 남고 재발하면 새 ID를 부여합니다. ack 204 이후 프론트는 `/alerts`를 다시 조회합니다.
 
-## ✅ 테스트
+## 테스트
 
 ```powershell
 pip install -r backend/requirements.txt
-python -m pytest backend/tests -q
+python -m pytest --rootdir=. --confcutdir=backend/tests backend/tests -q
+python -m pytest --rootdir=. --confcutdir=ai/tests ai/tests -q
 ```
 
 테스트는 발목·바운딩 박스의 바닥 접점, 왜곡 보정, 사람 매칭, 바닥 평면 투영, 삼각측량, 캘리브레이션 등록, 세션별 객체 ID, 중복·동기화 검증과 정답 좌표 저장을 확인합니다.
@@ -363,9 +388,11 @@ GitHub Actions는 `develop`·`main` 브랜치의 push와 PR마다 다음 검증�
 | 작업 | 검증 내용 |
 | --- | --- |
 | `backend-test` | Python 3.11, SQLite 환경에서 백엔드 테스트 실행 |
+| `backend-postgres-test` | PostgreSQL 16 전체 migration·check·0010 왕복과 백엔드 테스트 |
 | `edge-test` | AI·평가 코드 문법 검사와 엣지 테스트 실행 |
+| `frontend-test` | Node.js 22, `npm ci`, 빌드·린트 |
 
-## 🔁 실험 재현
+## 실험 재현
 
 탐지 결과를 압축한 **experiment pack**을 서버에 다시 전송하면 YOLO 추론을 반복하지 않고도 동일 입력으로 위치 추정 알고리즘을 비교할 수 있습니다. 저장소에는 `s1`~`s4`의 bbox·발목 기준 pack이 포함되어 있습니다.
 
@@ -406,7 +433,7 @@ python eval/run_experiment.py run `
 
 > 이 pack 평가는 서버 알고리즘의 반복 비교를 위한 도구입니다. 논문에 제시한 사람 107명의 실제 CCTV 2×2 실험과 Unity pack 평가는 데이터셋과 목적이 다릅니다.
 
-## 🧰 문제 해결
+## 문제 해결
 
 | 증상 | 원인 | 해결 방법 |
 | --- | --- | --- |
@@ -428,7 +455,7 @@ docker compose ps
 docker compose logs --tail 100 backend
 ```
 
-## 🗂️ 저장소 구성
+## 저장소 구성
 
 ```text
 .
@@ -440,42 +467,58 @@ docker compose logs --tail 100 backend
 │   ├── scripts/           # 데이터 병합·자동 라벨링 도구
 │   └── train.py           # YOLO 학습 진입점
 ├── backend/               # FastAPI, DB 모델, 테스트
+├── frontend/              # React·TypeScript 관제 화면, HTTP adapter
+├── scripts/               # 데모 실행·리허설·재생 도구
 ├── docs/                  # 회의 기록, 명세, API 문서
 ├── infra/                 # PostgreSQL·Backend Docker Compose
 └── unity-sim/             # Unity 시뮬레이터 서브모듈
 ```
 
-## 🗺️ 진행 상황과 다음 단계
+## 진행 상황과 다음 단계
 
-- [x] 실제 Tapo CCTV 두 대의 동시 녹화·연동
-- [x] 렌즈 캘리브레이션 × 매칭 알고리즘 2×2 실험
-- [x] 10개 시나리오·15개 녹화의 실측 위치 평가
-- [x] 좌표 평면 매칭·추적과 폐색 보완
-- [x] 거리·속도 기반 TTC 계산과 위험 경고 유지
-- [x] 논문 결과 기반 중간발표 자료 정리
-- [ ] 논문 교정 및 학회 제출
-- [ ] 보행 장면의 추적·경고 정량 평가
-- [ ] 여러 장소·가장자리 표본 확대 평가
-- [ ] 실시간 관제 UI 완성
+### 통합과 검증 기록
 
-## 📚 문서 모음
+| 근거 | 확인된 범위 |
+| --- | --- |
+| [PR #82](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/pull/82) · [#84](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/pull/84) · [#83](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/pull/83) | 엣지 최신성·heartbeat, 프론트 HTTP 연결, 관제 서버 통합 |
+| [CI · a16adcb](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/runs/43593971907) | backend·PostgreSQL·edge·frontend 4개 작업 성공 |
+| [Deploy · a16adcb](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/actions/runs/43593971887) | 자동 배포 워크플로 성공; 실제 화면 종단 검증과 구분 |
+| 로컬 병합 검증 | backend 115개, edge 47개 통과 |
+| [s10 저장 탐지 재생](docs/benchmarks/2026-11-12-rehearsal-readiness.json) | 822/822쌍, 최소 약 0.616 m, warning 발생·danger 없음 |
+| [Unity sc10 서버 계약 검증](docs/specs/dashboard-rehearsal-1112.md) | GT bbox·발목 기반 130쌍, danger·ack·종료 후 보존 검증. YOLO·실제 화면 검증 아님 |
 
+### 다음 검증
+
+- 실제 강의실 마커 원점·지도 bounds 정합
+- 실제 엣지 heartbeat를 포함한 s10 재생과 online/offline 전환
+- sc10 실제 탐지→관제 danger 팝업→확인·재조회 종단 리허설
+- 클래스 쌍별 대상·거리 설정과 보호구 결과 연결
+- 보행·여러 장소·가장자리 표본 확대 정량 평가
+
+데모 실행과 완료 판정은 [리허설 인계 문서](docs/specs/dashboard-rehearsal-1112.md)를 따릅니다. 별도 데모에서 위험 분석을 활성화한 결과를 운영 기본값이나 전체 검증 완료로 해석하지 않습니다.
+
+## 문서 모음
+
+- [관제 API·설정 계약](docs/specs/week2-dashboard.md)
+- [snapshot·경고 상태 계약](docs/specs/dashboard-stream.md)
+- [프론트 연결·요청 사항](docs/specs/frontend-api.md)
+- [데모·리허설 인계](docs/specs/dashboard-rehearsal-1112.md)
 - [AI 학습 안내](ai/README.md)
 - [실제 카메라 캘리브레이션](ai/calibration/README.md)
 - [Unity·Edge·Backend 메시지 명세](docs/specs/message-spec.md)
 - [탐지·삼각측량 API](docs/detections-api.md)
 - [협업 및 커밋 규칙](CONVENTION.md)
 
-## 👥 팀
+## 팀
 
 | 이름 | 주요 역할 |
 | --- | --- |
 | 김근찬 | AI 탐지 모델, 엣지 파이프라인, 좌표 추정 |
 | 조해민 | 백엔드 API, 데이터 처리, 카메라 캘리브레이션 |
-| 서성윤 | Unity 가상환경, 데이터 생성, 결과 시각화 |
+| 서성윤 | Unity 가상환경, 데이터 생성, React 관제 화면 |
 | 양영준·박주환·김채현 | 프로젝트 자문 및 공동 연구 |
 | 손희문 부장 | 산업현장 요구사항 및 환경 자료 자문 |
 
-## ⚠️ 안내
+## 안내
 
 이 프로젝트는 종합설계프로젝트 연구용 프로토타입입니다. 계산 결과는 현장 안전관리자의 판단을 보조하기 위한 것이며, 단독으로 작업자의 안전을 보장하지 않습니다.
