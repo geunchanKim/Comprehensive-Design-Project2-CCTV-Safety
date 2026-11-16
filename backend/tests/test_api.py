@@ -72,7 +72,7 @@ def test_processing_timings_exposed_and_logged(caplog):
     timings = response.json()["timings_ms"]
     assert set(timings) == {
         "validation_ms", "calibration_bundle_ms", "ingest_undistort_ms",
-        "matching_position_tracking_ms", "floor_tracking_ms", "risk_ms", "commit_ms",
+        "matching_position_tracking_ms", "floor_tracking_ms", "risk_ms", "dashboard_snapshot_ms", "commit_ms",
         "response_prepare_ms", "total_ms",
     }
     assert all(value >= 0 for value in timings.values())

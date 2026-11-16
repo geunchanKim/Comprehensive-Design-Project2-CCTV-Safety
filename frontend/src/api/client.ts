@@ -12,8 +12,23 @@ export class ApiError extends Error {
 
 export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { signal })
+  if (res.status === 204) {
+    throw new ApiError(204, 'no data')
+  }
   if (!res.ok) {
     throw new ApiError(res.status, `${res.status} ${res.statusText}`)
   }
   return res.json() as Promise<T>
+}
+
+export async function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!res.ok) {
+    throw new ApiError(res.status, `${res.status} ${res.statusText}`)
+  }
 }

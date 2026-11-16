@@ -1,5 +1,140 @@
 {
   "$defs": {
+    "AlertState": {
+      "additionalProperties": false,
+      "properties": {
+        "alert_id": {
+          "title": "Alert Id",
+          "type": "string"
+        },
+        "stream_id": {
+          "title": "Stream Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "collision",
+            "zone"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "object_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Object Ids",
+          "type": "array"
+        },
+        "zone_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zone Id"
+        },
+        "distance_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance M"
+        },
+        "level": {
+          "enum": [
+            "warning",
+            "danger"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "reached_danger": {
+          "title": "Reached Danger",
+          "type": "boolean"
+        },
+        "started_at_ms": {
+          "title": "Started At Ms",
+          "type": "integer"
+        },
+        "last_seen_at_ms": {
+          "title": "Last Seen At Ms",
+          "type": "integer"
+        },
+        "ended_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ended At Ms"
+        },
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "acknowledged": {
+          "title": "Acknowledged",
+          "type": "boolean"
+        },
+        "acknowledged_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Acknowledged At Ms"
+        },
+        "action": {
+          "anyOf": [
+            {
+              "enum": [
+                "radio",
+                "dispatch",
+                "false-positive"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Action"
+        }
+      },
+      "required": [
+        "alert_id",
+        "stream_id",
+        "kind",
+        "object_ids",
+        "level",
+        "reached_danger",
+        "started_at_ms",
+        "last_seen_at_ms",
+        "ended_at_ms",
+        "active",
+        "acknowledged",
+        "acknowledged_at_ms",
+        "action"
+      ],
+      "title": "AlertState",
+      "type": "object"
+    },
     "DashboardMap": {
       "additionalProperties": false,
       "properties": {
@@ -433,6 +568,13 @@
       "default": false,
       "title": "Vest Evaluated",
       "type": "boolean"
+    },
+    "alerts": {
+      "items": {
+        "$ref": "#/$defs/AlertState"
+      },
+      "title": "Alerts",
+      "type": "array"
     }
   },
   "required": [

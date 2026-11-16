@@ -12,6 +12,7 @@
 | `matching_position_tracking_ms` | 매칭 후보·삼각측량·평면 투영·객체 ID 연결·기존 추적. 현재 함수 구조상 함께 계측 |
 | `floor_tracking_ms` | 바닥 추적과 한 카메라 폐색 보완 |
 | `risk_ms` | 거리·TTC·경고 유지와 위험 레코드 구성 |
+| `dashboard_snapshot_ms` | 미매칭 목록·snapshot 구성, 구역 판정, 발행 상태 행 잠금·조회. 미설정 조건은 snapshot 생성을 건너뜀 |
 | `commit_ms` | 트랜잭션 커밋 |
 | `response_prepare_ms` | 미매칭 목록과 커밋 이후 bundle ID 조회 |
 | `total_ms` | 함수 시작부터 위 구간 완료까지의 단조 시계 경과 시간 |

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, ForeignKeyConstraint, Integer, JSON, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, ForeignKeyConstraint, Integer, JSON, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 try:
@@ -191,6 +191,51 @@ class SessionSettings(Base):
                                            server_default="baseline")
     settings: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DashboardState(Base):
+    __tablename__ = "dashboard_states"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True)
+    algorithm: Mapped[str] = mapped_column(String(16), primary_key=True)
+    map_config: Mapped[dict] = mapped_column(JSON)
+    zones: Mapped[dict] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    stream_id: Mapped[str] = mapped_column(String(36))
+    seq: Mapped[int] = mapped_column(BigInteger, default=0)
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observations: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DashboardAlert(Base):
+    __tablename__ = "dashboard_alerts"
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "active_key"),)
+
+    alert_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16))
+    algorithm: Mapped[str] = mapped_column(String(16))
+    stream_id: Mapped[str] = mapped_column(String(36))
+    # NULL after resolution permits a new occurrence with a new ID.
+    active_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON)
+    level: Mapped[str] = mapped_column(String(16))
+    reached_danger: Mapped[bool] = mapped_column(Boolean)
+    started_at_ms: Mapped[int] = mapped_column(BigInteger)
+    last_seen_at_ms: Mapped[int] = mapped_column(BigInteger)
+    ended_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    acknowledged_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    action: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class EdgeHeartbeat(Base):
+    __tablename__ = "edge_heartbeats"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    camera_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    received_at_ms: Mapped[int] = mapped_column(BigInteger)
 
 
 class GroundTruth(Base):

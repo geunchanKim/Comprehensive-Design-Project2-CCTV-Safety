@@ -1,0 +1,50 @@
+# Separate project, database, network and volume; never combine with the production file.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cctv_demo
+      POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD:?Use scripts/start-isolated-dashboard-demo.sh}
+      POSTGRES_DB: cctv_dashboard_demo
+    volumes:
+      - demo_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cctv_demo -d cctv_dashboard_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://cctv_demo:${DEMO_DB_PASSWORD:?Demo password required}@db:5432/cctv_dashboard_demo
+      APP_COMMIT_SHA: ${DEMO_COMMIT_SHA:?Demo commit required}
+      DASHBOARD_SESSION_ID: classroom-1014-s10-t1-v91
+      DASHBOARD_CALIBRATION_PROFILE: basic
+      DASHBOARD_ALGORITHM: baseline
+      ENABLE_RISK_ANALYSIS: "true"
+      IMPROVED_FEATURES: cdfg
+      MAX_SYNC_DELTA_MS: "50"
+      MAX_EPIPOLAR_ERROR_PX: "50"
+      ANKLE_FOOT_Z_MIN: "-0.1"
+      ANKLE_FOOT_Z_MAX: "0.15"
+      BOX_FOOT_Z_MIN: "-0.35"
+      BOX_FOOT_Z_MAX: "0.2"
+      MAX_GROUND_DISTANCE_M: "1.5"
+      GROUND_ANKLE_Z_M: "0.08"
+      SINGLE_CAMERA_ANKLE_Z_M: "0.08"
+      FLOOR_TRACK_GATE_M: "0.8"
+      WARNING_DISTANCE_M: "1.0"
+      DANGER_DISTANCE_M: "0.5"
+    ports:
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_PORT:-32132}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  demo_db_data:

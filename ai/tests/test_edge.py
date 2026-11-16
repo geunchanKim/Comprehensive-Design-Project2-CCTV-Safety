@@ -12,11 +12,15 @@ YOLO·torch 없이 돌 수 있는 부분만 검사한다.
   - 실시간 속도: Sender가 짝마다 시간을 기록하는지, timing_summary가 표를 맞게 계산하는지
   - 녹화 폴더 재생: 녹화한 사진을 기록한 시각 간격대로 흘려보내는지
   - 녹화 여러 개 재생(replay_all): 녹화 폴더를 순서대로 찾는지
+  - clock: 시스템 시계가 뒤로 가도 엣지 시각은 뒤로 가지 않는지
+  - 오래된 짝 버리기: max_age_ms 를 넘긴 짝은 보내지 않고 stale 로 남기는지
+  - heartbeat: 카메라마다 계약 필드를 순서대로 보내는지, 첫 프레임 전 last_recv_ms 가 null 인지
 
 실행 (레포 루트에서): python -m pytest ai/tests -q
 """
 
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -30,6 +34,7 @@ sys.path.insert(0, str(AI_DIR / "eval"))
 import pytest  # noqa: E402
 from bundle import build_bundle, build_frame, check_session_id, clean_detections  # noqa: E402
 import camera_source  # noqa: E402
+import clock  # noqa: E402
 from camera_source import Frame  # noqa: E402
 from eval_position import evaluate  # noqa: E402
 from feet import LEFT_ANKLE, RIGHT_ANKLE, attach_feet  # noqa: E402
@@ -443,7 +448,7 @@ def test_sender_writes_timing_per_pair(tmp_path):
         def __init__(self):
             self.sent = []
 
-        def send(self, message, path, meta=None):
+        def send(self, message, path, meta=None, age_ms=0.0):
             self.sent.append(message)
             self.on_done(meta, 201, 12.5, 0.3)
 
@@ -665,7 +670,7 @@ def test_sender_catches_rejection_that_arrives_while_closing(tmp_path):
         last_failure = None
         on_done = None
 
-        def send(self, message, path, meta=None):
+        def send(self, message, path, meta=None, age_ms=0.0):
             pass
 
         def close(self, wait=None):
@@ -681,3 +686,124 @@ def test_sender_catches_rejection_that_arrives_while_closing(tmp_path):
     assert sender.stop_reason                                  # 종료 대기 중 온 거절도 멈춘 이유로 남음
     assert exit_code(sender) == 2                              # → realtime.py 종료 코드 2 → replay_all 이 멈춤
     assert exit_code(None) == 0
+
+
+# ---------- clock: 뒤로 가지 않는 엣지 시각 ----------
+
+def test_clock_starts_near_system_time():
+    before = int(time.time() * 1000)
+    c = clock.EdgeClock()
+    assert abs(c.now_ms() - before) < 1000
+
+
+def test_clock_ignores_system_time_going_back(monkeypatch):
+    c = clock.EdgeClock()
+    first = c.now_ms()
+    # 시스템 시계가 1시간 뒤로 보정돼도 엣지 시각은 그대로 앞으로 간다
+    real_time = time.time
+    monkeypatch.setattr(clock.time, "time", lambda: real_time() - 3600)
+    assert c.now_ms() >= first
+
+
+def test_clock_never_decreases():
+    values = [clock.now_ms() for _ in range(1000)]
+    assert values == sorted(values)
+
+
+# ---------- 오래된 짝 버리기 (max_age_ms) ----------
+
+def test_server_client_drops_stale_pair(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True, max_age_ms=100)
+    results = []
+    client.on_done = lambda meta, status, rtt_ms, queue_ms: results.append((meta, status))
+    client.send({"pair_id": 1}, "/detections", meta=1, age_ms=150)   # 이미 100ms를 넘김 → 버림
+    client.send({"pair_id": 2}, "/detections", meta=2, age_ms=10)    # 아직 신선함 → 보냄
+    client.close()
+    assert results == [(1, "stale"), (2, "dry-run")]
+    sent = [json.loads(line)["pair_id"] for line in (tmp_path / "sent_detections.jsonl").read_text().splitlines()]
+    assert sent == [2]
+    assert client.stats["stale"] == 1 and client.dropped_total == 1
+
+
+def test_server_client_keeps_old_pair_when_policy_off(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)               # max_age_ms 없음 = 끄기
+    client.send({"pair_id": 1}, "/detections", age_ms=10_000)
+    client.close()
+    assert client.stats["stale"] == 0
+    assert len((tmp_path / "sent_detections.jsonl").read_text().splitlines()) == 1
+
+
+def test_server_client_max_queue_age_resets_after_pop(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)
+    client._note_queue_age(42.4)
+    client._note_queue_age(7.0)
+    assert client.pop_max_queue_age_ms() == 42
+    assert client.pop_max_queue_age_ms() == 0
+
+
+# ---------- heartbeat ----------
+
+class FakeHeartbeatClient:                                  # ServerClient 대신: 보낸 것만 모아 둔다
+    def __init__(self):
+        self.posts = []
+        self.dropped_total = 3
+        self.pops = 0
+
+    def pop_max_queue_age_ms(self):
+        self.pops += 1
+        return 250
+
+    def post_now(self, path, body, timeout=0.5):
+        self.posts.append((path, body))
+        return True
+
+
+def test_heartbeat_sends_contract_fields_per_camera():
+    from heartbeat import Heartbeat
+    times = iter(range(1000, 2000, 10))
+    client = FakeHeartbeatClient()
+    hb = Heartbeat("classroom-1014-s1-t1", {"cam1": "rtsp", "cam2": "folder"}, client, now_ms=lambda: next(times))
+    hb.note_frame("cam1")                                    # cam1 만 프레임을 받음 (시각 1000)
+    hb.beat()
+    assert [p for p, _ in client.posts] == ["/edge/heartbeat", "/edge/heartbeat"]
+    cam1, cam2 = (b for _, b in client.posts)
+    assert set(cam1) == {"session_id", "camera_id", "edge_run_id", "source", "last_recv_ms", "sent_at_ms",
+                         "dropped_count", "max_queue_age_ms"}
+    assert cam1["camera_id"] == "cam1" and cam2["camera_id"] == "cam2"     # 카메라 순서대로
+    assert cam1["last_recv_ms"] == 1000 and cam1["sent_at_ms"] > 1000
+    assert cam2["last_recv_ms"] is None                                    # 첫 프레임 전
+    assert cam1["source"] == "rtsp" and cam2["source"] == "folder"
+    assert cam1["edge_run_id"] == cam2["edge_run_id"]
+    assert cam1["dropped_count"] == 3
+    assert cam1["max_queue_age_ms"] == cam2["max_queue_age_ms"] == 250
+    assert client.pops == 1                                                # 한 바퀴에 한 번만 꺼냄
+    assert hb.stats == {"sent": 2, "failed": 0}
+
+
+def test_heartbeat_new_run_id_each_start():
+    from heartbeat import Heartbeat
+    a = Heartbeat("s", {"cam1": "rtsp"}, FakeHeartbeatClient())
+    b = Heartbeat("s", {"cam1": "rtsp"}, FakeHeartbeatClient())
+    assert a.edge_run_id != b.edge_run_id
+
+
+def test_heartbeat_thread_beats_until_stopped():
+    import time
+    from heartbeat import Heartbeat
+    client = FakeHeartbeatClient()
+    hb = Heartbeat("s", {"cam1": "rtsp", "cam2": "rtsp"}, client, interval_s=0.05)
+    hb.start()
+    time.sleep(0.18)
+    hb.stop()
+    count = len(client.posts)
+    assert count >= 4                                        # 0.05초마다 두 카메라
+    time.sleep(0.1)
+    assert len(client.posts) == count                        # 멈춘 뒤에는 더 보내지 않음
+
+
+def test_server_client_post_now_dry_run_writes_file(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)
+    assert client.post_now("/edge/heartbeat", {"camera_id": "cam1"})
+    client.close()
+    lines = (tmp_path / "sent_edge_heartbeat.jsonl").read_text().splitlines()
+    assert [json.loads(line)["camera_id"] for line in lines] == ["cam1"]
