@@ -148,3 +148,7 @@ Response:
 - `status`: `ok | warning | danger | offline`
 - 인원 수를 알 수 없으면 `people: null`
 - 여러 구역을 한 번에 반환한다.
+
+## 보호구 snapshot 확장 (2026-11-16)
+
+`objects[].helmet`을 `vest`와 같은 형태로 추가한다. 두 항목은 사람 ID별로 연속 판별한 서버 상태다. `helmet_evaluated`·`vest_evaluated`가 true여도 일부 사람은 unknown일 수 있다. 개별 `status`가 unknown이거나 snapshot이 stale이면 미판단으로 표시한다. 입력·출력·만료·설정과 구현 범위는 [보호구 상태 계약](ppe-state.md)을 따른다. 미착용 alert와 화면 표시는 별도 후속이다.

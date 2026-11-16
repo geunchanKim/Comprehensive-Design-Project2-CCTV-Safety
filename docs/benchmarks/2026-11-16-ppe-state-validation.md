@@ -1,0 +1,33 @@
+# 11/16 서버 보호구 상태 연동 검증
+
+기준: 원격 develop `d3079a2`에서 분리한 `feat/server-ppe-status`. Windows, Python 3.12, PostgreSQL 16.15. 실제 모델과 엣지 보호구 전송을 사용한 성능·정확도 검증은 아니다.
+
+## 결과
+
+| 검증 | 결과 |
+| --- | --- |
+| 백엔드 전체, SQLite | 127개 통과 |
+| 백엔드 전체, 별도 PostgreSQL DB | 127개 통과 |
+| 기존 엣지 회귀 | 47개 통과 |
+| PostgreSQL 전체 마이그레이션 → head | 0014까지 성공 |
+| PostgreSQL Alembic 스키마 대조 | 변경 없음 |
+| PostgreSQL 0013 되돌리기 → 0014 재적용 | 성공, 재대조 변경 없음 |
+
+PostgreSQL 검증은 기존 데모와 다른 localhost 포트·DB에서 진행했고, 검증 서버는 종료했다. 이후 늦게 도착한 프레임이 만료 상태를 되돌리지 못하도록 프레임 시각 검사와 회귀 검증을 추가해 SQLite 전체를 다시 확인했다. SQLite로 전체 Alembic 이력을 적용하는 시도는 기존 0007의 제약조건 변경 제한으로 실패했으며 PostgreSQL 검증과 구분한다.
+
+## 검증한 동작
+
+- 같은 결과 3회 확정, 두 카메라 입력을 한 번으로 누적, 캐시 시각 반복은 누적 제외
+- 반대 관측·카메라 상충·낮은 신뢰도·명시적 unknown을 미판단 처리
+- 판별 생략 시 잠시 유지, 3초 초과 시 만료, 오래된 입력으로 상태 되돌리기 방지
+- 비사람·미래 시각·신뢰도 누락·NaN 등 잘못된 보호구 입력 거절
+- 서버 object_id에 연결한 결과가 snapshot에 반영되고 새 DB 세션에서도 유지
+- 중복 탐지·snapshot 발행 실패는 투표와 탐지 저장을 함께 롤백
+- 원본 관측을 이용한 반복 재계산과 알고리즘별 상태 분리
+- 기존 메시지의 입력·자동 생성 JSON Schema·예시 회귀
+
+Windows 실행 명령은 `python -m pytest backend/tests -q --confcutdir=. --rootdir=.` 및 `python -m pytest ai/tests -q --confcutdir=. --rootdir=.`다. 이 옵션은 작업 공간 밖의 `C:\conftest.py`와 pytest 설정을 읽지 않도록 범위를 지정한다. CI의 기존 테스트 명령은 유지한다.
+
+## 남은 연동
+
+엣지는 실제 추론 시각을 유지하는 `vest`·`helmet` 관측을 전송해야 한다. 미착용 `/alerts` 등록과 프론트 착용 표시는 후속 작업이다. 실제 모델을 붙인 초당 10짝 유지, 1초 이내 카메라→화면 지연과 CCTV 각도 정확도는 이번 결과에 포함하지 않는다. 계약은 [보호구 상태](../specs/ppe-state.md)를 따른다.
