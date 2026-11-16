@@ -53,3 +53,30 @@ A를 고른 이유:
 - 현재 교실 촬영 사진과 안전조끼·안전모는 없다.
 - 공개 사진은 대부분 눈높이에서 촬영되었다. 위에서 보는 CCTV 각도 검증은 4주 차 교실 촬영에서 한다.
 - 안전조끼 2벌, 안전모 2개를 4주 차 촬영 전까지 구매한다. 구매 일정은 11/8 주간 리뷰에서 정한다.
+
+## v1 구현 (11/16, `feat/ppe-model-v1`)
+
+| 단계 | 파일 | 내용 |
+| --- | --- | --- |
+| 데이터 | `ai/ppe/build_crops.py` | Construction-PPE의 사람 상자마다 영역을 넓혀(좌우 10%, 위 15%, 아래 5%) 원본 해상도로 자른다. 영역 안에 넓이 50% 이상 보이는 안전모·조끼 상자를 라벨로 옮긴다. 높이 48px 미만 사람은 뺀다 |
+| 학습 | `ai/ppe/train_ppe.py` | 4종 탐지(`helmet`, `no_helmet`, `vest`, `no_vest`), COCO yolo11n에서 시작, 입력 320 |
+| 상태 결정 | `ai/ppe/ppe_common.py` | 항목마다 conf 0.4 이상 중 가장 높은 상자로 `wearing`/`not_wearing`, 없으면 `unknown`. 옆 사람 것이 섞이지 않게 좌우 가장자리 10%는 버리고, 안전모는 위쪽 절반만 본다 |
+| 평가 | `ai/ppe/eval_person.py` | 사람별 정답과 비교. 정답 unknown은 빼고, 모델 unknown은 틀린 것으로 센 정확도와 판별 못 한 비율을 따로 낸다 |
+
+- 사람별 정답은 보호구 상자를 가장 많이 겹치는 사람 한 명에게만 준다. 씀·안 씀이 둘 다 붙거나 아무것도 없으면 unknown이다.
+- 학습 라벨에는 영역 안에 보이는 옆 사람 보호구도 넣는다. 보이는데 라벨이 없으면 모델이 헷갈리기 때문이다.
+
+| 사람 영역 | 학습 | 검증 |
+| --- | --- | --- |
+| 자른 사람 | 1,892 | 464 |
+| 안전모 정답 씀 / 안 씀 / unknown | 1,209 / 570 / 113 | 275 / 168 / 21 |
+| 조끼 정답 입음 / 안 입음 / unknown | 1,443 / 406 / 43 | 330 / 121 / 13 |
+
+재현:
+
+```bash
+cd ai
+python ppe/build_crops.py ~/datasets/construction-ppe ~/datasets/ppe-crops-v1
+python ppe/train_ppe.py ~/datasets/ppe-crops-v1/data.yaml
+python ppe/eval_person.py runs/ppe_v1/weights/best.pt ~/datasets/ppe-crops-v1 --out runs/ppe_v1/person_eval.json
+```
