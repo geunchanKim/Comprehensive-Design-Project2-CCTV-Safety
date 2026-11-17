@@ -990,6 +990,12 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
     bundle_id = bundle.id
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
+    try:
+        from .ppe import attach_ppe
+    except ImportError:
+        from ppe import attach_ppe
+    attach_ppe(db, body, matches)
+    timer.mark("ppe_ms")
     result = {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
               "calibration_profile": profile, "sync_delta_ms": sync_delta,
               "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,

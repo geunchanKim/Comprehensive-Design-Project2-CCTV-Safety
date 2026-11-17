@@ -83,6 +83,7 @@ class GlobalObject(Base):
     calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
     algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
     cls: Mapped[str] = mapped_column(String(16))
+    ppe_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

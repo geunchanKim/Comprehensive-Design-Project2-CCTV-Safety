@@ -1,13 +1,13 @@
-"""Dashboard contract and explicit XY zone evaluation. PPE remains unevaluated."""
+"""Dashboard contract, explicit XY zone evaluation and smoothed PPE states."""
 from math import hypot, isclose, isfinite
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 try:
-    from .schemas import CalibrationProfile, DetectionBundleOut, ObjectClass, RiskResult, WorldPoint
+    from .schemas import CalibrationProfile, DetectionBundleOut, ObjectClass, RiskResult, WorldPoint, PPEState
 except ImportError:  # Docker runs this directory as the import root.
-    from schemas import CalibrationProfile, DetectionBundleOut, ObjectClass, RiskResult, WorldPoint
+    from schemas import CalibrationProfile, DetectionBundleOut, ObjectClass, RiskResult, WorldPoint, PPEState
 
 
 class ContractModel(BaseModel):
@@ -74,10 +74,7 @@ class ZoneSet(ContractModel):
         return self
 
 
-class VestState(ContractModel):
-    status: Literal["wearing", "not_wearing", "unknown"] = "unknown"
-    confidence: float | None = Field(default=None, ge=0, le=1)
-    observed_at_ms: int | None = Field(default=None, ge=0)
+VestState = PPEState  # Backward-compatible Python import.
 
 
 class ZoneState(ContractModel):
@@ -92,7 +89,8 @@ class DashboardObject(ContractModel):
     world: WorldPoint
     velocity: WorldPoint | None = None
     camera_tracks: dict[str, int]
-    vest: VestState = Field(default_factory=VestState)
+    vest: PPEState = Field(default_factory=PPEState)
+    helmet: PPEState = Field(default_factory=PPEState)
     zone_states: list[ZoneState] = Field(default_factory=list)
 
 
@@ -118,7 +116,7 @@ class DashboardMap(ContractModel):
 class AlertState(ContractModel):
     alert_id: str
     stream_id: str
-    kind: Literal["collision", "zone"]
+    kind: Literal["collision", "zone", "vest", "helmet"]
     object_ids: list[int]
     zone_id: str | None = None
     distance_m: float | None = None
@@ -153,6 +151,7 @@ class DashboardSnapshot(ContractModel):
     zones: list[RiskZone]
     zone_evaluated: bool = False
     vest_evaluated: bool = False
+    helmet_evaluated: bool = False
     alerts: list[AlertState] = Field(default_factory=list)
 
 
@@ -170,7 +169,7 @@ def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
         emitted_at_ms=emitted_at_ms,
         objects=[DashboardObject(
             object_id=item.object_id, cls=item.cls, world=item.world, velocity=item.velocity,
-            camera_tracks=item.camera_tracks,
+            camera_tracks=item.camera_tracks, vest=item.vest, helmet=item.helmet,
             zone_states=[ZoneState(zone_id=zone.zone_id) for zone in zones.zones
                          if zone.enabled and item.cls == "person"],
         ) for item in result.matches],
@@ -178,6 +177,8 @@ def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
                                  or result.settings.get("warning_hysteresis")),
         risks=result.risks, zones=zones.zones,
     )
+    snapshot.vest_evaluated = any(o.cls == "person" and o.vest.status != "unknown" for o in snapshot.objects)
+    snapshot.helmet_evaluated = any(o.cls == "person" and o.helmet.status != "unknown" for o in snapshot.objects)
     if evaluate_zones:
         snapshot.zone_evaluated = True
         for item in snapshot.objects:

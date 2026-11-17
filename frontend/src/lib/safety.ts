@@ -6,6 +6,7 @@ export const KIND_TEXT: Record<AlertKind, string> = {
   collision: '충돌',
   zone: '위험 구역 접근·진입',
   vest: '안전조끼 미착용',
+  helmet: '안전모 미착용',
   system: '시스템',
 }
 
@@ -60,6 +61,8 @@ export function alertTitle(alert: Alert, objects: TrackedObject[], zones: Zone[]
       return `${who} → ${zones.find((z) => z.zoneId === alert.zoneId)?.name ?? '위험 구역'}`
     case 'vest':
       return `${who} · 안전조끼 미착용`
+    case 'helmet':
+      return `${who} · 안전모 미착용`
     case 'system':
       return alert.message ?? '시스템 경고'
   }

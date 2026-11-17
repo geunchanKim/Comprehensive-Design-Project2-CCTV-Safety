@@ -31,7 +31,12 @@ app.include_router(alerts_router)
 @app.get("/health")
 def health_check():
     """서버 자체가 살아있는지 확인"""
+    try:
+        from .ppe import settings as ppe_settings
+    except ImportError:
+        from ppe import settings as ppe_settings
     return {
+        "ppe": ppe_settings(),
         "status": "ok",
         "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
         "max_epipolar_error_px": MAX_EPIPOLAR_ERROR_PX,

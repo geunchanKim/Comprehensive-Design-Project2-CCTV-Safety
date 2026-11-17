@@ -124,7 +124,8 @@ Response:
 
 - 충돌: 객체 ID 쌍
 - 위험구역: `object_id + zone_id`
-- 안전조끼: `object_id`
+- 안전조끼: `kind=vest + object_id`
+- 안전모: `kind=helmet + object_id`
 
 ## 5. 구역 목록
 
@@ -148,3 +149,9 @@ Response:
 - `status`: `ok | warning | danger | offline`
 - 인원 수를 알 수 없으면 `people: null`
 - 여러 구역을 한 번에 반환한다.
+
+## 보호구 snapshot 확장 (2026-11-16)
+
+`objects[].helmet`을 `vest`와 같은 형태로 추가한다. 두 항목은 사람 ID별로 연속 판별한 서버 상태다. `helmet_evaluated`·`vest_evaluated`가 true여도 일부 사람은 unknown일 수 있다. 개별 `status`가 unknown이거나 snapshot이 stale이면 미판단으로 표시한다. 입력·출력·만료·설정과 구현 범위는 [보호구 상태 계약](ppe-state.md)을 따른다.
+
+확정 미착용은 `/alerts`·snapshot `alerts[]`에 `kind=vest` 또는 `helmet`, `level=warning`, `object_ids=[사람 ID]`로 제공한다. 거리·구역은 null이다. warning이므로 danger 팝업 대상은 아니며 경고 목록에서 구분한다. unknown·만료·객체 소실 시 현재 warning을 종료하지만 안전 판정으로 해석하지 않는다. 동일 미착용의 확인은 유지하고 재발은 새 ID를 발급한다. 두 종류의 경고를 각각 처리하며 사람별 안전모 상태 UI·실제 연동 검증은 별도 확인한다.
