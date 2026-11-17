@@ -106,3 +106,54 @@ python ppe/build_crops.py ~/datasets/construction-ppe ~/datasets/ppe-crops-v1
 python ppe/train_ppe.py ~/datasets/ppe-crops-v1/data.yaml
 python ppe/eval_person.py runs/ppe_v1/weights/best.pt ~/datasets/ppe-crops-v1 --out runs/ppe_v1/person_eval.json
 ```
+
+## 엣지 연동 (11/17, `feat/edge-ppe`)
+
+`ai/edge/ppe_judge.py`. `realtime.py`·`unity_reader.py`에 `--ppe`를 주면 켜진다 (기본은 꺼짐).
+
+- 사람 탐지·추적 뒤, 판별할 사람을 골라 사람 영역을 학습과 같은 비율(`expand_box`)로 자르고 한 번에 묶어 판별한다.
+- 추적 ID마다 `--ppe-interval-ms`(기본 500ms)가 지나야 다시 판별한다. 한 프레임 최대 `--ppe-max-people`(기본 4)명, 처음 본 사람부터.
+- 추적 ID가 없거나 사람 높이가 48px 미만이면 판별하지 않는다.
+- 판별한 프레임의 사람 탐지에만 `helmet`·`vest`를 붙이고, 판별 안 한 프레임은 필드를 뺀다. 서버 계약(해민 `feat/server-ppe-status`)과 같다.
+
+```json
+"helmet": {"status": "wearing" | "not_wearing" | "unknown", "confidence": 0.762 | null, "observed_at_ms": <이 프레임 ts>}
+```
+
+- `observed_at_ms`는 판별한 프레임의 `ts`(카메라별 보정 수신 시각)라서 항상 `frame.ts`와 같다.
+- 실제 묶음 예: `docs/specs/examples/edge-ppe-detections.example.json` (s10 녹화, dry-run)
+
+### 속도 (s10 녹화 300짝, M3 Pro MPS, 탐지 입력 1280)
+
+카메라 2대 탐지 + 보호구 판별을 차례로 처리한 짝당 시간. 사람은 짝당 평균 5.9명(카메라 2대 합).
+
+| 보호구 판별 | 짝당 시간 중간값 | 90% 값 | 초당 짝 | 짝당 판별 인원 | 같은 사람 판별 간격 중간값 |
+| --- | --- | --- | --- | --- | --- |
+| 끔 | 79.6ms | 80.9ms | 12.5 | 0 | - |
+| 매 프레임 전원 | 124.5ms | 127.9ms | 8.0 | 5.9 | 33ms |
+| **500ms (기본)** | 81.2ms | 103.3ms | **11.5** | 0.45 | 526ms |
+| 1000ms | 81.5ms | 90.0ms | 11.9 | 0.24 | 1023ms |
+
+- 매 프레임 전원을 판별하면 초당 8짝으로 목표(10짝)를 못 맞춘다. 500ms 간격이면 11.5짝을 유지한다.
+- 서버가 3번 연속 같은 결과면 확정하므로 500ms 간격이면 확정까지 약 1.5초다. 1000ms면 약 3초라 기본값은 500ms로 둔다.
+- 처음 여러 명이 한꺼번에 나타나면 그 프레임만 판별 시간이 길어진다(최대 145.6ms, 카메라당 최대 4명).
+
+### 교실 녹화 판별 분포 (s10 전체 5프레임마다, 보호구 착용자 없음)
+
+| 항목 | 안 씀 | 씀 | 모름 |
+| --- | --- | --- | --- |
+| 안전모 | 1,395 (60.0%) | **844 (36.3%)** | 87 (3.7%) |
+| 조끼 | 2,190 (94.2%) | 95 (4.1%) | 41 (1.8%) |
+
+- 녹화 속 사람은 아무도 안전모·조끼를 착용하지 않았으므로 "씀"은 모두 오류다.
+- 안전모 "씀" 오류는 대부분 **야구 모자**를 쓴 사람에서 나온다. 맨머리는 "안 씀"으로 맞게 나온다. Construction-PPE에 모자 쓴 비착용자가 적어서 생긴 한계다.
+- 다음 학습(v2)에서 모자·두건 등 안전모가 아닌 머리 장구를 "안전모 안 씀"으로 넣어야 한다. 4주 차 교실 촬영에도 모자 쓴 장면을 넣는다.
+- 조끼는 착용자가 없는 장면에서 오류가 4.1%로 낮다.
+
+재현:
+
+```bash
+cd ai
+python edge/unity_reader.py runs/real/classroom/s10/t1 --dry-run --only detections --calib none \
+    --session classroom-1014-s10-t1-v92 --ppe
+```

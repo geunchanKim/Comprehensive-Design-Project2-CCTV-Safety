@@ -33,6 +33,8 @@ Unity가 저장한 폴더(cam1/, cam2/, frames.jsonl)를 읽어서
   python edge/unity_reader.py runs/unity/fake-classroom-01 --dry-run
   python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130
   python edge/unity_reader.py runs/unity/fake-classroom-01 --server http://121.182.60.2:32130 --only gt
+  python edge/unity_reader.py runs/real/classroom/s10/t1 --dry-run --only detections --calib none \
+      --session classroom-1014-s10-t1-v92 --ppe                        # 보호구 판별(helmet·vest)까지 붙여서 (ppe_judge.py)
 """
 
 import argparse
@@ -45,6 +47,7 @@ import cv2
 
 from bundle import SERVER_CLASSES, build_bundle, build_frame, check_session_id, clean_detections, edge_config
 from detector import AI_DIR, Detector, draw, parse_class_conf, parse_classes
+from ppe_judge import add_ppe_args, make_judges
 from server_client import ServerClient
 from unity_calibration import load_calibrations
 
@@ -125,6 +128,7 @@ def main():
     parser.add_argument("--imgsz", type=int, default=1280, help="모델 입력 크기 (1280 기본. 640이면 빠르지만 작거나 먼 물체를 놓침)")
     parser.add_argument("--max-frames", type=int, default=0, help="0 = 전부")
     parser.add_argument("--save-every", type=int, default=0, help="N프레임마다 박스 그린 이미지 저장 (0 = 안 함)")
+    add_ppe_args(parser)
     args = parser.parse_args()
 
     folder = Path(args.folder)
@@ -160,12 +164,13 @@ def main():
         raise SystemExit(f"서버가 아직 받지 않는 클래스예요: {unsupported}. 서버 지원 후 SERVER_CLASSES에 추가하세요")
     detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz, class_conf=parse_class_conf(args.class_conf),
                                classes=classes, foot=args.foot) for cam in CAMERAS} if send_det else {}
+    judges = make_judges(args, CAMERAS) if send_det else {}
     mode = "dry-run" if args.dry_run else args.server
     if send_det:     # 어떤 엣지 설정으로 탐지했는지 남긴다 (실험 pack·설계도에서 읽음)
         d = detectors[CAMERAS[0]]
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "edge_config.json").write_text(json.dumps(edge_config(d), indent=2, ensure_ascii=False),
-                                                  encoding="utf-8")
+        config = {**edge_config(d), "ppe": judges[CAMERAS[0]].config() if judges else None}
+        (out_dir / "edge_config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"session_id: {session_id} | 프레임 {len(rows)}개 | 보낼 것: {args.only} | {mode} | 모델 {args.model}, 발 위치 {args.foot}")
 
     # 탐지를 보내기 전에 이번 session_id로 캘리브레이션부터 등록
@@ -195,9 +200,12 @@ def main():
             for cam in CAMERAS:
                 img = images[cam]
                 h, w = img.shape[:2]
-                dets, removed = clean_detections(detectors[cam](img), w, h)
-                stats["removed"] += removed
                 cam_ts = int(round(row[cam]["recv_ms"] - cam_offset[cam])) if cam in row else ts
+                raw = detectors[cam](img)
+                if judges:              # 판별한 사람에게만 vest·helmet (observed_at_ms = 이 프레임 ts)
+                    judges[cam](img, raw, cam_ts)
+                dets, removed = clean_detections(raw, w, h)
+                stats["removed"] += removed
                 timing = row.get(cam, {})
                 frames.append(build_frame(cam, frame, cam_ts, (w, h), dets,
                                           pts_ms=timing.get("pts_ms"), recv_ms=timing.get("recv_ms")))
