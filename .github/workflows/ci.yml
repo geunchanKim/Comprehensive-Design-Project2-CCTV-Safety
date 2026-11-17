@@ -87,7 +87,7 @@ jobs:
         run: pip install numpy opencv-python-headless requests pytest
 
       - name: 문법 검사 (ai/ 전체)
-        run: python -m compileall -q ai/edge ai/eval ai/tools
+        run: python -m compileall -q ai/edge ai/eval ai/tools ai/ppe
 
       - name: 테스트
         run: python -m pytest ai/tests -q

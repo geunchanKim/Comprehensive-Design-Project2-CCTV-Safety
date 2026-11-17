@@ -27,6 +27,11 @@ ai/
 │   ├── eval_position.py       추정 위치 vs 정답 오차
 │   ├── eval_detection.py      탐지 성능
 │   └── packs/                 저장한 탐지 묶음 (real-* = 실측 15개, s1~s4 = Unity)
+├── ppe/                     보호구(안전모·조끼) 판별: 사람 영역 자르기 → 4종 탐지 → 사람별 상태
+│   ├── build_crops.py         Construction-PPE → 사람 영역 데이터셋, 사람별 정답
+│   ├── train_ppe.py           보호구 모델 학습 (runs/ppe_v1)
+│   ├── eval_person.py         사람별 착용 판별 정확도
+│   └── ppe_common.py          자르기·라벨·상태 결정 규칙 (CI 테스트)
 ├── scripts/, train.py, configs/   자체 학습 데이터·모델 (최종 실험은 COCO 원본 사용)
 ├── tests/                   단위 테스트
 ├── tools/                   테스트 보조 도구
@@ -82,3 +87,4 @@ python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> 
 - 녹화는 `runs/real/`, 탐지 결과는 `runs/edge/`, 실험 결과는 `runs/experiments/`에 둔다
 - 서버는 같은 session_id를 다시 받지 않는다 (409)
 - 메시지 양식: `docs/specs/message-spec.md`
+- 보호구 판별 방식·데이터셋: `docs/specs/ppe-dataset.md`
