@@ -1,0 +1,294 @@
+{
+  "session_id": "classroom-1014-s10-t1-v92",
+  "calibration_profile": "basic",
+  "pair_id": 401,
+  "max_sync_delta_ms": 50,
+  "frames": [
+    {
+      "camera_id": "cam1",
+      "frame_id": 401,
+      "ts": 1791965406657,
+      "image_size": [
+        1920,
+        1080
+      ],
+      "detections": [
+        {
+          "track_id": 1,
+          "cls": "chair",
+          "conf": 0.922,
+          "bbox": [
+            396.4,
+            361.2,
+            601.8,
+            678.0
+          ],
+          "foot": [
+            499.1,
+            678.0
+          ],
+          "foot_src": "box"
+        },
+        {
+          "track_id": 2,
+          "cls": "person",
+          "conf": 0.91,
+          "bbox": [
+            588.0,
+            136.7,
+            718.3,
+            600.7
+          ],
+          "foot": [
+            665.7,
+            567.9
+          ],
+          "foot_src": "ankle",
+          "ankles": {
+            "left": [
+              684.3,
+              571.2,
+              0.975
+            ],
+            "right": [
+              647.1,
+              564.6,
+              0.959
+            ]
+          },
+          "helmet": {
+            "status": "not_wearing",
+            "confidence": 0.762,
+            "observed_at_ms": 1791965406657
+          },
+          "vest": {
+            "status": "not_wearing",
+            "confidence": 0.918,
+            "observed_at_ms": 1791965406657
+          }
+        },
+        {
+          "track_id": 3,
+          "cls": "person",
+          "conf": 0.887,
+          "bbox": [
+            1167.0,
+            226.4,
+            1318.8,
+            613.4
+          ],
+          "foot": [
+            1206.3,
+            586.7
+          ],
+          "foot_src": "ankle",
+          "ankles": {
+            "left": [
+              1199.1,
+              581.0,
+              0.912
+            ],
+            "right": [
+              1213.6,
+              592.4,
+              0.94
+            ]
+          },
+          "helmet": {
+            "status": "wearing",
+            "confidence": 0.658,
+            "observed_at_ms": 1791965406657
+          },
+          "vest": {
+            "status": "not_wearing",
+            "confidence": 0.841,
+            "observed_at_ms": 1791965406657
+          }
+        },
+        {
+          "track_id": 4,
+          "cls": "person",
+          "conf": 0.766,
+          "bbox": [
+            1117.5,
+            157.7,
+            1205.3,
+            476.2
+          ],
+          "foot": [
+            1160.8,
+            464.8
+          ],
+          "foot_src": "ankle",
+          "ankles": {
+            "left": [
+              1156.2,
+              469.2,
+              0.917
+            ],
+            "right": [
+              1165.4,
+              460.3,
+              0.75
+            ]
+          },
+          "helmet": {
+            "status": "wearing",
+            "confidence": 0.677,
+            "observed_at_ms": 1791965406657
+          },
+          "vest": {
+            "status": "not_wearing",
+            "confidence": 0.901,
+            "observed_at_ms": 1791965406657
+          }
+        },
+        {
+          "track_id": 5,
+          "cls": "chair",
+          "conf": 0.731,
+          "bbox": [
+            1238.8,
+            349.2,
+            1364.9,
+            574.6
+          ],
+          "foot": [
+            1301.8,
+            574.6
+          ],
+          "foot_src": "box"
+        }
+      ],
+      "pts_ms": 18029.9,
+      "recv_ms": 1791965406657
+    },
+    {
+      "camera_id": "cam2",
+      "frame_id": 401,
+      "ts": 1791965406665,
+      "image_size": [
+        1920,
+        1080
+      ],
+      "detections": [
+        {
+          "track_id": 1,
+          "cls": "person",
+          "conf": 0.924,
+          "bbox": [
+            1210.0,
+            74.5,
+            1439.3,
+            759.0
+          ],
+          "foot": [
+            1260.2,
+            715.8
+          ],
+          "foot_src": "ankle",
+          "ankles": {
+            "left": [
+              1245.8,
+              712.4,
+              0.959
+            ],
+            "right": [
+              1274.7,
+              719.1,
+              0.98
+            ]
+          },
+          "helmet": {
+            "status": "wearing",
+            "confidence": 0.658,
+            "observed_at_ms": 1791965406665
+          },
+          "vest": {
+            "status": "not_wearing",
+            "confidence": 0.926,
+            "observed_at_ms": 1791965406665
+          }
+        },
+        {
+          "track_id": 2,
+          "cls": "person",
+          "conf": 0.923,
+          "bbox": [
+            484.9,
+            116.1,
+            696.4,
+            602.6
+          ],
+          "foot": [
+            541.1,
+            557.8
+          ],
+          "foot_src": "ankle",
+          "ankles": {
+            "left": [
+              561.1,
+              557.5,
+              0.984
+            ],
+            "right": [
+              521.1,
+              558.0,
+              0.985
+            ]
+          },
+          "helmet": {
+            "status": "wearing",
+            "confidence": 0.843,
+            "observed_at_ms": 1791965406665
+          },
+          "vest": {
+            "status": "not_wearing",
+            "confidence": 0.817,
+            "observed_at_ms": 1791965406665
+          }
+        },
+        {
+          "track_id": 3,
+          "cls": "person",
+          "conf": 0.889,
+          "bbox": [
+            777.1,
+            19.0,
+            900.5,
+            433.6
+          ],
+          "foot": [
+            839.7,
+            413.9
+          ],
+          "foot_src": "ankle",
+          "ankles": {
+            "left": [
+              823.6,
+              418.6,
+              0.969
+            ],
+            "right": [
+              855.7,
+              409.2,
+              0.915
+            ]
+          },
+          "helmet": {
+            "status": "not_wearing",
+            "confidence": 0.67,
+            "observed_at_ms": 1791965406665
+          },
+          "vest": {
+            "status": "not_wearing",
+            "confidence": 0.853,
+            "observed_at_ms": 1791965406665
+          }
+        }
+      ],
+      "pts_ms": 16264.9,
+      "recv_ms": 1791965406665
+    }
+  ]
+}

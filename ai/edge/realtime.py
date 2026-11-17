@@ -30,14 +30,16 @@
   - 짝마다 걸린 시간: runs/edge/<session_id>/timings.jsonl (실시간 속도 측정용). 서버 응답을 받으면 한 줄을 쓴다
       frame      짝 번호 (= 서버로 보낸 pair_id. 응답 기록과 이 번호로 연결)
       wait_ms    짝이 만들어진 뒤 탐지를 시작하기까지 기다린 시간
-      detect_ms  카메라별 탐지 전체 시간 (= yolo_ms + pose_ms + 정리 시간)
+      detect_ms  카메라별 탐지 전체 시간 (= yolo_ms + pose_ms + ppe_ms + 정리 시간)
       yolo_ms    카메라별 물체 검출·추적 시간
       pose_ms    카메라별 발목(포즈) 시간. 사람이 없어 건너뛰면 0 근처
+      ppe_ms     카메라별 보호구 판별 시간 (--ppe 일 때만). 판별할 사람이 없으면 0 근처
       age_ms     카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지 걸린 전체 시간
       queue_ms   전송 큐에서 기다린 시간
       rtt_ms     서버에 요청을 보낸 순간부터 응답을 받기까지 (노트북 단조 시계). dry-run 이면 null
       status     서버 상태 코드(201 등), dry-run, network-error, dropped(큐가 꽉 차 버림),
                  stale(카메라 수신부터 --max-age-ms 가 지나 보내지 않고 버림)
+  - --ppe: 사람마다 안전모·조끼 판별 결과(helmet·vest)를 붙인다. 규칙은 ppe_judge.py
   - 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다 (기록이 섞이지 않게. 이름 버전을 올리거나 폴더를 지우기)
 
 실행 (ai/ 폴더에서)
@@ -71,6 +73,7 @@ import cv2
 from bundle import MAX_SYNC_DELTA_MS, build_bundle, build_frame, check_session_id, clean_detections, edge_config, \
     explain_failure
 from camera_source import CameraSource
+from ppe_judge import add_ppe_args
 
 AI_DIR = Path(__file__).resolve().parent.parent           # ai/
 OUT_ROOT = AI_DIR / "runs" / "real"
@@ -172,9 +175,10 @@ class Recorder:
 class Sender:
     """짝지은 프레임을 탐지해서 서버로 보낸다. 별도 스레드에서 가장 최근 짝 하나만 처리한다"""
 
-    def __init__(self, session_id: str, detectors: dict, client, recorder: Recorder):
+    def __init__(self, session_id: str, detectors: dict, client, recorder: Recorder, ppe: dict | None = None):
         self.session_id = session_id
         self.detectors = detectors
+        self.ppe = ppe or {}                        # 카메라별 보호구 판별기 (--ppe 일 때만)
         self.client = client
         self.recorder = recorder
         self.stats = {"sent": 0, "skipped": 0, "removed": 0, "empty": 0, "errors": 0}
@@ -232,21 +236,26 @@ class Sender:
                 self._latest = None
             received_ms = max(f1.recv_ms, f2.recv_ms)
             wait_ms = time.time() * 1000 - received_ms
-            detect_ms, yolo_ms, pose_ms = {}, {}, {}
+            detect_ms, yolo_ms, pose_ms, ppe_ms = {}, {}, {}, {}
             try:
                 frames = []
                 for f in (f1, f2):
                     h, w = f.image.shape[:2]
                     detector = self.detectors[f.camera]
+                    ts = self.recorder.corrected_ms(f)
                     t0 = time.perf_counter()
                     raw = detector(f.image)
+                    if f.camera in self.ppe:            # 판별한 사람에게만 vest·helmet (observed_at_ms = 이 프레임 ts)
+                        judge = self.ppe[f.camera]
+                        judge(f.image, raw, ts)
+                        ppe_ms[f.camera] = judge.last_ms
                     detect_ms[f.camera] = round((time.perf_counter() - t0) * 1000, 1)
                     parts = getattr(detector, "last_ms", None) or {}
                     yolo_ms[f.camera] = parts.get("yolo")
                     pose_ms[f.camera] = parts.get("pose")
                     dets, removed = clean_detections(raw, w, h)
                     self.stats["removed"] += removed
-                    frames.append(build_frame(f.camera, n, self.recorder.corrected_ms(f), (w, h), dets,
+                    frames.append(build_frame(f.camera, n, ts, (w, h), dets,
                                               pts_ms=f.pts_ms, recv_ms=f.recv_ms))
             except Exception as e:                     # 모델 오류는 이 짝만 건너뜀
                 self.stats["errors"] += 1
@@ -255,7 +264,7 @@ class Sender:
             if not any(fr["detections"] for fr in frames):
                 self.stats["empty"] += 1
             meta = {"frame": n, "wait_ms": round(wait_ms, 1), "detect_ms": detect_ms,
-                    "yolo_ms": yolo_ms, "pose_ms": pose_ms,
+                    "yolo_ms": yolo_ms, "pose_ms": pose_ms, **({"ppe_ms": ppe_ms} if self.ppe else {}),
                     "age_ms": round(time.time() * 1000 - received_ms, 1)}
             self.client.send(build_bundle(self.session_id, n, frames,
                                           max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections", meta=meta,
@@ -295,6 +304,7 @@ def preview(f1, f2, width=640):
 def make_sender(args, recorder):
     """--send 준비: session_id 확인 → 서버 확인 → 탐지기 2개(카메라별 추적) 준비"""
     from detector import Detector, parse_class_conf, parse_classes   # torch는 전송할 때만 불러옴
+    from ppe_judge import make_judges
     from server_client import ServerClient
 
     log_dir = SEND_ROOT / args.session
@@ -308,11 +318,14 @@ def make_sender(args, recorder):
     detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz,
                                class_conf=parse_class_conf(args.class_conf), classes=parse_classes(args.classes),
                                foot=args.foot) for cam in CAMERAS}
-    (client.out_dir / "edge_config.json").write_text(
-        json.dumps(edge_config(detectors["cam1"]), indent=2, ensure_ascii=False), encoding="utf-8")
+    judges = make_judges(args, CAMERAS)
+    config = edge_config(detectors["cam1"])
+    config["ppe"] = judges["cam1"].config() if judges else None
+    (client.out_dir / "edge_config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
     mode = "dry-run (파일로만 저장)" if args.dry_run else args.server
-    print(f"전송: session {args.session} | {mode} | 클래스 {args.classes} | 발 위치 {args.foot}")
-    return Sender(args.session, detectors, client, recorder)
+    ppe = f"켬 ({args.ppe_interval_ms:.0f}ms마다, 최대 {args.ppe_max_people}명)" if judges else "끔"
+    print(f"전송: session {args.session} | {mode} | 클래스 {args.classes} | 발 위치 {args.foot} | 보호구 {ppe}")
+    return Sender(args.session, detectors, client, recorder, ppe=judges)
 
 
 def main():
@@ -344,6 +357,7 @@ def main():
                       help="카메라 수신부터 이 시간이 지난 짝은 보내지 않고 버림 (0 = 끄기)")
     send.add_argument("--no-heartbeat", action="store_true",
                       help="heartbeat 를 보내지 않음 (서버에 /edge/heartbeat 가 아직 없을 때)")
+    add_ppe_args(parser)
     args = parser.parse_args()
 
     if args.send:
