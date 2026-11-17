@@ -10,6 +10,7 @@ ai/
 │   ├── realtime.py            카메라 2대 수신 → 프레임 짝짓기(수신 시각 50ms) → 녹화·탐지·서버 전송
 │   ├── detector.py            YOLO11n(COCO) 탐지 + 카메라별 ByteTrack 추적
 │   ├── feet.py                발 위치: YOLO11n-pose 두 발목 중점 (신뢰도 낮으면 박스 하단)
+│   ├── ppe_judge.py           사람마다 안전모·조끼 판별 → 탐지에 helmet·vest (--ppe)
 │   ├── bundle.py              서버로 보낼 탐지 묶음 만들기
 │   ├── camera_source.py       RTSP·웹캠·영상 입력
 │   ├── unity_reader.py        Unity·녹화 폴더 읽기 → 탐지 → 서버 전송
@@ -77,7 +78,7 @@ python edge/realtime.py --cam1 tapo:<cam1 IP> --cam2 tapo:<cam2 IP> --seconds 60
 python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> ...]
 ```
 
-- 기록 항목: 대기, 검출(`yolo_ms`), 포즈(`pose_ms`), 탐지 전체(`detect_ms`), 엣지 전체(`age_ms`), 서버 왕복(`rtt_ms`). 뜻은 `edge/realtime.py` 맨 위 설명
+- 기록 항목: 대기, 검출(`yolo_ms`), 포즈(`pose_ms`), 보호구(`ppe_ms`, `--ppe`일 때), 탐지 전체(`detect_ms`), 엣지 전체(`age_ms`), 서버 왕복(`rtt_ms`). 뜻은 `edge/realtime.py` 맨 위 설명
 - 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다. 다시 잴 때는 버전을 올린다 (예: v7)
 - "엣지 전체"(`age_ms`)는 프레임을 받은 뒤 전송 큐에 넣기까지, "서버 왕복"(`rtt_ms`)은 요청을 보낸 뒤 응답을 받기까지다. 둘 다 카메라 촬영부터 화면 표시까지의 전체 지연이 아니다
 - 상태·실패 건수는 예열 짝까지 모두 세고, 시간 통계만 앞 5짝을 뺀다
