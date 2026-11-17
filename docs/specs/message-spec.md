@@ -203,3 +203,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 | 에피폴라 기준 + 높이 검사 | ✅ 50px + `foot_src`별 z 범위 검사 |
 | `suitcase`, `backpack` 클래스 | ✅ 서버 `ObjectClass` 지원 |
 | 좌우 발목 `ankles` | ✅ 엣지 전송·서버 같은 쪽 발목별 삼각측량 |
+
+## 보호구 상태 확장 (2026-11-16)
+
+사람 탐지의 선택 입력 `vest`·`helmet`과 실제 추론 시각, 연속 판별 규칙은 [보호구 상태 계약](ppe-state.md)을 따른다. 기존 입력은 그대로 허용하며 미관측을 미착용으로 바꾸지 않는다.

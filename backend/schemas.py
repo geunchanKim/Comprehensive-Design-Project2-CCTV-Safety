@@ -87,6 +87,23 @@ class PnPCalibrationIn(BaseModel):
         return self
 
 
+class PPEState(BaseModel):
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+    status: Literal["wearing", "not_wearing", "unknown"] = "unknown"
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    observed_at_ms: int | None = Field(default=None, ge=0)
+
+
+class PPEObservation(PPEState):
+    observed_at_ms: int = Field(ge=0, description="Original inference sample time, same clock as frame.ts")
+
+    @model_validator(mode="after")
+    def known_requires_confidence(self):
+        if self.status != "unknown" and self.confidence is None:
+            raise ValueError("known PPE state requires confidence")
+        return self
+
+
 class DetectionIn(BaseModel):
     track_id: int = Field(ge=0)
     cls: ObjectClass
@@ -95,6 +112,14 @@ class DetectionIn(BaseModel):
     foot: tuple[float, float] | None = None
     foot_src: FootSource | None = None
     ankles: AnklesIn | None = None
+    vest: PPEObservation | None = None
+    helmet: PPEObservation | None = None
+
+    @model_validator(mode="after")
+    def ppe_person_only(self):
+        if self.cls != "person" and (self.vest is not None or self.helmet is not None):
+            raise ValueError("PPE observations are only allowed for person")
+        return self
 
     @field_validator("bbox")
     @classmethod
@@ -116,6 +141,10 @@ class CameraFrameIn(BaseModel):
 
     @model_validator(mode="after")
     def boxes_fit_image(self):
+        for detection in self.detections:
+            for sample in (detection.vest, detection.helmet):
+                if sample is not None and sample.observed_at_ms > self.ts:
+                    raise ValueError("PPE observed_at_ms must not exceed frame.ts")
         width, height = self.image_size
         if width <= 0 or height <= 0:
             raise ValueError("image_size must contain positive values")
@@ -168,6 +197,8 @@ class ObservationResult(BaseModel):
 
 
 class DetectionResult(BaseModel):
+    vest: PPEState = Field(default_factory=PPEState)
+    helmet: PPEState = Field(default_factory=PPEState)
     object_id: int
     cls: ObjectClass
     camera_tracks: dict[str, int]

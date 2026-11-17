@@ -47,6 +47,11 @@
         "confidence": null,
         "observed_at_ms": null
       },
+      "helmet": {
+        "status": "unknown",
+        "confidence": null,
+        "observed_at_ms": null
+      },
       "zone_states": [
         {
           "zone_id": "classroom-demo-01",
@@ -85,5 +90,7 @@
     }
   ],
   "zone_evaluated": false,
-  "vest_evaluated": false
+  "vest_evaluated": false,
+  "helmet_evaluated": false,
+  "alerts": []
 }

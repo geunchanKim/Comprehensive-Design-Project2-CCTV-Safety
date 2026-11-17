@@ -202,7 +202,10 @@
           "type": "object"
         },
         "vest": {
-          "$ref": "#/$defs/VestState"
+          "$ref": "#/$defs/PPEState"
+        },
+        "helmet": {
+          "$ref": "#/$defs/PPEState"
         },
         "zone_states": {
           "items": {
@@ -248,6 +251,50 @@
         "y_max"
       ],
       "title": "MapBounds",
+      "type": "object"
+    },
+    "PPEState": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "default": "unknown",
+          "enum": [
+            "wearing",
+            "not_wearing",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "observed_at_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At Ms"
+        }
+      },
+      "title": "PPEState",
       "type": "object"
     },
     "RiskResult": {
@@ -347,50 +394,6 @@
         "warning_distance_m"
       ],
       "title": "RiskZone",
-      "type": "object"
-    },
-    "VestState": {
-      "additionalProperties": false,
-      "properties": {
-        "status": {
-          "default": "unknown",
-          "enum": [
-            "wearing",
-            "not_wearing",
-            "unknown"
-          ],
-          "title": "Status",
-          "type": "string"
-        },
-        "confidence": {
-          "anyOf": [
-            {
-              "maximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Confidence"
-        },
-        "observed_at_ms": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Observed At Ms"
-        }
-      },
-      "title": "VestState",
       "type": "object"
     },
     "WorldPoint": {
@@ -567,6 +570,11 @@
     "vest_evaluated": {
       "default": false,
       "title": "Vest Evaluated",
+      "type": "boolean"
+    },
+    "helmet_evaluated": {
+      "default": false,
+      "title": "Helmet Evaluated",
       "type": "boolean"
     },
     "alerts": {
