@@ -45,7 +45,18 @@ python eval/label_set.py make --out ~/datasets/classroom-det-v1      # 이미 �
 
 ## 도구
 
-YOLO 형식(이미지 + 같은 이름의 `.txt`)을 읽고 쓰는 도구면 된다.
+**기본: 로컬 라벨링 화면** (`ai/eval/label_tool.py`, 외부로 보내지 않음)
+
+```bash
+cd ai
+python eval/label_tool.py ~/datasets/classroom-det-v1     # http://localhost:8765
+```
+
+- 상자 클릭 → 선택, `Delete` 지우기, `C` 클래스 바꾸기, 빈 곳 드래그 → 새 상자(`1` 사람 / `2` 의자)
+- `Enter` 저장하고 다음, `←` 이전. 같은 클래스로 겹친 상자(IoU 0.5 이상)는 점선으로 보인다
+- 저장한 사진은 `reviewed.json`에 "확인함"으로 남고, 채점 결과의 `reviewed_images`로 나온다
+
+다른 도구를 쓸 때는 YOLO 형식(이미지 + 같은 이름의 `.txt`)을 읽고 쓰는 도구면 된다. 이 경우 확인 기록이 남지 않는다.
 
 - **makesense.ai** (설치 없음, 브라우저): 이미지 폴더를 열고 라벨 이름을 `person`, `chair` 순서로 만든 뒤, YOLO 형식으로 `labels/`의 txt를 가져온다. 다 고치면 YOLO 형식으로 내보내 `labels/`에 덮어쓴다. 파일은 브라우저 안에서 처리되지만 외부 사이트이므로, 걱정되면 아래 로컬 도구를 쓴다.
 - **Label Studio** (로컬 설치): `pip install label-studio` 후 YOLO 가져오기로 같은 폴더를 연다.

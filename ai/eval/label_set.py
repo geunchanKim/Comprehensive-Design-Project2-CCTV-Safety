@@ -28,6 +28,7 @@
 실행 (ai/ 폴더에서)
   python eval/label_set.py make --out ~/datasets/classroom-det-v1
   python eval/label_set.py score ~/datasets/classroom-det-v1 --vis
+  라벨 고치기: python eval/label_tool.py ~/datasets/classroom-det-v1  (로컬 화면, 확인한 사진을 reviewed.json 에 기록)
 """
 
 import argparse
@@ -188,8 +189,14 @@ def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
     unchanged = all((dataset / "labels" / f"{p.stem}.txt").read_text() ==
                     (dataset / "labels_pre" / f"{p.stem}.txt").read_text() for p in images
                     if (dataset / "labels_pre" / f"{p.stem}.txt").exists())
+    reviewed_path = dataset / "reviewed.json"
+    reviewed = set(json.loads(reviewed_path.read_text())) if reviewed_path.exists() else set()
+    not_reviewed = [p.stem for p in images if p.stem not in reviewed]
     if unchanged:
         print("[주의] labels/ 가 초안(labels_pre/)과 전부 같아요. 라벨을 확인·수정하기 전이면 결과가 부풀려집니다")
+    if not_reviewed:
+        print(f"[주의] 확인 안 한 사진 {len(not_reviewed)}장 (label_tool.py 로 저장한 사진만 확인함으로 셈). "
+              f"이 사진들은 초안이 정답으로 들어갑니다")
     detector = Detector(model="coco", classes=CLASSES, foot="box")
     all_rows, box_rows = [], []
     if vis:
@@ -213,6 +220,7 @@ def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[kind], 2)
             cv2.imwrite(str(dataset / "vis" / path.name), image)
     report = {"dataset": str(dataset), "images": len(images), "labels_unchanged_from_prelabel": unchanged,
+              "reviewed_images": len(images) - len(not_reviewed),
               "detector": {"model": detector.model_name, "imgsz": detector.imgsz, "class_conf": detector.class_conf,
                            "track": False},
               "iou_min": iou_min, "min_height_px": min_height, "classes": summarize(all_rows)}
