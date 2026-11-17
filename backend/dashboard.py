@@ -116,7 +116,7 @@ class DashboardMap(ContractModel):
 class AlertState(ContractModel):
     alert_id: str
     stream_id: str
-    kind: Literal["collision", "zone"]
+    kind: Literal["collision", "zone", "vest", "helmet"]
     object_ids: list[int]
     zone_id: str | None = None
     distance_m: float | None = None

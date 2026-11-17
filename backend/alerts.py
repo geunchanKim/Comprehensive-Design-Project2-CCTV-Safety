@@ -72,6 +72,14 @@ def sync_alerts(db, key, snapshot, now):
                         "danger" if zone.status == "intrusion" else "warning", {
                             "kind": "zone", "object_ids": [obj.object_id],
                             "zone_id": zone.zone_id, "distance_m": zone.distance_m})
+    # PPE is already smoothed per person. Unknown is not a missing-equipment vote.
+    for obj in snapshot.objects:
+        if obj.cls == "person":
+            for item in ("vest", "helmet"):
+                if getattr(obj, item).status == "not_wearing":
+                    candidates[f"{item}:{obj.object_id}"] = ("warning", {
+                        "kind": item, "object_ids": [obj.object_id],
+                        "zone_id": None, "distance_m": None})
     active = {row.active_key: row for row in db.scalars(
         alert_query(key).where(DashboardAlert.active_key.is_not(None)))}
     for target, row in active.items():

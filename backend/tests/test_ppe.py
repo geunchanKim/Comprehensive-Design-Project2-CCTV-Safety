@@ -167,7 +167,75 @@ def test_ingest_persistence_snapshot_duplicate_rollback_and_expiry(monkeypatch):
             assert len(rows) == 1 and rows[0].id != obj["object_id"]
             assert rows[0].ppe_state["vest"]["status"] == "wearing"
             assert rows[0].ppe_state["vest"]["count"] == 3
-    assert client.get("/alerts", params=key).json() == []  # PPE alert is a separate task.
+    alerts = client.get("/alerts", params=key).json()
+    assert len(alerts) == 1 and alerts[0]["kind"] == "helmet"
+    assert alerts[0]["object_ids"] == [obj["object_id"]]
+    assert alerts[0]["level"] == "warning"
     assert send(4, 1300, include=False).json()["matches"][0]["vest"]["status"] == "wearing"
     assert send(5, 4301, include=False).json()["matches"][0]["vest"]["status"] == "unknown"
+    assert client.get("/alerts", params=key).json() == []
     assert client.get("/health").json()["ppe"] == ppe.settings()
+
+
+@pytest.mark.parametrize("item", ["vest", "helmet"])
+def test_ppe_alert_lifecycle_rollback_and_condition_isolation(item):
+    from sqlalchemy import select
+    from backend.alerts import sync_alerts
+    from backend.dashboard import DashboardSnapshot
+    from backend.dashboard_api import state_query
+    from backend.models import DashboardAlert
+    from backend.schemas import PPEState
+
+    session = "ppe-alert-" + uuid4().hex
+    key = {"session_id": session, "calibration_profile": "basic", "algorithm": "baseline"}
+    config = {"map": {"coordinate_frame_id": "ppe", "bounds": {
+        "x_min": -5, "x_max": 5, "y_min": -5, "y_max": 15}},
+        "zones": {"coordinate_frame_id": "ppe", "zones": []}}
+    assert client.put("/dashboard/configuration", params=key, json=config).status_code == 201
+    put_camera("cam1", [0, 0, 0], session)
+    put_camera("cam2", [-1, 0, 0], session)
+    assert client.post("/detections", json=detection_payload(session_id=session)).status_code == 201
+    snapshot = DashboardSnapshot.model_validate(client.get("/dashboard/snapshot", params=key).json())
+    snapshot.collision_evaluated = False
+    snapshot.zone_evaluated = False
+    person = snapshot.objects[0]
+
+    def save(status, now, commit=True):
+        setattr(person, item, PPEState(status=status, confidence=0.9 if status != "unknown" else None,
+                                      observed_at_ms=now))
+        with SessionLocal() as db:
+            db.scalar(state_query(tuple(key.values())).with_for_update())
+            rows = sync_alerts(db, tuple(key.values()), snapshot, now)
+            if commit:
+                db.commit()
+            else:
+                db.rollback()
+            return [row.model_dump() for row in rows]
+
+    assert save("unknown", 1000) == []
+    assert save("wearing", 1100) == []
+    save("not_wearing", 1200, commit=False)
+    assert client.get("/alerts", params=key).json() == []
+    first, = save("not_wearing", 1300)
+    assert first["kind"] == item and first["object_ids"] == [person.object_id]
+    assert first["level"] == "warning" and not first["reached_danger"]
+    assert first["distance_m"] is None and first["zone_id"] is None
+    assert client.get("/alerts", params={**key, "algorithm": "improved"}).json() == []
+    path = f'/alerts/{first["alert_id"]}/ack'
+    assert client.post(path, params=key, json={"action": "radio"}).status_code == 204
+    same, = save("not_wearing", 1400)
+    assert same["alert_id"] == first["alert_id"] and same["acknowledged"]
+    assert same["action"] == "radio" and same["last_seen_at_ms"] == 1400
+    assert save("unknown", 1500) == []  # No longer confirmed; not a safe judgment.
+    with SessionLocal() as db:
+        ended = db.scalar(select(DashboardAlert).where(DashboardAlert.alert_id == first["alert_id"]))
+        assert ended.active_key is None and ended.ended_at_ms == 1500
+    again, = save("not_wearing", 1600)
+    assert again["alert_id"] != first["alert_id"] and not again["acknowledged"]
+    other = "helmet" if item == "vest" else "vest"
+    setattr(person, other, PPEState(status="not_wearing", confidence=0.9, observed_at_ms=1650))
+    both = save("not_wearing", 1650)
+    assert {row["kind"] for row in both} == {"vest", "helmet"}
+    assert len({row["alert_id"] for row in both}) == 2
+    snapshot.objects = []
+    assert save("not_wearing", 1700) == []  # Object disappearance ends occurrence.
