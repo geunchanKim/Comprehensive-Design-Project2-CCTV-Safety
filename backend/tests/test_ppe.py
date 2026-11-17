@@ -67,6 +67,20 @@ def test_ambiguous_or_changed_observation_is_unknown(observations):
         assert out.status == "unknown"
 
 
+def test_one_second_edge_cadence_and_exact_expiry_boundary():
+    state = None
+    for ts in (1000, 2000, 3000):
+        state, out = ppe.advance(state, [sample(ts)], ts)
+        assert out.status == ("wearing" if ts == 3000 else "unknown")
+    # Reusing the original inference timestamp must not extend its lifetime.
+    state, out = ppe.advance(state, [sample(3000)], 6000)
+    assert out.status == "wearing" and out.observed_at_ms == 3000
+    state, out = ppe.advance(state, [], 6001)
+    assert out.status == "unknown"
+    state, out = ppe.advance(state, [sample(7000)], 7000)
+    assert out.status == "unknown" and state["count"] == 1
+
+
 def test_skips_expiry_gap_and_old_samples():
     state = confirmed()
     kept, out = ppe.advance(state, [], 2000)
