@@ -14,7 +14,9 @@
         "kind": {
           "enum": [
             "collision",
-            "zone"
+            "zone",
+            "vest",
+            "helmet"
           ],
           "title": "Kind",
           "type": "string"

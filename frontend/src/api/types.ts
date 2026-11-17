@@ -95,8 +95,8 @@ export interface TrackedObject {
   trail: Vec2[]
 }
 
-// 위험 3종(충돌·위험 구역·안전조끼) + 카메라 끊김 같은 시스템 경고
-export type AlertKind = 'collision' | 'zone' | 'vest' | 'system'
+// 충돌·위험 구역·보호구 + 카메라 끊김 같은 시스템 경고
+export type AlertKind = 'collision' | 'zone' | 'vest' | 'helmet' | 'system'
 
 export interface Alert {
   alertId: string
