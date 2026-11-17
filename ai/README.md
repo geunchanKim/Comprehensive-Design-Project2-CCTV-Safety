@@ -26,6 +26,7 @@ ai/
 │   ├── real_pack.py           실측 정지 프레임 pack 만들기
 │   ├── eval_position.py       추정 위치 vs 정답 오차
 │   ├── eval_detection.py      탐지 성능
+│   ├── label_set.py           실제 영상 사람·의자 라벨 세트 만들기·탐지 오탐률 채점
 │   └── packs/                 저장한 탐지 묶음 (real-* = 실측 15개, s1~s4 = Unity)
 ├── ppe/                     보호구(안전모·조끼) 판별: 사람 영역 자르기 → 4종 탐지 → 사람별 상태
 │   ├── build_crops.py         Construction-PPE → 사람 영역 데이터셋, 사람별 정답
@@ -88,3 +89,4 @@ python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> 
 - 서버는 같은 session_id를 다시 받지 않는다 (409)
 - 메시지 양식: `docs/specs/message-spec.md`
 - 보호구 판별 방식·데이터셋: `docs/specs/ppe-dataset.md`
+- 실제 영상 탐지 오탐률 라벨링: `docs/specs/detection-label-set.md`
