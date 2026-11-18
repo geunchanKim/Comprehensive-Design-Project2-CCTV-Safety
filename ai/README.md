@@ -91,3 +91,4 @@ python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> 
 - 메시지 양식: `docs/specs/message-spec.md`
 - 보호구 판별 방식·데이터셋: `docs/specs/ppe-dataset.md`
 - 실제 영상 탐지 오탐률 라벨링: `docs/specs/detection-label-set.md`
+- 보호구 연동 녹화 재생 테스트 (v93·v94): `docs/specs/ppe-integration-replay.md`
