@@ -1,6 +1,4 @@
 import os
-import csv
-import io
 import json
 import re
 import logging
@@ -10,7 +8,6 @@ from typing import get_args
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import Response
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -235,45 +232,11 @@ def download_session_results(session_id: str, profile: CalibrationProfile = "bas
     stored_settings = db.get(SessionSettings, (session_id, profile, algorithm))
     if stored_settings is None:
         raise HTTPException(404, "session results not found")
-    output = io.StringIO()
-    fields = ["record_type", "pair_id", "frame_id", "timestamp_ms", "object_id", "object2_id", "cls",
-              "x", "y", "z", "distance_m", "ttc_s", "level", "settings"]
-    writer = csv.DictWriter(output, fieldnames=fields)
-    writer.writeheader()
-    settings_json = json.dumps(stored_settings.settings, sort_keys=True)
-    detections = db.execute(select(Detection, FrameBundle.pair_id).join(
-        FrameBundle, Detection.bundle_id == FrameBundle.id).where(
-        Detection.session_id == session_id,
-        Detection.calibration_profile == profile,
-        Detection.algorithm == algorithm,
-        Detection.object_id.is_not(None),
-    ).order_by(Detection.captured_at_ms, Detection.bundle_id,
-               Detection.camera_id, Detection.track_id)).all()
-    seen = set()
-    for item, pair_id in detections:
-        key = (item.bundle_id, item.object_id)   # 짝이 된 두 카메라 탐지는 같은 사람 번호라 한 줄만
-        if key in seen:
-            continue
-        seen.add(key)
-        writer.writerow({"record_type": "position", "pair_id": pair_id,
-                         "frame_id": item.frame_id, "timestamp_ms": item.captured_at_ms,
-                         "object_id": item.object_id, "cls": item.cls,
-                         "x": item.world_x, "y": item.world_y, "z": item.world_z,
-                         "settings": settings_json})
-    events = db.execute(select(RiskEvent, FrameBundle.pair_id).join(
-                        FrameBundle, RiskEvent.bundle_id == FrameBundle.id).where(
-                        RiskEvent.session_id == session_id,
-                        FrameBundle.calibration_profile == profile,
-                        FrameBundle.algorithm == algorithm)
-                        .order_by(RiskEvent.captured_at_ms, RiskEvent.id)).all()
-    for event, pair_id in events:
-        writer.writerow({"record_type": "risk", "pair_id": pair_id,
-                         "timestamp_ms": event.captured_at_ms,
-                         "object_id": event.object1_id, "object2_id": event.object2_id,
-                         "distance_m": event.distance_m, "ttc_s": event.ttc_s,
-                         "level": event.level, "settings": settings_json})
-    return Response(output.getvalue(), media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{session_id}-results.csv"'})
+    try:
+        from .results_export import export_response
+    except ImportError:
+        from results_export import export_response
+    return export_response(db, session_id, profile, algorithm, stored_settings.settings)
 
 
 @router.put("/cameras/{camera_id}/calibration", response_model=CameraCalibrationIn)
