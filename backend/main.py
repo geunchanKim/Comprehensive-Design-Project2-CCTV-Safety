@@ -1,6 +1,10 @@
 import os
+from math import isfinite
 
 from fastapi import FastAPI, Depends
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -26,6 +30,15 @@ app.include_router(router)
 app.include_router(dashboard_router)
 app.include_router(heartbeat_router)
 app.include_router(alerts_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    # JSON decoders can parse 1e309 as infinity. Keep validation errors JSON-safe
+    # instead of failing while serializing the rejected input back to the caller.
+    detail = jsonable_encoder(exc.errors(), custom_encoder={
+        float: lambda value: value if isfinite(value) else str(value)})
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.get("/health")

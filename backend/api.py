@@ -499,9 +499,9 @@ def _apply_floor_tracking(db: Session, session_id: str, profile: str, algorithm:
 
 
 def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algorithm: str,
-                                object1_id: int, object2_id: int, distance_m: float) -> str:
+                                object1_id: int, object2_id: int, distance_m: float, *, states=None) -> str:
     """F 경고 유지: 이 두 사람의 직전 경고 단계를 기억해서, 켜진 경고는 여유 거리만큼 더 멀어져야 끈다"""
-    state = db.scalar(select(RiskPairState).where(
+    state = states.get((object1_id, object2_id)) if states is not None else db.scalar(select(RiskPairState).where(
         RiskPairState.session_id == session_id,
         RiskPairState.calibration_profile == profile,
         RiskPairState.algorithm == algorithm,
@@ -511,11 +511,28 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
     previous = state.level if state else "safe"
     level = hysteresis_level(distance_m, previous, WARNING_DISTANCE_M, DANGER_DISTANCE_M)
     if state is None:
-        db.add(RiskPairState(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
-                             object1_id=object1_id, object2_id=object2_id, level=level))
+        state = RiskPairState(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
+                              object1_id=object1_id, object2_id=object2_id, level=level)
+        db.add(state)
+        if states is not None:
+            states[object1_id, object2_id] = state
     else:
         state.level = level
     return level
+
+
+def _load_risk_states(db, session_id, profile, algorithm, people):
+    """Request-local lookup, scoped to current people; cap SQL bind parameters."""
+    chunks = [people[start:start + 400] for start in range(0, len(people), 400)]
+    states = {}
+    for i, first in enumerate(chunks):
+        for second in chunks[i:]:
+            for row in db.scalars(select(RiskPairState).where(
+                RiskPairState.session_id == session_id, RiskPairState.calibration_profile == profile,
+                RiskPairState.algorithm == algorithm, RiskPairState.object1_id.in_(first),
+                RiskPairState.object2_id.in_(second))):
+                states[row.object1_id, row.object2_id] = row
+    return states
 
 
 def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm, *, commit=True):
@@ -923,6 +940,9 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
     timer.mark("floor_tracking_ms")
     risks = []
     hysteresis = settings["warning_hysteresis"]
+    people = sorted({match["object_id"] for match in matches if match["cls"] == "person"})
+    risk_states = (_load_risk_states(db, body.session_id, profile, algorithm, people)
+                   if hysteresis and len(people) >= 2 else None)
     if ENABLE_RISK_ANALYSIS or hysteresis:
         for first, second in combinations(matches, 2):
             if first["cls"] != "person" and second["cls"] != "person":
@@ -942,7 +962,7 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
             level = result.level
             if hysteresis and people:
                 level = _risk_level_with_hysteresis(db, body.session_id, profile, algorithm,
-                                                    object1_id, object2_id, result.distance_m)
+                                                    object1_id, object2_id, result.distance_m, states=risk_states)
             risk = {"object1_id": object1_id, "object2_id": object2_id,
                     "distance_m": result.distance_m, "ttc_s": result.ttc_s, "level": level}
             risks.append(risk)

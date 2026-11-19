@@ -1,3 +1,4 @@
+from math import isfinite
 from typing import Literal
 
 from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
@@ -32,6 +33,19 @@ class AnklesIn(BaseModel):
         return self
 
 
+def _validate_intrinsics(matrix, distortion):
+    if len(matrix) != 3 or any(len(row) != 3 for row in matrix):
+        raise ValueError("K must be a 3x3 matrix")
+    if len(distortion) != 5:
+        raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+    if not all(isfinite(value) for row in matrix for value in row) or not all(map(isfinite, distortion)):
+        raise ValueError("K and dist must contain finite values")
+    if matrix[0][0] <= 0 or matrix[1][1] <= 0:
+        raise ValueError("K focal lengths fx and fy must be positive")
+    if matrix[2] != [0, 0, 1] or matrix[1][0] != 0:
+        raise ValueError("K must use the upper triangular pinhole form with last row [0, 0, 1]")
+
+
 class CameraCalibrationIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     calibration_profile: CalibrationProfile = "basic"
@@ -50,14 +64,16 @@ class CameraCalibrationIn(BaseModel):
     def validate_calibration(self):
         if any(value <= 0 for value in self.image_size):
             raise ValueError("image_size must contain positive values")
-        if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
-            raise ValueError("K must be a 3x3 matrix")
-        if len(self.dist) != 5:
-            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        _validate_intrinsics(self.K, self.dist)
+        values = [*self.rvec, *self.tvec, self.reproj_error_px,
+                  self.validation_rmse_cm, self.validation_max_error_cm]
+        if not all(isfinite(value) for value in values if value is not None):
+            raise ValueError("calibration values must be finite")
         return self
 
 
 class CalibrationPoint(BaseModel):
+    model_config = {"allow_inf_nan": False}
     image: tuple[float, float]
     world: tuple[float, float, float]
 
@@ -74,10 +90,7 @@ class PnPCalibrationIn(BaseModel):
     def validate_input(self):
         if any(value <= 0 for value in self.image_size):
             raise ValueError("image_size must contain positive values")
-        if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
-            raise ValueError("K must be a 3x3 matrix")
-        if len(self.dist) != 5:
-            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        _validate_intrinsics(self.K, self.dist)
         training = {(point.image, point.world) for point in self.grid_points}
         if any((point.image, point.world) in training for point in self.validation_points):
             raise ValueError("validation points must be held out from PnP grid points")
