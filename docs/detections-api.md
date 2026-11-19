@@ -119,6 +119,8 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 
 `GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다.
 
+CSV 내보내기는 DB에서 `(bundle_id, object_id)`별 첫 관측을 선택하고 500행씩 읽는다. 위치 행의 대표 관측·정렬과 위험 행·설정 열을 유지한다. CSV 버퍼가 1MiB를 넘으면 서버 임시 파일로 전환하고, DB 조회가 끝난 뒤 청크로 전송한다. 다운로드 중 DB 커서를 유지하지 않으며 임시 파일은 전송 종료 시 닫는다. 큰 내보내기는 OS 임시 디스크 공간이 필요하다. 측정 조건과 재현 명령은 [개선 보고서](results-export-improvement.md)를 참고한다.
+
 기능별 효과를 따로 재려면 `algorithm`에 기능 조합을 넣는다. `f-` 뒤에 기능 글자를 알파벳 순서로, 중복 없이 붙인다.
 
 | 글자 | 기능 |
