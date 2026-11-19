@@ -518,16 +518,16 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
     return level
 
 
-def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm, *, commit=True):
     # Flush can fail before commit; apply the same rollback/409 contract.
     try:
-        return _store_detections(body, db, algorithm)
+        return _store_detections(body, db, algorithm, commit=commit)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
 
 
-def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm, *, commit=True):
     timer = StageTimer()
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
@@ -970,18 +970,23 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
         from dashboard_api import publish
     publish(db, body, algorithm, result)
     timer.mark("dashboard_snapshot_ms")
-    db.commit()
-    timer.mark("commit_ms")
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    timer.mark("commit_ms" if commit else "flush_ms")
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
     timer.mark("response_prepare_ms")
     timings = timer.result()
-    logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
-        "session_id": body.session_id, "pair_id": body.pair_id,
-        "calibration_profile": profile, "algorithm": algorithm,
-        "timings_ms": timings, "input_detections": sum(len(f.detections) for f in frames),
-        "match_count": len(matches), "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
-    }, allow_nan=False))
+    if commit:
+        # Replays are not durable until the outer transaction commits.
+        logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
+            "session_id": body.session_id, "pair_id": body.pair_id,
+            "calibration_profile": profile, "algorithm": algorithm,
+            "timings_ms": timings, "input_detections": sum(len(f.detections) for f in frames),
+            "match_count": len(matches), "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
+        }, allow_nan=False))
     return {"bundle_id": bundle_id, "session_id": body.session_id, "pair_id": body.pair_id,
             "calibration_profile": profile, "sync_delta_ms": sync_delta,
             "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
@@ -998,6 +1003,18 @@ def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
 @router.post("/sessions/{session_id}/recompute")
 def recompute_session(session_id: str, profile: CalibrationProfile,
                       algorithm: Algorithm = "baseline", db: Session = Depends(get_db)):
+    """Atomically replace one condition by replaying the original edge observations."""
+    try:
+        return _recompute_session(session_id, profile, algorithm, db)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "session recompute conflicts with stored results") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _recompute_session(session_id, profile, algorithm, db):
     """Re-run the original edge observations for one experiment condition."""
     _checked_algorithm(algorithm)
     source_profile, source_algorithm = "basic", "baseline"
@@ -1063,12 +1080,18 @@ def recompute_session(session_id: str, profile: CalibrationProfile,
     except ImportError:
         from dashboard_api import reset_stream
     reset_stream(db, session_id, profile, algorithm)
+    # Replace the entire condition in one transaction, including dashboard/PPE/
+    # tracking/alerts. Any replay or final-commit failure restores prior results.
+    for payload in payloads:
+        _create_detections(payload, db, algorithm=algorithm, commit=False)
     db.commit()
-
-    results = [_create_detections(payload, db, algorithm=algorithm) for payload in payloads]
+    logging.getLogger("uvicorn.error").info("recompute_complete %s", json.dumps({
+        "session_id": session_id, "calibration_profile": profile,
+        "algorithm": algorithm, "recomputed_bundles": len(payloads),
+    }))
     return {"session_id": session_id, "source_profile": source_profile,
             "source_algorithm": source_algorithm, "calibration_profile": profile,
-            "algorithm": algorithm, "recomputed_bundles": len(results)}
+            "algorithm": algorithm, "recomputed_bundles": len(payloads)}
 
 
 @router.post("/ground-truth", response_model=GroundTruthOut, status_code=status.HTTP_201_CREATED)

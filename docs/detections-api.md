@@ -107,6 +107,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 세션이 처음 처리될 때 모든 실험 설정을 조건별 `session_settings`에 저장한다. `algorithm=baseline`은 epipolar, `algorithm=improved`는 ground-plane 매칭이다. `POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved`는 최초 `basic + baseline` 요청의 원본 frame·bbox·foot을 대상 조건으로 다시 계산한다. 대상 조건의 기존 결과와 추적 상태는 교체된다.
 
+재계산은 대상 결과 삭제, 전체 원본 재처리, 추적·PPE 상태 및 대시보드·경고 갱신을 하나의 트랜잭션으로 처리한다. 모든 묶음이 성공해야 한 번 커밋하며, 중간 처리나 최종 커밋이 실패하면 기존 결과를 복원한다. 일반 `/detections`의 묶음별 커밋은 유지한다. 재현 결과와 트랜잭션의 한계는 [재계산 개선 보고서](recompute-atomicity-improvement.md)를 참고한다.
+
 `GET /health`의 `algorithms.baseline`과 `algorithms.improved`에서 각 알고리즘에 실제 적용되는 매칭, 칼만 필터, 트랙 쌍 유지, 발목 페어링 설정을 확인할 수 있다.
 
 탐지 한 번으로 2×2 결과를 만들려면 다음 세 요청을 실행한다. 최초 결과까지 합쳐 `basic/ baseline`, `basic/improved`, `precise/baseline`, `precise/improved`가 된다.
