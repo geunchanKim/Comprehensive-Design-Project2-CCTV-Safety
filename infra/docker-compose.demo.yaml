@@ -22,10 +22,13 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://cctv_demo:${DEMO_DB_PASSWORD:?Demo password required}@db:5432/cctv_dashboard_demo
+      LIVE_ALGORITHM: ${LIVE_ALGORITHM:-baseline}
+      ALERT_HOLD_MS: ${ALERT_HOLD_MS:-1000}
+      SESSION_ALERT_TIMEOUT_MS: ${SESSION_ALERT_TIMEOUT_MS:-3000}
       APP_COMMIT_SHA: ${DEMO_COMMIT_SHA:?Demo commit required}
-      DASHBOARD_SESSION_ID: classroom-1014-s10-t1-v91
-      DASHBOARD_CALIBRATION_PROFILE: basic
-      DASHBOARD_ALGORITHM: baseline
+      DASHBOARD_SESSION_ID: ${DASHBOARD_SESSION_ID:-classroom-1014-s10-t1-v91}
+      DASHBOARD_CALIBRATION_PROFILE: ${DASHBOARD_CALIBRATION_PROFILE:-basic}
+      DASHBOARD_ALGORITHM: ${LIVE_ALGORITHM:-baseline}
       ENABLE_RISK_ANALYSIS: "true"
       IMPROVED_FEATURES: cdfg
       MAX_SYNC_DELTA_MS: "50"

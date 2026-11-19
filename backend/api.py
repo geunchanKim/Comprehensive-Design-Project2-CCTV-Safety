@@ -178,6 +178,10 @@ def algorithm_features(algorithm: str) -> frozenset[str]:
     return frozenset(FEATURE_CODES[code] for code in codes)
 
 
+LIVE_ALGORITHM = os.getenv("LIVE_ALGORITHM", "baseline").strip()
+algorithm_features(LIVE_ALGORITHM)  # Fail startup rather than silently select another condition.
+
+
 def _checked_algorithm(algorithm: str) -> str:
     try:
         algorithm_features(algorithm)
@@ -1017,7 +1021,7 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
 
 @router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
 def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
-    return _create_detections(body, db, algorithm="baseline")
+    return _create_detections(body, db, algorithm=LIVE_ALGORITHM)
 
 
 @router.post("/sessions/{session_id}/recompute")
