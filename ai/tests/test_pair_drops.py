@@ -56,3 +56,16 @@ def test_analyze_splits_causes(tmp_path):
     assert res["pair_fail_foot_src"] == {"ankle": 1, "box": 1}
     assert res["missing_with_other_unmatched"] == 1
     assert 20 in res["people"] and res["people"][20]["drops"] == 0
+
+
+def test_algorithm_replay_count():
+    from algorithm_replay import count
+    head = "record_type,pair_id,object_id,object2_id,cls,level\n"
+    rows = [f"position,{p},1,,person," for p in (10, 11, 14, 15)]                 # 12·13 빠짐 → 끊김 1
+    rows += [f"position,{p},2,,person," for p in (10, 11, 12, 13, 14, 15)]
+    rows += ["position,10,9,,person,"]                                            # 한 번만 나온 번호
+    rows += [f"risk,{p},1,2,,warning" for p in (10, 11, 14)]                       # 경고 10~11, 14 → 구간 2
+    rows += ["risk,15,1,2,,safe"]
+    c = count(head + "\n".join(rows) + "\n", [10, 11, 12, 13, 14, 15], min_pairs=3)
+    assert c == {"people": 2, "short_ids": 1, "pairs_missing": 2, "drops": 1, "longest_drop_pairs": 2,
+                 "warning_episodes": 2, "warning_pairs": 3}
