@@ -202,6 +202,12 @@ export default function FloorPlan({
                 <text x={22 * px} y={11.5 * px} fontSize={10 * px} textAnchor="middle" fill="var(--warning)" fontWeight={600}>조끼</text>
               </g>
             )}
+            {o.helmet.status === 'not_wearing' && (
+              <g transform={`translate(${x + 10 * px} ${o.vest.status === 'not_wearing' ? y + 27 * px : y + 8 * px})`}>
+                <rect width={44 * px} height={16 * px} rx={4 * px} fill="var(--bg)" stroke="var(--warning)" strokeWidth={px} />
+                <text x={22 * px} y={11.5 * px} fontSize={10 * px} textAnchor="middle" fill="var(--warning)" fontWeight={600}>안전모</text>
+              </g>
+            )}
           </g>
         )
       })}

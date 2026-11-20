@@ -11,7 +11,7 @@ import { alertTitle, formatClock, objectName } from '../lib/safety'
 const LAYER_LABELS: [keyof FloorPlanLayers, string][] = [['trail', '이동 궤적'], ['fov', '카메라 시야'], ['zones', '구역']]
 const VEST_TEXT: Record<VestState['status'], string> = { wearing: '착용', not_wearing: '미착용', unknown: '미판단' }
 const ZONE_TEXT: Record<ZoneState['status'], string> = { outside: '밖', warning: '접근', intrusion: '진입', unknown: '미판단' }
-const EVALUATED_TEXT = { collision: '충돌', zone: '위험 구역', vest: '안전조끼' }
+const EVALUATED_TEXT = { collision: '충돌', zone: '위험 구역', vest: '안전조끼', helmet: '안전모' }
 
 // 구역이 바뀌면 key로 다시 마운트해서 이전 구역 데이터가 남지 않게 한다
 export default function AreaPage() {
@@ -141,6 +141,11 @@ function AreaView({ areaId }: { areaId: string }) {
                       {evaluated.vest ? VEST_TEXT[selected.vest.status] : '미판단'}
                       {evaluated.vest && selected.vest.confidence !== null && <span className="muted mono small"> {Math.round(selected.vest.confidence * 100)}%</span>}
                     </dd>
+                      <dt>안전모</dt>
+                      <dd>
+                        {evaluated.helmet ? VEST_TEXT[selected.helmet.status] : '미판단'}
+                        {evaluated.helmet && selected.helmet.confidence !== null && <span className="muted mono small"> {Math.round(selected.helmet.confidence * 100)}%</span>}
+                      </dd>
                   </>
                 )}
                 {selected.zoneStates.map((zs) => (
@@ -193,6 +198,7 @@ function Legend({ classes }: { classes: ClassInfo[] }) {
       <li><span className="legend__line legend__line--danger" />위험</li>
       <li><span className="legend__zone" />위험 구역</li>
       <li><span className="legend__ppe">조끼</span>안전조끼 미착용</li>
+      <li><span className="legend__ppe">모자</span>안전모 미착용</li>
     </ul>
   )
 }

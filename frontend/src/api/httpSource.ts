@@ -48,7 +48,8 @@ interface ApiSnapshot {
   collision_evaluated?: boolean
   zone_evaluated?: boolean
   vest_evaluated?: boolean
-  evaluated?: { collision: boolean; zone: boolean; vest: boolean }
+  helmet_evaluated?: boolean
+  evaluated?: { collision: boolean; zone: boolean; vest: boolean; helmet: boolean }
   captured_at_ms?: number
   capturedAtMs?: number
 }
@@ -66,6 +67,7 @@ interface ApiObject {
   camera_tracks?: Record<string, number>
   cameraTracks?: Record<string, number>
   vest: ApiObjectVest
+  helmet?: ApiObjectVest
   zone_states?: ApiZoneState[]
   zoneStates?: ApiZoneState[]
 }
@@ -155,6 +157,11 @@ const mapObject = (object: ApiObject): TrackedObject => ({
     confidence: object.vest.confidence,
     observedAtMs: value(object.vest.observed_at_ms, object.vest.observedAtMs, null),
   },
+  helmet: {
+    status: object.helmet?.status ?? 'unknown',
+    confidence: object.helmet?.confidence ?? null,
+    observedAtMs: value(object.helmet?.observed_at_ms, object.helmet?.observedAtMs, null),
+  },
   zoneStates: (value(object.zone_states, object.zoneStates, []) as ApiZoneState[]).map((state) => ({
     zoneId: value(state.zone_id, state.zoneId, ''),
     status: state.status,
@@ -237,6 +244,7 @@ const mapSnapshot = (snapshot: ApiSnapshot, alerts: Alert[]): AreaSnapshot => {
       collision: snapshot.collision_evaluated ?? false,
       zone: snapshot.zone_evaluated ?? false,
       vest: snapshot.vest_evaluated ?? false,
+      helmet: snapshot.helmet_evaluated ?? false,
     },
     capturedAtMs: value(snapshot.captured_at_ms, snapshot.capturedAtMs, 0),
     staleAfterMs: value(snapshot.stale_after_ms, snapshot.staleAfterMs, 1000),

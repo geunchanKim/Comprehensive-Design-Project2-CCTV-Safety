@@ -42,7 +42,7 @@ export const mockSource: DataSource = {
         objects: OBJECTS[areaId] ?? [],
         alerts: alerts.filter((a) => a.areaId === areaId),
         // 안전조끼 판정은 예시 구역 A만 켜져 있다고 가정 (나머지는 미판단 표시 확인용)
-        evaluated: { collision: true, zone: true, vest: areaId === 'A' },
+        evaluated: { collision: true, zone: true, vest: areaId === 'A', helmet: areaId === 'A' },
         capturedAtMs: Date.now(),
         staleAfterMs: 1000,
       },

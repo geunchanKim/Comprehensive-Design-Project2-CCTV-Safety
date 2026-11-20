@@ -76,6 +76,8 @@ export interface VestState {
   observedAtMs: number | null
 }
 
+export type HelmetState = VestState
+
 export interface ZoneState {
   zoneId: string
   status: 'outside' | 'warning' | 'intrusion' | 'unknown'
@@ -90,6 +92,7 @@ export interface TrackedObject {
   // 카메라별 track ID. 1개뿐이면 한 카메라로만 추정한 위치
   cameraTracks: Record<string, number>
   vest: VestState
+  helmet: HelmetState
   zoneStates: ZoneState[]
   // 서버는 보내지 않는다. 데이터 소스가 최근 snapshot 위치를 쌓아 채운다 (오래된 것부터)
   trail: Vec2[]
@@ -129,7 +132,7 @@ export interface AreaSnapshot {
   objects: TrackedObject[]
   alerts: Alert[]
   // false인 판단은 결과가 비어 있어도 안전이 아니라 미판단
-  evaluated: { collision: boolean; zone: boolean; vest: boolean }
+  evaluated: { collision: boolean; zone: boolean; vest: boolean; helmet: boolean }
   capturedAtMs: number
   staleAfterMs: number
 }
