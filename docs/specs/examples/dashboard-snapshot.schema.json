@@ -203,6 +203,15 @@
           "title": "Camera Tracks",
           "type": "object"
         },
+        "position_source": {
+          "default": "two_camera",
+          "enum": [
+            "two_camera",
+            "single_camera"
+          ],
+          "title": "Position Source",
+          "type": "string"
+        },
         "vest": {
           "$ref": "#/$defs/PPEState"
         },
