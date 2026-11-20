@@ -100,7 +100,7 @@ def sync_alerts(db, key, snapshot, now):
                 row.details = {**row.details, "_missing": True}
                 continue
             row.active_key = None
-            row.ended_at_ms = now
+            row.ended_at_ms = row.last_seen_at_ms + ALERT_HOLD_MS if hold else now
     for target, (level, details) in candidates.items():
         row = active.get(target)
         if row is not None and row.details.get("_missing") and now - row.last_seen_at_ms > ALERT_HOLD_MS:

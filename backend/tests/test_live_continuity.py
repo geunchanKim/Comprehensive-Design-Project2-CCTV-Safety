@@ -43,11 +43,16 @@ def test_collision_grace_preserves_ack_and_expires(configured):
     same, = save(2000, True)
     assert same.alert_id == first.alert_id and same.acknowledged
     assert save(3001, False) == []
+    from backend.models import DashboardAlert
+    with SessionLocal() as db:
+        assert db.get(DashboardAlert, first.alert_id).ended_at_ms == 3000
     new, = save(3100, True)
     assert new.alert_id != first.alert_id
     save(3300, False)
     later, = save(4200, True)
     assert later.alert_id != new.alert_id
+    with SessionLocal() as db:
+        assert db.get(DashboardAlert, new.alert_id).ended_at_ms == 4100
 
 
 @pytest.mark.parametrize("reader", ["/alerts", "/dashboard/snapshot"])

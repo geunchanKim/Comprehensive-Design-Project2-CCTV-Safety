@@ -134,16 +134,12 @@ def put_zones(body: ZoneSet, key=Depends(condition), db: Session = Depends(get_d
 def expire_stale_alerts(db, key):
     """Lazy durable expiry on snapshot/alerts/SSE reads, serialized with publish."""
     try:
-        from .alerts import SESSION_ALERT_TIMEOUT_MS, end_active, visible_alerts
-    except ImportError:
-        from alerts import SESSION_ALERT_TIMEOUT_MS, end_active, visible_alerts
-    now = time.time_ns() // 1_000_000
-    try:
-        from .alerts import alert_query
+        from .alerts import SESSION_ALERT_TIMEOUT_MS, alert_query, end_active, visible_alerts
         from .models import DashboardAlert
     except ImportError:
-        from alerts import alert_query
+        from alerts import SESSION_ALERT_TIMEOUT_MS, alert_query, end_active, visible_alerts
         from models import DashboardAlert
+    now = time.time_ns() // 1_000_000
     # Filter in SQL: unchanged live/SSE polls do not fetch the full snapshot.
     query = state_query(key).where(
         cast(DashboardState.snapshot["emitted_at_ms"].as_string(), BigInteger) <= now - SESSION_ALERT_TIMEOUT_MS,
@@ -219,13 +215,9 @@ def publish(db, body, algorithm, result):
         stream_id=row.stream_id, seq=row.seq, evaluate_zones=True,
     )
     try:
-        from .alerts import sync_alerts
+        from .alerts import SESSION_ALERT_TIMEOUT_MS, end_active, sync_alerts
     except ImportError:
-        from alerts import sync_alerts
-    try:
-        from .alerts import SESSION_ALERT_TIMEOUT_MS, end_active
-    except ImportError:
-        from alerts import SESSION_ALERT_TIMEOUT_MS, end_active
+        from alerts import SESSION_ALERT_TIMEOUT_MS, end_active, sync_alerts
     if row.snapshot and now - row.snapshot["emitted_at_ms"] >= SESSION_ALERT_TIMEOUT_MS:
         end_active(db, key, row.snapshot["emitted_at_ms"] + SESSION_ALERT_TIMEOUT_MS)
     snapshot.alerts = sync_alerts(db, key, snapshot, now)
