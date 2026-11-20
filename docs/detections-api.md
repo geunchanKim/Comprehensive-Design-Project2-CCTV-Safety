@@ -107,6 +107,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 세션이 처음 처리될 때 모든 실험 설정을 조건별 `session_settings`에 저장한다. `algorithm=baseline`은 epipolar, `algorithm=improved`는 ground-plane 매칭이다. `POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved`는 최초 `basic + baseline` 요청의 원본 frame·bbox·foot을 대상 조건으로 다시 계산한다. 대상 조건의 기존 결과와 추적 상태는 교체된다.
 
+재계산은 대상 결과 삭제, 전체 원본 재처리, 추적·PPE 상태 및 대시보드·경고 갱신을 하나의 트랜잭션으로 처리한다. 모든 묶음이 성공해야 한 번 커밋하며, 중간 처리나 최종 커밋이 실패하면 기존 결과를 복원한다. 일반 `/detections`의 묶음별 커밋은 유지한다. 재현 결과와 트랜잭션의 한계는 [재계산 개선 보고서](recompute-atomicity-improvement.md)를 참고한다.
+
 `GET /health`의 `algorithms.baseline`과 `algorithms.improved`에서 각 알고리즘에 실제 적용되는 매칭, 칼만 필터, 트랙 쌍 유지, 발목 페어링 설정을 확인할 수 있다.
 
 탐지 한 번으로 2×2 결과를 만들려면 다음 세 요청을 실행한다. 최초 결과까지 합쳐 `basic/ baseline`, `basic/improved`, `precise/baseline`, `precise/improved`가 된다.
@@ -118,6 +120,10 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 ```
 
 `GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다.
+
+캘리브레이션 직접 등록과 solve-pnp 입력의 K는 양수 fx/fy와 마지막 행 `[0, 0, 1]`을 갖는 상삼각 pinhole 행렬이어야 한다. K·왜곡 계수·외부 파라미터는 유한값이어야 하며, 잘못된 요청은 기존 카메라 설정을 변경하기 전에 422로 거절한다. 비유한 입력이 포함된 검증 오류도 JSON-safe 422로 반환한다.
+
+CSV 내보내기는 DB에서 `(bundle_id, object_id)`별 첫 관측을 선택하고 500행씩 읽는다. 위치 행의 대표 관측·정렬과 위험 행·설정 열을 유지한다. CSV 버퍼가 1MiB를 넘으면 서버 임시 파일로 전환하고, DB 조회가 끝난 뒤 청크로 전송한다. 다운로드 중 DB 커서를 유지하지 않으며 임시 파일은 전송 종료 시 닫는다. 큰 내보내기는 OS 임시 디스크 공간이 필요하다. 측정 조건과 재현 명령은 [개선 보고서](results-export-improvement.md)를 참고한다.
 
 기능별 효과를 따로 재려면 `algorithm`에 기능 조합을 넣는다. `f-` 뒤에 기능 글자를 알파벳 순서로, 중복 없이 붙인다.
 
