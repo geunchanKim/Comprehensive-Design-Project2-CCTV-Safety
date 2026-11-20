@@ -10,7 +10,7 @@ import numpy as np
 import cv2
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import or_, select, update
+from sqlalchemy import BigInteger, cast, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -146,7 +146,7 @@ def expire_stale_alerts(db, key):
         from models import DashboardAlert
     # Filter in SQL: unchanged live/SSE polls do not fetch the full snapshot.
     query = state_query(key).where(
-        DashboardState.snapshot["emitted_at_ms"].as_integer() <= now - SESSION_ALERT_TIMEOUT_MS,
+        cast(DashboardState.snapshot["emitted_at_ms"].as_string(), BigInteger) <= now - SESSION_ALERT_TIMEOUT_MS,
         alert_query(key).where(DashboardAlert.active_key.is_not(None)).exists(),
     ).with_for_update().execution_options(populate_existing=True)
     row = db.scalar(query)
