@@ -22,6 +22,7 @@
 명령 (ai/ 폴더에서)
   python eval/pair_drops.py runs/edge/classroom-1014-s10-t1-v93 runs/edge/classroom-1014-s10-t1-v94
   python eval/pair_drops.py runs/edge/classroom-1014-s10-t1-v94 --json > drops-v94.json
+  python eval/pair_drops.py runs/edge/classroom-1014-s10-t1-v94 --cls chair --min-pairs 20   # 의자
 """
 import argparse
 import json
@@ -72,24 +73,25 @@ def camera_state(track_ids: set, cam: str, obj: int, sent: dict, resp: dict) -> 
         if m["object_id"] != obj and m["camera_tracks"].get(cam) in track_ids:
             return "other", None
     sent_dets = {d["track_id"]: d for f in sent["frames"] if f["camera_id"] == cam for d in f["detections"]}
+    cls = next((d["cls"] for tid, d in sent_dets.items() if tid in track_ids), "person")
     unmatched = resp.get("unmatched", {}).get(cam, [])
     for tid in track_ids:
         if tid in unmatched and tid in sent_dets:
             return "unmatched", sent_dets[tid].get("foot_src")
-    other_person = any(d["cls"] == "person" and tid not in track_ids for tid, d in sent_dets.items() if tid in unmatched)
+    other_person = any(d["cls"] == cls and tid not in track_ids for tid, d in sent_dets.items() if tid in unmatched)
     return "missing", "new_track" if other_person else None
 
 
-def analyze(folder: Path, min_pairs: int = 30) -> dict:
+def analyze(folder: Path, min_pairs: int = 30, cls: str = "person") -> dict:
     sent = {s["pair_id"]: s for s in read_jsonl(folder / "sent_detections.jsonl")}
     resps = sorted((r for r in read_jsonl(folder / "responses_detections.jsonl") if r.get("status") == "processed"),
                    key=lambda r: r["pair_id"])
     resps = [r for r in resps if r["pair_id"] in sent]
-    seen = Counter(m["object_id"] for r in resps for m in r["matches"] if m["cls"] == "person")
+    seen = Counter(m["object_id"] for r in resps for m in r["matches"] if m["cls"] == cls)
     people = sorted(o for o, n in seen.items() if n >= min_pairs)
 
     per_person, pair_causes, run_causes, foot_src = {}, Counter(), Counter(), Counter()
-    track_change = 0   # missing 카메라에 짝 못 지은 다른 사람 트랙이 있던 경우 (카메라 단위)
+    track_change = 0   # missing 카메라에 짝 못 지은 같은 클래스 다른 트랙이 있던 경우 (카메라 단위)
     for obj in people:
         tracks = [next((m["camera_tracks"] for m in r["matches"] if m["object_id"] == obj), None) for r in resps]
         present = [t is not None for t in tracks]
@@ -114,7 +116,7 @@ def analyze(folder: Path, min_pairs: int = 30) -> dict:
             person["drops"] += 1
             person["longest_drop_pairs"] = max(person["longest_drop_pairs"], b - a + 1)
         per_person[obj] = person
-    return {"session": folder.name, "pairs": len(resps), "people": per_person, "pair_causes": pair_causes,
+    return {"session": folder.name, "cls": cls, "pairs": len(resps), "people": per_person, "pair_causes": pair_causes,
             "drop_causes": run_causes, "pair_fail_foot_src": foot_src, "missing_with_other_unmatched": track_change,
             "settings": resps[0].get("settings", {}) if resps else {}}
 
@@ -127,11 +129,11 @@ def report(results: list[dict]) -> str:
     lines = []
     for res in results:
         st = res["settings"]
-        lines += [f"## {res['session']}", "",
+        lines += [f"## {res['session']} ({res.get('cls', 'person')})", "",
                   f"서버 결과 짝 {res['pairs']}개 · 짝짓기 {st.get('matching_method', '?')} · "
                   f"한 카메라 위치 {'켬' if st.get('single_camera_fallback') else '끔'} · "
                   f"트랙 짝 유지 {'켬' if st.get('track_pair_hold') else '끔'}", "",
-                  "| 사람 | 나온 짝 | 빠진 짝 | 끊김 | 가장 긴 끊김(짝) | " + " | ".join(CAUSE_KO[c] for c in CAUSES) + " |",
+                  "| 번호 | 나온 짝 | 빠진 짝 | 끊김 | 가장 긴 끊김(짝) | " + " | ".join(CAUSE_KO[c] for c in CAUSES) + " |",
                   "|---|---|---|---|---|" + "---|" * len(CAUSES)]
         for obj, p in res["people"].items():
             lines.append(f"| #{obj} | {p['pairs_present']} | {p['pairs_missing']} | {p['drops']} | "
@@ -144,7 +146,7 @@ def report(results: list[dict]) -> str:
         if fs:
             lines += ["", "서버 짝짓기 실패 짝의 발 위치 출처: " +
                       ", ".join(f"{k} {pct(v, sum(fs.values()))}" for k, v in fs.most_common())]
-        lines.append(f"엣지가 보내지 않은 카메라 중 짝 못 지은 다른 사람 트랙이 있던 경우 (트랙 번호 바뀜 의심): "
+        lines.append(f"엣지가 보내지 않은 카메라 중 짝 못 지은 같은 클래스 다른 트랙이 있던 경우 (트랙 번호 바뀜 의심): "
                      f"{res['missing_with_other_unmatched']}")
         lines.append("")
     return "\n".join(lines)
@@ -154,7 +156,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="짝 끊김 원인 나누기 (엣지 놓침 vs 서버 짝짓기 실패)")
     parser.add_argument("folders", nargs="+", type=Path, help="runs/edge/<session_id> 폴더")
     parser.add_argument("--min-pairs", type=int, default=30, help="주요 사람으로 볼 최소 등장 짝 수")
+    parser.add_argument("--cls", default="person", help="볼 클래스 (person, chair)")
     parser.add_argument("--json", action="store_true", help="표 대신 JSON")
     args = parser.parse_args()
-    results = [analyze(f, args.min_pairs) for f in args.folders]
+    results = [analyze(f, args.min_pairs, args.cls) for f in args.folders]
     print(json.dumps(results, ensure_ascii=False, indent=1, default=dict) if args.json else report(results))
