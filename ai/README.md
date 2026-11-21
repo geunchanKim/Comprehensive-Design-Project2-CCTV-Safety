@@ -30,6 +30,7 @@ ai/
 │   ├── label_set.py           실제 영상 사람·의자 라벨 세트 만들기·탐지 오탐률 채점
 │   ├── pair_drops.py          짝 끊김 원인 나누기 (엣지 놓침 vs 서버 짝짓기 실패)
 │   ├── algorithm_replay.py    엣지 기록을 다시 보내 알고리즘 조건별 끊김·근접 경고 비교
+│   ├── chair_hold.py          의자 위치 유지 시뮬레이션 (사람–의자 경고 구간 수)
 │   └── packs/                 저장한 탐지 묶음 (real-* = 실측 15개, s1~s4 = Unity)
 ├── ppe/                     보호구(안전모·조끼) 판별: 사람 영역 자르기 → 4종 탐지 → 사람별 상태
 │   ├── build_crops.py         Construction-PPE → 사람 영역 데이터셋, 사람별 정답

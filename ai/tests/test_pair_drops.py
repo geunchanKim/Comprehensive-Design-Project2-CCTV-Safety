@@ -69,3 +69,16 @@ def test_algorithm_replay_count():
     c = count(head + "\n".join(rows) + "\n", [10, 11, 12, 13, 14, 15], min_pairs=3)
     assert c == {"people": 2, "short_ids": 1, "pairs_missing": 2, "drops": 1, "longest_drop_pairs": 2,
                  "warning_episodes": 2, "warning_pairs": 3}
+
+
+def test_chair_hold_fills_gaps_and_merges_episodes():
+    from chair_hold import episodes, held_positions
+    times = [0, 100, 200, 300, 400, 1600, 1700]
+    assert held_positions({0: (1, 1), 3: (2, 2)}, times, 0.15) == {0: (1, 1), 1: (1, 1), 3: (2, 2), 4: (2, 2)}
+    pos = {1: {i: (0.0, 0.0) for i in range(7)},                    # 사람은 계속 그 자리
+           2: {0: (0.5, 0), 2: (0.5, 0), 3: (1.5, 0), 5: (0.5, 0)}}  # 의자: 1번 빠짐, 3번 1m 밖, 4번 빠짐
+    cls = {1: "person", 2: "chair"}
+    assert episodes(pos, cls, times, hold_s=0) == 3                  # 0 / 2 / 5
+    assert episodes(pos, cls, times, hold_s=0.15) == 2               # 0~2 이어짐 / 5 (3번은 1m 밖)
+    assert episodes(pos, cls, times, hold_s=0.15, alert_hold_s=1.0) == 2   # 2→5 사이 1.4초 > 1초
+    assert episodes(pos, cls, times, hold_s=0.15, alert_hold_s=1.5) == 1
