@@ -82,3 +82,14 @@ def test_chair_hold_fills_gaps_and_merges_episodes():
     assert episodes(pos, cls, times, hold_s=0.15) == 2               # 0~2 이어짐 / 5 (3번은 1m 밖)
     assert episodes(pos, cls, times, hold_s=0.15, alert_hold_s=1.0) == 2   # 2→5 사이 1.4초 > 1초
     assert episodes(pos, cls, times, hold_s=0.15, alert_hold_s=1.5) == 1
+
+
+def test_missing_chair_uses_requested_class_for_new_track():
+    from pair_drops import camera_state
+    def state(cls):
+        sent = {"frames": [{"camera_id": "cam1", "detections": [
+            {"track_id": 8, "cls": cls}]}]}
+        resp = {"matches": [], "unmatched": {"cam1": [8]}}
+        return camera_state({5}, "cam1", 10, sent, resp, "chair")
+    assert state("chair") == ("missing", "new_track")
+    assert state("person") == ("missing", None)
