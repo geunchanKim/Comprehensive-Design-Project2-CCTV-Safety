@@ -182,3 +182,12 @@ CSV 내보내기는 DB에서 `(bundle_id, object_id)`별 첫 관측을 선택하
 ```
 
 같은 `(session_id, frame)`의 정답을 다시 전송하면 HTTP 409를 반환한다.
+
+
+## Live algorithm and alert continuity (#105)
+
+See [configuration, alert lifecycle and position source](specs/live-alert-continuity.md).
+
+## Chair position provenance
+
+C/f-cd retains missing chairs for 3000ms before risk calculation. Held positions have `position_source=held`, `position_observed_at_ms` and empty camera_tracks/observations. See [live alert continuity](specs/live-alert-continuity.md) for lifetime, CSV behavior and replay checks.

@@ -210,6 +210,8 @@ class ObservationResult(BaseModel):
 
 
 class DetectionResult(BaseModel):
+    position_source: Literal["two_camera", "single_camera", "held"] | None = None
+    position_observed_at_ms: int | None = None
     vest: PPEState = Field(default_factory=PPEState)
     helmet: PPEState = Field(default_factory=PPEState)
     object_id: int
@@ -221,7 +223,7 @@ class DetectionResult(BaseModel):
     raw_world: WorldPoint | None = None
     velocity: WorldPoint | None = None
     epipolar_error_px: float | None = None   # D 한 카메라 위치는 None
-    matching_method: Literal["epipolar", "ground-plane", "single-camera"] = "epipolar"
+    matching_method: Literal["epipolar", "ground-plane", "single-camera", "held"] = "epipolar"
     ground_distance_m: float | None = None
 
 
