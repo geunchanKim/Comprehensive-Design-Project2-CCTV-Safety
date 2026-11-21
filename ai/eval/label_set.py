@@ -28,6 +28,7 @@
 실행 (ai/ 폴더에서)
   python eval/label_set.py make --out ~/datasets/classroom-det-v1
   python eval/label_set.py score ~/datasets/classroom-det-v1 --vis
+  python eval/label_set.py sweep ~/datasets/classroom-det-v1 --cls chair --confs 0.4,0.3,0.25
   라벨 고치기: python eval/label_tool.py ~/datasets/classroom-det-v1  (로컬 화면, 확인한 사진을 reviewed.json 에 기록)
 """
 
@@ -232,6 +233,37 @@ def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
     return report
 
 
+def sweep_rows(frames, cls: str, confs: list[float], iou_min: float = 0.5, min_height: float = 20) -> list[dict]:
+    """frames: [(truth, preds)]. cls의 conf 기준만 바꿔 가며 채점한다 (다른 클래스 결과는 그대로)"""
+    out = []
+    for conf in confs:
+        rows = []
+        for truth, preds in frames:
+            kept = [p for p in preds if p[0] != cls or p[1] >= conf]
+            rows += match(truth, kept, iou_min, min_height)
+        out.append({"conf": conf, **summarize(rows)[cls]})
+    return out
+
+
+def sweep(dataset: Path, cls: str, confs: list[float], iou_min: float, min_height: float):
+    """가장 낮은 기준으로 한 번만 탐지하고 기준별로 거른다. 추적 없이 프레임마다 따로 탐지한다"""
+    import cv2
+    from detector import Detector
+
+    images = sorted((dataset / "images").glob("*.jpg"))
+    if not images:
+        raise SystemExit(f"이미지가 없어요: {dataset / 'images'}")
+    detector = Detector(model="coco", classes=CLASSES, foot="box", class_conf={cls: min(confs)})
+    frames = []
+    for path in images:
+        image = cv2.imread(str(path))
+        h, w = image.shape[:2]
+        truth = read_yolo(dataset / "labels" / f"{path.stem}.txt", w, h)
+        frames.append((truth, [(d["cls"], d["conf"], tuple(d["bbox"])) for d in detector(image, track=False)]))
+    return {"dataset": str(dataset), "images": len(images), "cls": cls, "iou_min": iou_min,
+            "min_height_px": min_height, "track": False, "rows": sweep_rows(frames, cls, confs, iou_min, min_height)}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="실제 영상 사람·의자 라벨 세트 만들기·채점")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -247,8 +279,17 @@ if __name__ == "__main__":
     s.add_argument("--iou", type=float, default=0.5)
     s.add_argument("--min-height", type=float, default=20)
     s.add_argument("--vis", action="store_true", help="틀린 프레임을 그려 vis/ 에 저장")
+    w = sub.add_parser("sweep", help="한 클래스의 conf 기준별 오탐률·검출률")
+    w.add_argument("dataset", type=Path)
+    w.add_argument("--cls", choices=CLASSES, default="chair")
+    w.add_argument("--confs", default="0.4,0.35,0.3,0.25,0.2")
+    w.add_argument("--iou", type=float, default=0.5)
+    w.add_argument("--min-height", type=float, default=20)
     args = parser.parse_args()
-    if args.cmd == "make":
+    if args.cmd == "sweep":
+        confs = [float(x) for x in args.confs.split(",")]
+        result = sweep(args.dataset.expanduser(), args.cls, confs, args.iou, args.min_height)
+    elif args.cmd == "make":
         result = make(args.root.expanduser(), args.out.expanduser(), args.target, args.stride, args.seed, args.max_images)
     else:
         result = score(args.dataset.expanduser(), args.iou, args.min_height, args.vis)

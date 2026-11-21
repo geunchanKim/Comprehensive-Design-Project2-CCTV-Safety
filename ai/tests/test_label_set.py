@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
 
-from label_set import candidates, iou, match, read_yolo, summarize, to_yolo  # noqa: E402
+from label_set import candidates, iou, match, read_yolo, summarize, sweep_rows, to_yolo  # noqa: E402
 
 
 def test_iou_and_yolo_round_trip(tmp_path):
@@ -46,3 +46,12 @@ def test_candidates_use_stride_alternate_cameras_and_fixed_seed(tmp_path):
     s1 = sorted((n, c) for f, n, c in got if f.parent.name == "s1")
     assert s1 == [(16, "cam1"), (46, "cam2"), (76, "cam1")]              # 카메라 번갈아
     assert got == candidates(tmp_path, stride=30, seed=0)                # 같은 seed면 같은 순서
+
+
+def test_sweep_filters_only_the_chosen_class():
+    box, other, person = (0, 0, 100, 100), (200, 0, 300, 100), (400, 0, 500, 100)
+    frames = [([("chair", box), ("person", person)],
+               [("chair", 0.5, box), ("chair", 0.3, other), ("person", 0.3, person)])]
+    high, low = sweep_rows(frames, "chair", [0.4, 0.25])
+    assert (high["tp"], high["fp"], high["fn"]) == (1, 0, 0)
+    assert (low["tp"], low["fp"], low["fn"]) == (1, 1, 0)
