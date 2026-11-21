@@ -11,7 +11,7 @@ from sqlalchemy import text
 try:
     from .api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
                       BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, MAX_SYNC_DELTA_MS,
-                      FEATURE_CODES, _experiment_settings, router)
+                      FEATURE_CODES, LIVE_ALGORITHM, _experiment_settings, router)
     from .database import get_db
     from .dashboard_api import router as dashboard_router
     from .heartbeat import router as heartbeat_router
@@ -19,7 +19,7 @@ try:
 except ImportError:  # Docker runs this directory as the import root.
     from api import (ANKLE_FOOT_Z_MAX, ANKLE_FOOT_Z_MIN, BBOX_POSITION_METHOD,
                      BOX_FOOT_Z_MAX, BOX_FOOT_Z_MIN, MAX_EPIPOLAR_ERROR_PX, MAX_SYNC_DELTA_MS,
-                     FEATURE_CODES, _experiment_settings, router)
+                     FEATURE_CODES, LIVE_ALGORITHM, _experiment_settings, router)
     from database import get_db
     from dashboard_api import router as dashboard_router
     from heartbeat import router as heartbeat_router
@@ -48,8 +48,16 @@ def health_check():
         from .ppe import settings as ppe_settings
     except ImportError:
         from ppe import settings as ppe_settings
+    try:
+        from .alerts import ALERT_HOLD_MS, SESSION_ALERT_TIMEOUT_MS
+    except ImportError:
+        from alerts import ALERT_HOLD_MS, SESSION_ALERT_TIMEOUT_MS
     return {
+        "alert_hold_ms": ALERT_HOLD_MS,
+        "session_alert_timeout_ms": SESSION_ALERT_TIMEOUT_MS,
         "ppe": ppe_settings(),
+        "live_algorithm": LIVE_ALGORITHM,
+        "live_settings": _experiment_settings(LIVE_ALGORITHM),
         "status": "ok",
         "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
         "max_epipolar_error_px": MAX_EPIPOLAR_ERROR_PX,
