@@ -67,13 +67,12 @@ def gaps(present: list[bool]) -> list[tuple[int, int]]:
     return out
 
 
-def camera_state(track_ids: set, cam: str, obj: int, sent: dict, resp: dict) -> tuple[str, str | None]:
+def camera_state(track_ids: set, cam: str, obj: int, sent: dict, resp: dict, cls: str = "person") -> tuple[str, str | None]:
     """빠진 짝에서 이 사람의 한 카메라 트랙 상태와 (보냈다면) 발 위치 출처"""
     for m in resp["matches"]:
         if m["object_id"] != obj and m["camera_tracks"].get(cam) in track_ids:
             return "other", None
     sent_dets = {d["track_id"]: d for f in sent["frames"] if f["camera_id"] == cam for d in f["detections"]}
-    cls = next((d["cls"] for tid, d in sent_dets.items() if tid in track_ids), "person")
     unmatched = resp.get("unmatched", {}).get(cam, [])
     for tid in track_ids:
         if tid in unmatched and tid in sent_dets:
@@ -103,7 +102,7 @@ def analyze(folder: Path, min_pairs: int = 30, cls: str = "person") -> dict:
             run = Counter()
             for i in range(a, b + 1):
                 r = resps[i]
-                (s1, f1), (s2, f2) = (camera_state(ids[c], c, obj, sent[r["pair_id"]], r) for c in CAMS)
+                (s1, f1), (s2, f2) = (camera_state(ids[c], c, obj, sent[r["pair_id"]], r, cls) for c in CAMS)
                 cause = classify(s1, s2)
                 run[cause] += 1
                 if cause == "pair_fail":
