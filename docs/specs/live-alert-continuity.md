@@ -29,3 +29,15 @@ snapshot.objects[].position_source is two_camera or single_camera. One current c
 Regression tests cover live f-cd storage/publication and condition isolation, grace boundaries and acknowledgment preservation, recurrence after grace, stale-input expiration and one seq increment, and position provenance. Run backend and edge suites against isolated test databases.
 
 November 24: verify deployed commit and health settings; prepare a fresh v95 session; replay at original recording speed; compare missing bundles and alert intervals with edge pair_drops/algorithm_replay tools; verify stable card IDs and single_camera styling; check no active alert remains three seconds after input ends. Targets are at least 90% fewer missing bundles versus baseline and at most half the warning intervals. Unit/regression success does not establish these measured targets. Grace uses server time, so accelerated replay/recompute is not a valid measurement of warning interval reduction. Recheck together with the edge chair-position improvements before filming on November 25.
+
+## Chair occlusion hold (PR #107 follow-up)
+
+Conditions with C (`floor_tracking`, including demo `f-cd`) retain the last real two-camera chair position for up to 3000ms of capture time, including the boundary, before calculating risks. Baseline does not retain chairs. Health algorithm settings and detection settings expose `chair_hold_ms`; this is a fixed policy without a new environment variable or Compose setting. Risk analysis still defaults to false.
+
+Held matches and snapshot objects use `position_source=held` and `position_observed_at_ms` (last real capture epoch ms). Their camera_tracks, observations and foot_pixels are empty; velocity is not extrapolated. Detection matching_method is held. A current observation takes precedence, and synthetic positions never renew their own lifetime.
+
+The query uses durable real Detection rows scoped to session, calibration profile and algorithm, excluding future observations. No schema migration or process-local cache is needed; rollback and recompute use existing transaction semantics. Synthetic positions are not inserted into Detection or position CSV exports: use response/snapshot recordings to analyze holding. RiskEvent records include risks calculated with held positions.
+
+This does not triangulate chairs from a single camera. A moved chair or a change of both camera track IDs can leave its old position for up to three seconds. Collision alerts can remain another second under PR #106's independent grace. Without new input, snapshots are not recomputed: clients must respect captured_at_ms/stale_after_ms and the stale-input alert expiry.
+
+For November 24 v95 replay at original speed, check held styling, person-chair alert intervals and false positives, duplicate chairs on reacquisition, and old positions after movement. Simulation 84 to 26 is not a measured server result.

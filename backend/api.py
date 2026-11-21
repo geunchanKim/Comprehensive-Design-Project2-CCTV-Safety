@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 try:
+    from .chair_hold import CHAIR_HOLD_MS, hold_chairs
     from .profiling import StageTimer
     from .database import get_db
     from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
@@ -31,6 +32,7 @@ try:
                            update_kalman, update_pair_hysteresis)
     from .risk import WARNING_RELEASE_MARGIN_M, calculate_pair_risk, hysteresis_level
 except ImportError:  # Docker runs this directory as the import root.
+    from chair_hold import CHAIR_HOLD_MS, hold_chairs
     from profiling import StageTimer
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
@@ -212,6 +214,7 @@ def _experiment_settings(algorithm: Algorithm):
         "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
         "kalman_process_noise": KALMAN_PROCESS_NOISE,
         "kalman_measurement_noise": KALMAN_MEASUREMENT_NOISE,
+        "chair_hold_ms": CHAIR_HOLD_MS if "floor" in algorithm_features(algorithm) else 0,
         "floor_track_gate_m": FLOOR_TRACK_GATE_M,
         "floor_track_max_missed": FLOOR_TRACK_MAX_MISSED,
         "single_camera_ankle_z_m": SINGLE_CAMERA_ANKLE_Z_M,
@@ -941,6 +944,8 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
         if floor_entries or singles:
             matches.extend(_apply_floor_tracking(db, body.session_id, profile, algorithm, settings,
                                                  floor_entries, singles, frames, calibrations))
+        hold_chairs(db, body.session_id, profile, algorithm,
+                    max(frame.ts for frame in frames), matches)
     timer.mark("floor_tracking_ms")
     risks = []
     hysteresis = settings["warning_hysteresis"]

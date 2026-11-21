@@ -212,3 +212,7 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 ## Live algorithm and alert continuity (#105)
 
 See [configuration, alert lifecycle and position source](live-alert-continuity.md).
+
+## Chair position provenance
+
+C/f-cd retains missing chairs for 3000ms before risk calculation. Held positions have `position_source=held`, `position_observed_at_ms` and empty camera_tracks/observations. See [live alert continuity](live-alert-continuity.md) for lifetime, CSV behavior and replay checks.
