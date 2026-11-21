@@ -89,7 +89,8 @@ class DashboardObject(ContractModel):
     world: WorldPoint
     velocity: WorldPoint | None = None
     camera_tracks: dict[str, int]
-    position_source: Literal["two_camera", "single_camera"] = "two_camera"
+    position_source: Literal["two_camera", "single_camera", "held"] = "two_camera"
+    position_observed_at_ms: int | None = None
     vest: PPEState = Field(default_factory=PPEState)
     helmet: PPEState = Field(default_factory=PPEState)
     zone_states: list[ZoneState] = Field(default_factory=list)
@@ -171,7 +172,8 @@ def build_snapshot(result: DetectionBundleOut, *, algorithm: str,
         objects=[DashboardObject(
             object_id=item.object_id, cls=item.cls, world=item.world, velocity=item.velocity,
             camera_tracks=item.camera_tracks,
-            position_source="single_camera" if len(item.camera_tracks) == 1 else "two_camera", vest=item.vest, helmet=item.helmet,
+            position_source=item.position_source or ("single_camera" if len(item.camera_tracks) == 1 else "two_camera"),
+            position_observed_at_ms=item.position_observed_at_ms, vest=item.vest, helmet=item.helmet,
             zone_states=[ZoneState(zone_id=zone.zone_id) for zone in zones.zones
                          if zone.enabled and item.cls == "person"],
         ) for item in result.matches],
