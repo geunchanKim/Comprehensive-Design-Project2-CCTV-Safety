@@ -10,7 +10,7 @@ import numpy as np
 import cv2
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import or_, select, update
+from sqlalchemy import BigInteger, cast, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -131,8 +131,36 @@ def put_zones(body: ZoneSet, key=Depends(condition), db: Session = Depends(get_d
     return Response(body.model_dump_json(), media_type="application/json", headers={"ETag": f'"{revision + 1}"'})
 
 
+def expire_stale_alerts(db, key):
+    """Lazy durable expiry on snapshot/alerts/SSE reads, serialized with publish."""
+    try:
+        from .alerts import SESSION_ALERT_TIMEOUT_MS, alert_query, end_active, visible_alerts
+        from .models import DashboardAlert
+    except ImportError:
+        from alerts import SESSION_ALERT_TIMEOUT_MS, alert_query, end_active, visible_alerts
+        from models import DashboardAlert
+    now = time.time_ns() // 1_000_000
+    # Filter in SQL: unchanged live/SSE polls do not fetch the full snapshot.
+    query = state_query(key).where(
+        cast(DashboardState.snapshot["emitted_at_ms"].as_string(), BigInteger) <= now - SESSION_ALERT_TIMEOUT_MS,
+        alert_query(key).where(DashboardAlert.active_key.is_not(None)).exists(),
+    ).with_for_update().execution_options(populate_existing=True)
+    row = db.scalar(query)
+    if row is None or not row.snapshot or now - row.snapshot["emitted_at_ms"] < SESSION_ALERT_TIMEOUT_MS:
+        return
+    if not any(item["active"] for item in row.snapshot["alerts"]):
+        return
+    end_active(db, key, row.snapshot["emitted_at_ms"] + SESSION_ALERT_TIMEOUT_MS)
+    snapshot = {**row.snapshot, "seq": row.seq + 1,
+                "alerts": [item.model_dump(mode="json") for item in visible_alerts(db, key)]}
+    row.seq += 1
+    row.snapshot = snapshot
+    db.commit()
+
+
 @router.get("/snapshot", response_model=DashboardSnapshot, responses={204: {"description": "No snapshot"}})
 def get_snapshot(key=Depends(condition), db: Session = Depends(get_db)):
+    expire_stale_alerts(db, key)
     row = db.scalar(state_query(key))
     if row is None or row.snapshot is None:
         return Response(status_code=204, headers={"Cache-Control": "no-store"})
@@ -143,6 +171,7 @@ def get_snapshot(key=Depends(condition), db: Session = Depends(get_db)):
 def events(key=Depends(condition)):
     def latest(previous):
         with SessionLocal() as db:
+            expire_stale_alerts(db, key)
             query = state_query(key).with_only_columns(DashboardState.snapshot)
             if previous is not None:
                 query = query.where(or_(DashboardState.stream_id != previous[0],
@@ -186,9 +215,11 @@ def publish(db, body, algorithm, result):
         stream_id=row.stream_id, seq=row.seq, evaluate_zones=True,
     )
     try:
-        from .alerts import sync_alerts
+        from .alerts import SESSION_ALERT_TIMEOUT_MS, end_active, sync_alerts
     except ImportError:
-        from alerts import sync_alerts
+        from alerts import SESSION_ALERT_TIMEOUT_MS, end_active, sync_alerts
+    if row.snapshot and now - row.snapshot["emitted_at_ms"] >= SESSION_ALERT_TIMEOUT_MS:
+        end_active(db, key, row.snapshot["emitted_at_ms"] + SESSION_ALERT_TIMEOUT_MS)
     snapshot.alerts = sync_alerts(db, key, snapshot, now)
     row.snapshot = snapshot.model_dump(mode="json")
     row.observations = {**row.observations, **{
