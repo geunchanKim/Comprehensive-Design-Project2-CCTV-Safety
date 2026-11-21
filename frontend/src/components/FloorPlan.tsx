@@ -180,22 +180,28 @@ export default function FloorPlan({
         const level = levels.get(o.objectId) ?? 'safe'
         const color = LEVEL_COLOR[level]
         const person = o.cls === 'person'
-        const single = Object.keys(o.cameraTracks).length < 2
+        const single = o.positionSource === 'single_camera'
+        // 지금 안 보이고 마지막 위치만 남은 객체: 흐리게 + 점선 외곽선
+        const held = o.positionSource === 'held'
         const shape = shapeOf(o.cls)
-        const fill = single ? 'transparent' : person ? color : '#2A333E'
+        const fill = single || held ? 'transparent' : person ? color : '#2A333E'
         const stroke = level === 'safe' && !person ? 'var(--muted)' : color
+        const dash = held ? `${2.5 * px} ${2 * px}` : undefined
         const { x, y } = toPlan(o.world)
         return (
           <g key={o.objectId} className="plan-object" role={onSelect ? 'button' : undefined} tabIndex={onSelect ? 0 : undefined}
-            aria-label={objectName(o, classes)} aria-pressed={onSelect ? selectedId === o.objectId : undefined}
+            aria-label={`${objectName(o, classes)}${held ? ' (마지막 위치)' : ''}`} aria-pressed={onSelect ? selectedId === o.objectId : undefined}
+            opacity={held ? 0.55 : undefined}
             onClick={() => select(o.objectId)} onKeyDown={(e) => onKey(e, o.objectId)}>
             {single && <circle cx={x} cy={y} r={0.45} fill="rgba(155,166,180,0.07)" stroke="var(--muted)" strokeWidth={px} strokeDasharray={`${3 * px} ${3 * px}`} />}
             {selectedId === o.objectId && <circle cx={x} cy={y} r={14 * px} fill="none" stroke="var(--accent)" strokeWidth={2 * px} />}
             {level === 'danger' && <circle cx={x} cy={y} r={14 * px} fill="rgba(255,90,85,0.18)" />}
-            {shape === 'circle' && <circle cx={x} cy={y} r={7 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} />}
-            {shape === 'wide' && <rect x={x - 11 * px} y={y - 6.5 * px} width={22 * px} height={13 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} />}
-            {shape === 'square' && <rect x={x - 6 * px} y={y - 6 * px} width={12 * px} height={12 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} />}
-            <text x={x + 10 * px} y={y - 12 * px} fontSize={11 * px} fill={level === 'safe' ? 'var(--muted)' : color} fontFamily="var(--font-mono)">#{o.objectId}</text>
+            {shape === 'circle' && <circle cx={x} cy={y} r={7 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} strokeDasharray={dash} />}
+            {shape === 'wide' && <rect x={x - 11 * px} y={y - 6.5 * px} width={22 * px} height={13 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} strokeDasharray={dash} />}
+            {shape === 'square' && <rect x={x - 6 * px} y={y - 6 * px} width={12 * px} height={12 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} strokeDasharray={dash} />}
+            <text x={x + 10 * px} y={y - 12 * px} fontSize={11 * px} fill={level === 'safe' ? 'var(--muted)' : color} fontFamily="var(--font-mono)">
+              #{o.objectId}{held && !compact && <tspan fill="var(--muted)" fontFamily="inherit"> 마지막 위치</tspan>}
+            </text>
             {o.vest.status === 'not_wearing' && (
               <g transform={`translate(${x + 10 * px} ${y + 8 * px})`}>
                 <rect width={44 * px} height={16 * px} rx={4 * px} fill="var(--bg)" stroke="var(--warning)" strokeWidth={px} />

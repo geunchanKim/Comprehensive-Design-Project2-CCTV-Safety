@@ -346,6 +346,7 @@
 .legend__shape--wide { width: 20px; }
 .legend__shape--protected { background: var(--text); border-color: var(--text); }
 .legend__shape--single { border-radius: 50%; border: 1px dashed var(--muted); background: transparent; }
+.legend__shape--held { border: 1.5px dashed var(--muted); background: transparent; opacity: 0.7; }
 .legend__line { width: 18px; height: 2px; }
 .legend__line--warning { background: var(--warning); }
 .legend__line--danger { background: var(--danger); }

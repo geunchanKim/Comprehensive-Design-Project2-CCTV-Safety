@@ -84,13 +84,17 @@ export interface ZoneState {
   distanceM: number | null
 }
 
+export type PositionSource = 'two_camera' | 'single_camera' | 'held'
+
 export interface TrackedObject {
   objectId: number
   cls: string
   world: Vec2
   velocity: Vec2 | null
-  // 카메라별 track ID. 1개뿐이면 한 카메라로만 추정한 위치
+  // 카메라별 track ID. held면 지금 보이지 않아 비어 있다
   cameraTracks: Record<string, number>
+  // held: 가려져 안 보이는 의자의 마지막 실제 위치 (서버가 최대 3초 유지)
+  positionSource: PositionSource
   vest: VestState
   helmet: HelmetState
   zoneStates: ZoneState[]

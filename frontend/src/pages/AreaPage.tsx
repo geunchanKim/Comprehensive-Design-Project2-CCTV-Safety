@@ -131,8 +131,12 @@ function AreaView({ areaId }: { areaId: string }) {
                 <dt>속도</dt><dd className="mono">{selected.velocity ? `${Math.hypot(selected.velocity.x, selected.velocity.y).toFixed(2)} m/s` : '—'}</dd>
                 <dt>카메라 track</dt>
                 <dd className="mono">
-                  {Object.entries(selected.cameraTracks).map(([cam, track]) => `${cam} #${track}`).join(' · ')}
-                  {Object.keys(selected.cameraTracks).length < 2 && ' (한 카메라)'}
+                  {selected.positionSource === 'held'
+                    ? <span className="muted">마지막 위치 (지금 안 보임)</span>
+                    : <>
+                        {Object.entries(selected.cameraTracks).map(([cam, track]) => `${cam} #${track}`).join(' · ')}
+                        {selected.positionSource === 'single_camera' && ' (한 카메라)'}
+                      </>}
                 </dd>
                 {selected.cls === 'person' && (
                   <>
@@ -194,6 +198,7 @@ function Legend({ classes }: { classes: ClassInfo[] }) {
         <li key={c.cls}><span className={`legend__shape legend__shape--${c.shape} ${c.protected ? 'legend__shape--protected' : ''}`} />{c.label}</li>
       ))}
       <li><span className="legend__shape legend__shape--single" />한 카메라만 봄 (추정 오차)</li>
+      <li><span className="legend__shape legend__shape--held" />가려짐 · 마지막 위치 (최대 3초)</li>
       <li><span className="legend__line legend__line--warning" />주의</li>
       <li><span className="legend__line legend__line--danger" />위험</li>
       <li><span className="legend__zone" />위험 구역</li>
