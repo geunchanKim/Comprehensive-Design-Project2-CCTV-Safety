@@ -14,7 +14,9 @@ export default function OverviewPage() {
   const dangerCount = areas.filter((area) => area.status === 'danger').length
   const warningCount = areas.filter((area) => area.status === 'warning').length
   const offlineCount = areas.filter((area) => area.status === 'offline').length
-  const peopleCount = areas.reduce((total, area) => total + (area.people ?? 0), 0)
+  const peopleCount = areas.every((area) => area.people !== null)
+    ? areas.reduce((total, area) => total + (area.people ?? 0), 0)
+    : null
 
   return (
     <div className="page">
@@ -32,7 +34,7 @@ export default function OverviewPage() {
         <>
           <section className="kpis" aria-label="전체 현황 요약">
             <div className="kpi"><span className="muted small">관제 구역</span><span className="kpi__value mono">{areas.length}<small> 곳</small></span></div>
-            <div className="kpi"><span className="muted small">현재 인원</span><span className="kpi__value mono">{peopleCount}<small> 명</small></span></div>
+            <div className="kpi"><span className="muted small">현재 인원</span><span className="kpi__value mono">{peopleCount === null ? '—' : <>{peopleCount}<small> 명</small></>}</span></div>
             <div className="kpi kpi--danger"><span className="muted small">위험 구역</span><span className="kpi__value mono danger-text">{dangerCount}</span></div>
             <div className="kpi"><span className="muted small">주의 · 감시 불가</span><span className="kpi__value mono warning-text">{warningCount + offlineCount}</span></div>
           </section>

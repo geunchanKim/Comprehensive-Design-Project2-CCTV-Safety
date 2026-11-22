@@ -271,12 +271,15 @@ const httpSource: DataSource = {
   async listAreas(signal) {
     const alerts = await httpSource.listActiveAlerts(signal)
     return Promise.all(AREAS.map(async (area) => {
-      const cameras = await httpSource.listCameras(area.areaId, signal)
+      const [cameras, snapshot] = await Promise.all([
+        httpSource.listCameras(area.areaId, signal),
+        httpSource.getAreaSnapshot(area.areaId, signal).catch(() => null),
+      ])
       const areaAlerts = alerts.filter((alert) => alert.areaId === area.areaId)
       return {
         ...area,
         status: areaStatus(areaAlerts, cameras),
-        people: null,
+        people: snapshot?.objects.filter((object) => object.cls === 'person').length ?? null,
         cameras: { online: cameras.filter((camera) => camera.online === true).length, total: cameras.length },
       }
     }))
