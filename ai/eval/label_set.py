@@ -28,6 +28,7 @@
 실행 (ai/ 폴더에서)
   python eval/label_set.py make --out ~/datasets/classroom-det-v1
   python eval/label_set.py score ~/datasets/classroom-det-v1 --vis
+  python eval/label_set.py sweep ~/datasets/classroom-det-v1 --cls chair --confs 0.4,0.3,0.25
   라벨 고치기: python eval/label_tool.py ~/datasets/classroom-det-v1  (로컬 화면, 확인한 사진을 reviewed.json 에 기록)
 """
 
@@ -179,13 +180,8 @@ def make(root: Path, out: Path, target: int, stride: int, seed: int, max_images:
 
 # ── score ──
 
-def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
-    import cv2
-    from detector import Detector
-
-    images = sorted((dataset / "images").glob("*.jpg"))
-    if not images:
-        raise SystemExit(f"이미지가 없어요: {dataset / 'images'}")
+def label_status(dataset: Path, images: list[Path]) -> tuple[bool, list[str]]:
+    """라벨이 초안 그대로인지, 확인 안 한 사진이 있는지 보고 경고한다"""
     unchanged = all((dataset / "labels" / f"{p.stem}.txt").read_text() ==
                     (dataset / "labels_pre" / f"{p.stem}.txt").read_text() for p in images
                     if (dataset / "labels_pre" / f"{p.stem}.txt").exists())
@@ -193,10 +189,22 @@ def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
     reviewed = set(json.loads(reviewed_path.read_text())) if reviewed_path.exists() else set()
     not_reviewed = [p.stem for p in images if p.stem not in reviewed]
     if unchanged:
-        print("[주의] labels/ 가 초안(labels_pre/)과 전부 같아요. 라벨을 확인·수정하기 전이면 결과가 부풀려집니다")
+        print("[주의] labels/ 가 초안(labels_pre/)과 전부 같아요. 라벨을 확인·수정하기 전이면 결과가 부풀려집니다",
+              file=sys.stderr)
     if not_reviewed:
         print(f"[주의] 확인 안 한 사진 {len(not_reviewed)}장 (label_tool.py 로 저장한 사진만 확인함으로 셈). "
-              f"이 사진들은 초안이 정답으로 들어갑니다")
+              f"이 사진들은 초안이 정답으로 들어갑니다", file=sys.stderr)
+    return unchanged, not_reviewed
+
+
+def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
+    import cv2
+    from detector import Detector
+
+    images = sorted((dataset / "images").glob("*.jpg"))
+    if not images:
+        raise SystemExit(f"이미지가 없어요: {dataset / 'images'}")
+    unchanged, not_reviewed = label_status(dataset, images)
     detector = Detector(model="coco", classes=CLASSES, foot="box")
     all_rows, box_rows = [], []
     if vis:
@@ -232,6 +240,53 @@ def score(dataset: Path, iou_min: float, min_height: float, vis: bool):
     return report
 
 
+def sweep_rows(paths, load, detector, cls: str, confs: list[float], iou_min: float = 0.5,
+               min_height: float = 20) -> list[dict]:
+    """
+    cls의 conf 기준마다 탐지기를 직접 다시 돌려 채점한다.
+    탐지기는 반올림 전 신뢰도로 거르고 반올림한 값을 돌려주므로, 돌려받은 conf로 다시 거르면 경계에서 결과가 달라진다.
+    load(path) → (이미지, 정답)
+    """
+    base = dict(detector.class_conf)
+    out = []
+    try:
+        for conf in confs:
+            detector.class_conf = {**base, cls: conf}
+            rows = []
+            for path in paths:
+                image, truth = load(path)
+                preds = [(d["cls"], d["conf"], tuple(d["bbox"])) for d in detector(image, track=False)]
+                rows += match(truth, preds, iou_min, min_height)
+            out.append({"conf": conf, "class_conf": dict(detector.class_conf), **summarize(rows)[cls]})
+    finally:
+        detector.class_conf = base
+    return out
+
+
+def sweep(dataset: Path, cls: str, confs: list[float], iou_min: float, min_height: float):
+    """기준마다 프레임별로 직접 탐지한다 (추적 없음)"""
+    import cv2
+    from detector import Detector
+
+    images = sorted((dataset / "images").glob("*.jpg"))
+    if not images:
+        raise SystemExit(f"이미지가 없어요: {dataset / 'images'}")
+    unchanged, not_reviewed = label_status(dataset, images)
+
+    def load(path):
+        image = cv2.imread(str(path))
+        h, w = image.shape[:2]
+        return image, read_yolo(dataset / "labels" / f"{path.stem}.txt", w, h)
+
+    detector = Detector(model="coco", classes=CLASSES, foot="box")
+    return {"dataset": str(dataset), "images": len(images), "labels_unchanged_from_prelabel": unchanged,
+            "reviewed_images": len(images) - len(not_reviewed), "cls": cls,
+            "detector": {"model": detector.model_name, "imgsz": detector.imgsz, "class_conf": detector.class_conf,
+                         "track": False},
+            "iou_min": iou_min, "min_height_px": min_height,
+            "rows": sweep_rows(images, load, detector, cls, confs, iou_min, min_height)}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="실제 영상 사람·의자 라벨 세트 만들기·채점")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -247,8 +302,17 @@ if __name__ == "__main__":
     s.add_argument("--iou", type=float, default=0.5)
     s.add_argument("--min-height", type=float, default=20)
     s.add_argument("--vis", action="store_true", help="틀린 프레임을 그려 vis/ 에 저장")
+    w = sub.add_parser("sweep", help="한 클래스의 conf 기준별 오탐률·검출률")
+    w.add_argument("dataset", type=Path)
+    w.add_argument("--cls", choices=CLASSES, default="chair")
+    w.add_argument("--confs", default="0.4,0.35,0.3,0.25,0.2")
+    w.add_argument("--iou", type=float, default=0.5)
+    w.add_argument("--min-height", type=float, default=20)
     args = parser.parse_args()
-    if args.cmd == "make":
+    if args.cmd == "sweep":
+        confs = [float(x) for x in args.confs.split(",")]
+        result = sweep(args.dataset.expanduser(), args.cls, confs, args.iou, args.min_height)
+    elif args.cmd == "make":
         result = make(args.root.expanduser(), args.out.expanduser(), args.target, args.stride, args.seed, args.max_images)
     else:
         result = score(args.dataset.expanduser(), args.iou, args.min_height, args.vis)

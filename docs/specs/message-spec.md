@@ -207,3 +207,12 @@ Unity 값 계산 (`ai/edge/unity_calibration.py`)
 ## 보호구 상태 확장 (2026-11-16)
 
 사람 탐지의 선택 입력 `vest`·`helmet`과 실제 추론 시각, 연속 판별 규칙은 [보호구 상태 계약](ppe-state.md)을 따른다. 기존 입력은 그대로 허용하며 미관측을 미착용으로 바꾸지 않는다.
+
+
+## Live algorithm and alert continuity (#105)
+
+See [configuration, alert lifecycle and position source](live-alert-continuity.md).
+
+## Chair position provenance
+
+C/f-cd retains missing chairs for 3000ms before risk calculation. Held positions have `position_source=held`, `position_observed_at_ms` and empty camera_tracks/observations. See [live alert continuity](live-alert-continuity.md) for lifetime, CSV behavior and replay checks.
