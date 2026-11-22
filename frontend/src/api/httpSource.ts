@@ -1,6 +1,6 @@
 import { getJson, postJson } from './client'
 import type { DataSource } from './source'
-import type { Alert, AreaConfig, AreaSnapshot, AreaSummary, Camera, ClassInfo, TrackedObject, Vec2 } from './types'
+import type { Alert, AreaConfig, AreaSnapshot, AreaSummary, Camera, ClassInfo, PositionSource, PpeState, TrackedObject, Vec2 } from './types'
 
 // 서버에 구역 목록 API가 생기기 전까지는 구역 하나로 운영한다.
 // 구역이 늘면 이 목록을 서버 응답(GET /dashboard/areas 등)으로 바꾸면 된다.
@@ -48,7 +48,8 @@ interface ApiSnapshot {
   collision_evaluated?: boolean
   zone_evaluated?: boolean
   vest_evaluated?: boolean
-  evaluated?: { collision: boolean; zone: boolean; vest: boolean }
+  helmet_evaluated?: boolean
+  evaluated?: { collision: boolean; zone: boolean; vest: boolean; helmet?: boolean }
   captured_at_ms?: number
   capturedAtMs?: number
 }
@@ -65,17 +66,27 @@ interface ApiObject {
   velocity: Vec2 | null
   camera_tracks?: Record<string, number>
   cameraTracks?: Record<string, number>
-  vest: ApiObjectVest
+  position_source?: PositionSource
+  positionSource?: PositionSource
+  // 사람별 보호구 상태. 이전 서버는 helmet이 없으므로 없으면 unknown으로 본다
+  vest?: ApiPpeState | null
+  helmet?: ApiPpeState | null
   zone_states?: ApiZoneState[]
   zoneStates?: ApiZoneState[]
 }
 
-interface ApiObjectVest {
-  status: TrackedObject['vest']['status']
+interface ApiPpeState {
+  status: PpeState['status']
   confidence: number | null
   observed_at_ms?: number | null
   observedAtMs?: number | null
 }
+
+const mapPpe = (state: ApiPpeState | null | undefined): PpeState => ({
+  status: state?.status ?? 'unknown',
+  confidence: state?.confidence ?? null,
+  observedAtMs: value(state?.observed_at_ms, state?.observedAtMs, null),
+})
 
 interface ApiZoneState {
   zone_id?: string
@@ -144,24 +155,27 @@ const mapZone = (zone: ApiZone) => ({
   enabled: zone.enabled,
 })
 
-const mapObject = (object: ApiObject): TrackedObject => ({
-  objectId: value(object.object_id, object.objectId, 0),
-  cls: object.cls,
-  world: object.world,
-  velocity: object.velocity,
-  cameraTracks: value(object.camera_tracks, object.cameraTracks, {}),
-  vest: {
-    status: object.vest.status,
-    confidence: object.vest.confidence,
-    observedAtMs: value(object.vest.observed_at_ms, object.vest.observedAtMs, null),
-  },
-  zoneStates: (value(object.zone_states, object.zoneStates, []) as ApiZoneState[]).map((state) => ({
-    zoneId: value(state.zone_id, state.zoneId, ''),
-    status: state.status,
-    distanceM: value(state.distance_m, state.distanceM, null),
-  })),
-  trail: [],
-})
+const mapObject = (object: ApiObject): TrackedObject => {
+  const cameraTracks = value(object.camera_tracks, object.cameraTracks, {})
+  return {
+    objectId: value(object.object_id, object.objectId, 0),
+    cls: object.cls,
+    world: object.world,
+    velocity: object.velocity,
+    cameraTracks,
+    // 예전 서버는 position_source를 보내지 않으므로 track 수로 판단한다
+    positionSource: value(object.position_source, object.positionSource,
+      Object.keys(cameraTracks).length < 2 ? 'single_camera' : 'two_camera'),
+    vest: mapPpe(object.vest),
+    helmet: mapPpe(object.helmet),
+    zoneStates: (value(object.zone_states, object.zoneStates, []) as ApiZoneState[]).map((state) => ({
+      zoneId: value(state.zone_id, state.zoneId, ''),
+      status: state.status,
+      distanceM: value(state.distance_m, state.distanceM, null),
+    })),
+    trail: [],
+  }
+}
 
 interface ApiAlert {
   alert_id?: string
@@ -233,11 +247,14 @@ const mapSnapshot = (snapshot: ApiSnapshot, alerts: Alert[]): AreaSnapshot => {
     classes,
     objects: snapshot.objects.map(mapObject),
     alerts: alerts.filter((alert) => alert.areaId === areaId),
-    evaluated: snapshot.evaluated ?? {
-      collision: snapshot.collision_evaluated ?? false,
-      zone: snapshot.zone_evaluated ?? false,
-      vest: snapshot.vest_evaluated ?? false,
-    },
+    evaluated: snapshot.evaluated
+      ? { ...snapshot.evaluated, helmet: snapshot.evaluated.helmet ?? false }
+      : {
+          collision: snapshot.collision_evaluated ?? false,
+          zone: snapshot.zone_evaluated ?? false,
+          vest: snapshot.vest_evaluated ?? false,
+          helmet: snapshot.helmet_evaluated ?? false,
+        },
     capturedAtMs: value(snapshot.captured_at_ms, snapshot.capturedAtMs, 0),
     staleAfterMs: value(snapshot.stale_after_ms, snapshot.staleAfterMs, 1000),
   }
@@ -254,12 +271,15 @@ const httpSource: DataSource = {
   async listAreas(signal) {
     const alerts = await httpSource.listActiveAlerts(signal)
     return Promise.all(AREAS.map(async (area) => {
-      const cameras = await httpSource.listCameras(area.areaId, signal)
+      const [cameras, snapshot] = await Promise.all([
+        httpSource.listCameras(area.areaId, signal),
+        httpSource.getAreaSnapshot(area.areaId, signal).catch(() => null),
+      ])
       const areaAlerts = alerts.filter((alert) => alert.areaId === area.areaId)
       return {
         ...area,
         status: areaStatus(areaAlerts, cameras),
-        people: null,
+        people: snapshot?.objects.filter((object) => object.cls === 'person').length ?? null,
         cameras: { online: cameras.filter((camera) => camera.online === true).length, total: cameras.length },
       }
     }))

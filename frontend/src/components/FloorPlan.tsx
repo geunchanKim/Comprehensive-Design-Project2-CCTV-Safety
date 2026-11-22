@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react'
 import type { Alert, AreaConfig, Camera, ClassInfo, ClassShape, TrackedObject, Vec2 } from '../api/types'
-import { levelByObject, nearestPointOnPolygon, objectName } from '../lib/safety'
+import { levelByObject, nearestPointOnPolygon, objectName, PPE_ITEMS, ppeStatus } from '../lib/safety'
 
 export interface FloorPlanLayers {
   trail: boolean
@@ -19,6 +19,8 @@ interface Props {
   onSelect?: (objectId: number) => void
   // 위험 팝업 스냅샷처럼 작게 그릴 때: 카메라 라벨·축척 생략
   compact?: boolean
+  // snapshot이 오래되면 보호구 미착용 배지를 숨긴다 (마지막 값을 현재 상태로 보이지 않게)
+  stale?: boolean
   label: string
 }
 
@@ -29,7 +31,7 @@ const ARROW_SECONDS = 0.8
 // 구역 평면도. 월드 좌표(m)를 SVG 좌표로 옮겨 그리고, 표식 크기만 화면 기준(px)으로 환산한다.
 // 월드 Y는 위쪽, SVG y는 아래쪽이라 toPlan에서 뒤집는다. 범위 밖 객체는 SVG 경계에서 잘린다
 export default function FloorPlan({
-  config, cameras, classes, objects, alerts, layers = ALL_LAYERS, selectedId, onSelect, compact = false, label,
+  config, cameras, classes, objects, alerts, layers = ALL_LAYERS, selectedId, onSelect, compact = false, stale = false, label,
 }: Props) {
   const { xMin, xMax, yMin, yMax } = config.bounds
   const w = xMax - xMin
@@ -180,28 +182,29 @@ export default function FloorPlan({
         const level = levels.get(o.objectId) ?? 'safe'
         const color = LEVEL_COLOR[level]
         const person = o.cls === 'person'
-        const single = Object.keys(o.cameraTracks).length < 2
+        const single = o.positionSource === 'single_camera'
+        // 지금 안 보이고 마지막 위치만 남은 객체: 흐리게 + 점선 외곽선
+        const held = o.positionSource === 'held'
         const shape = shapeOf(o.cls)
-        const fill = single ? 'transparent' : person ? color : '#2A333E'
+        const fill = single || held ? 'transparent' : person ? color : '#2A333E'
         const stroke = level === 'safe' && !person ? 'var(--muted)' : color
+        const dash = held ? `${2.5 * px} ${2 * px}` : undefined
         const { x, y } = toPlan(o.world)
         return (
           <g key={o.objectId} className="plan-object" role={onSelect ? 'button' : undefined} tabIndex={onSelect ? 0 : undefined}
-            aria-label={objectName(o, classes)} aria-pressed={onSelect ? selectedId === o.objectId : undefined}
+            aria-label={`${objectName(o, classes)}${held ? ' (마지막 위치)' : ''}`} aria-pressed={onSelect ? selectedId === o.objectId : undefined}
+            opacity={held ? 0.55 : undefined}
             onClick={() => select(o.objectId)} onKeyDown={(e) => onKey(e, o.objectId)}>
             {single && <circle cx={x} cy={y} r={0.45} fill="rgba(155,166,180,0.07)" stroke="var(--muted)" strokeWidth={px} strokeDasharray={`${3 * px} ${3 * px}`} />}
             {selectedId === o.objectId && <circle cx={x} cy={y} r={14 * px} fill="none" stroke="var(--accent)" strokeWidth={2 * px} />}
             {level === 'danger' && <circle cx={x} cy={y} r={14 * px} fill="rgba(255,90,85,0.18)" />}
-            {shape === 'circle' && <circle cx={x} cy={y} r={7 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} />}
-            {shape === 'wide' && <rect x={x - 11 * px} y={y - 6.5 * px} width={22 * px} height={13 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} />}
-            {shape === 'square' && <rect x={x - 6 * px} y={y - 6 * px} width={12 * px} height={12 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} />}
-            <text x={x + 10 * px} y={y - 12 * px} fontSize={11 * px} fill={level === 'safe' ? 'var(--muted)' : color} fontFamily="var(--font-mono)">#{o.objectId}</text>
-            {o.vest.status === 'not_wearing' && (
-              <g transform={`translate(${x + 10 * px} ${y + 8 * px})`}>
-                <rect width={44 * px} height={16 * px} rx={4 * px} fill="var(--bg)" stroke="var(--warning)" strokeWidth={px} />
-                <text x={22 * px} y={11.5 * px} fontSize={10 * px} textAnchor="middle" fill="var(--warning)" fontWeight={600}>조끼</text>
-              </g>
-            )}
+            {shape === 'circle' && <circle cx={x} cy={y} r={7 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} strokeDasharray={dash} />}
+            {shape === 'wide' && <rect x={x - 11 * px} y={y - 6.5 * px} width={22 * px} height={13 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} strokeDasharray={dash} />}
+            {shape === 'square' && <rect x={x - 6 * px} y={y - 6 * px} width={12 * px} height={12 * px} rx={3 * px} fill={fill} stroke={stroke} strokeWidth={2.5 * px} strokeDasharray={dash} />}
+            <text x={x + 10 * px} y={y - 12 * px} fontSize={11 * px} fill={level === 'safe' ? 'var(--muted)' : color} fontFamily="var(--font-mono)">
+              #{o.objectId}{held && !compact && <tspan fill="var(--muted)" fontFamily="inherit"> 마지막 위치</tspan>}
+            </text>
+            {person && <PpeBadges object={o} x={x + 10 * px} y={y + 8 * px} px={px} stale={stale} />}
           </g>
         )
       })}
@@ -214,4 +217,21 @@ export default function FloorPlan({
       )}
     </svg>
   )
+}
+
+// 확정 미착용만 배지로 띄운다. 미판단은 평면도를 어지럽히지 않도록 선택 패널에서만 보여준다
+function PpeBadges({ object, x, y, px, stale }: { object: TrackedObject; x: number; y: number; px: number; stale: boolean }) {
+  const missing = PPE_ITEMS.filter(([key]) => ppeStatus(object[key], stale) === 'not_wearing')
+  let offset = 0
+  return missing.map(([key, , short]) => {
+    const width = Math.max(44, short.length * 11 + 14) * px
+    const left = offset
+    offset += width + 3 * px
+    return (
+      <g key={key} transform={`translate(${x + left} ${y})`}>
+        <rect width={width} height={16 * px} rx={4 * px} fill="var(--bg)" stroke="var(--warning)" strokeWidth={px} />
+        <text x={width / 2} y={11.5 * px} fontSize={10 * px} textAnchor="middle" fill="var(--warning)" fontWeight={600}>{short}</text>
+      </g>
+    )
+  })
 }
