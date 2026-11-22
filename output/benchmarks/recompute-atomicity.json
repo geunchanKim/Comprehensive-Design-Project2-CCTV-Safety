@@ -1,0 +1,411 @@
+{
+  "baseline": "957d47f",
+  "database": "isolated temporary SQLite",
+  "method": "5 source/target pairs, publish then inject failure; all session columns compared",
+  "runs": [
+    {
+      "mode": "before",
+      "failure": "http",
+      "fail_pair": 1,
+      "http_status": 503,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states",
+        "track_links"
+      ],
+      "csv_before_sha256": "901de2602f8cf075ae82b378d5e25a771645ca261c4fd606cd365c8529e520e0",
+      "csv_after_sha256": "d743a018c6ca194ff96b77966b59b61f732106aff703461e2568c4963709d082",
+      "target_pairs_after": [],
+      "successful_commits": 1
+    },
+    {
+      "mode": "before",
+      "failure": "http",
+      "fail_pair": 3,
+      "http_status": 503,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states"
+      ],
+      "csv_before_sha256": "5cb9a39c32d4ee607fdd9efdd8dcfaa52d0be53fdec7a301d81b3c998f72388d",
+      "csv_after_sha256": "19bf1975e7f8f609d94a25b880cbbe075a5380b5d0db07b5d83a21afb2345b04",
+      "target_pairs_after": [
+        1,
+        2
+      ],
+      "successful_commits": 3
+    },
+    {
+      "mode": "before",
+      "failure": "http",
+      "fail_pair": 5,
+      "http_status": 503,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states"
+      ],
+      "csv_before_sha256": "ae6605083686a95c79b7a8485e160f4b9efe2f524bc16c83401520a408917721",
+      "csv_after_sha256": "f5fe623129d655d159f31d55f46cd9e39aed44df904483d8351b848f64955c56",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "successful_commits": 5
+    },
+    {
+      "mode": "before",
+      "failure": "integrity",
+      "fail_pair": 1,
+      "http_status": 409,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states",
+        "track_links"
+      ],
+      "csv_before_sha256": "83ed0d10b629c5be94b52cfc51355240ddad048c5e0b3c998fdd69188fe553bd",
+      "csv_after_sha256": "d743a018c6ca194ff96b77966b59b61f732106aff703461e2568c4963709d082",
+      "target_pairs_after": [],
+      "successful_commits": 1
+    },
+    {
+      "mode": "before",
+      "failure": "integrity",
+      "fail_pair": 3,
+      "http_status": 409,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states"
+      ],
+      "csv_before_sha256": "aec4c7925f9fd57827485b434443a1dcd511c519382d73ae8685d6794a2422a1",
+      "csv_after_sha256": "c39844992256d6b404e1710815189f867e5635072d2458d80453cc8def12fbf1",
+      "target_pairs_after": [
+        1,
+        2
+      ],
+      "successful_commits": 3
+    },
+    {
+      "mode": "before",
+      "failure": "integrity",
+      "fail_pair": 5,
+      "http_status": 409,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states"
+      ],
+      "csv_before_sha256": "03e3fa15e2e9ec4ab817d5ccdc80130d9c0a9ac5a3b8194e9b852fe0cca0f992",
+      "csv_after_sha256": "6ea2941cdcdec44e44406d14329a5c36dd48e05c0fc245a49b78ced8f5937e6f",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "successful_commits": 5
+    },
+    {
+      "mode": "before",
+      "failure": "unexpected",
+      "fail_pair": 1,
+      "http_status": 500,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states",
+        "track_links"
+      ],
+      "csv_before_sha256": "2476a1426120bfa5afe508ec11e4cc15d2caddad16b02c5c6e49995e3b319ab6",
+      "csv_after_sha256": "d743a018c6ca194ff96b77966b59b61f732106aff703461e2568c4963709d082",
+      "target_pairs_after": [],
+      "successful_commits": 1
+    },
+    {
+      "mode": "before",
+      "failure": "unexpected",
+      "fail_pair": 3,
+      "http_status": 500,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states"
+      ],
+      "csv_before_sha256": "94af4d88716aaf5fd0bf6f289289c6a2754ccf8f0ee0d12edeb5c7b47bc11a5e",
+      "csv_after_sha256": "78662c76c9fef60176c503091a9f57bf28930d5d6bc4578866dcb3a97fe04034",
+      "target_pairs_after": [
+        1,
+        2
+      ],
+      "successful_commits": 3
+    },
+    {
+      "mode": "before",
+      "failure": "unexpected",
+      "fail_pair": 5,
+      "http_status": 500,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects",
+        "detections",
+        "object_motion_states"
+      ],
+      "csv_before_sha256": "31c63c49bd2939a8533d7b4b36854708aa699514ca0ba9b45f565b091dfb4695",
+      "csv_after_sha256": "cf4051eee0830ffd7c504b1d13044ae9a96b529635be4418f951562c612327e9",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "successful_commits": 5
+    },
+    {
+      "mode": "before",
+      "failure": "none",
+      "fail_pair": null,
+      "http_status": 200,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states",
+        "frame_bundles",
+        "global_objects"
+      ],
+      "csv_before_sha256": "a47f33154768dea624ff7260066e41f009a764e661ea7230ef9d0bdf9827221d",
+      "csv_after_sha256": "a47f33154768dea624ff7260066e41f009a764e661ea7230ef9d0bdf9827221d",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 6
+    },
+    {
+      "mode": "after",
+      "failure": "http",
+      "fail_pair": 1,
+      "http_status": 503,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "faf9b75b80e4a076741bbfd5a8541b7d03f5a497bb06722127db45ebdd326c45",
+      "csv_after_sha256": "faf9b75b80e4a076741bbfd5a8541b7d03f5a497bb06722127db45ebdd326c45",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "http",
+      "fail_pair": 3,
+      "http_status": 503,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "85211903ae961d375b98287fe03eed89426b458f4f7a28464e8592aa68ad6844",
+      "csv_after_sha256": "85211903ae961d375b98287fe03eed89426b458f4f7a28464e8592aa68ad6844",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "http",
+      "fail_pair": 5,
+      "http_status": 503,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "894179b262a801079a7ace4f63a007a90fd7212b3f8aaf9d9c1b46fd0da99989",
+      "csv_after_sha256": "894179b262a801079a7ace4f63a007a90fd7212b3f8aaf9d9c1b46fd0da99989",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "integrity",
+      "fail_pair": 1,
+      "http_status": 409,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "8104dea5d6b6219646503885f3550b1e5abc3f4e836eb80a3b929ed2a8aca88e",
+      "csv_after_sha256": "8104dea5d6b6219646503885f3550b1e5abc3f4e836eb80a3b929ed2a8aca88e",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "integrity",
+      "fail_pair": 3,
+      "http_status": 409,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "f4e1dffdc1dc7a71eaa5713e5c5e5288388519f80fae2574b8e11585c6229396",
+      "csv_after_sha256": "f4e1dffdc1dc7a71eaa5713e5c5e5288388519f80fae2574b8e11585c6229396",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "integrity",
+      "fail_pair": 5,
+      "http_status": 409,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "a58cc19ab1607a8d9b402f78499e7f1f41d7ae55906953108469a033a581637c",
+      "csv_after_sha256": "a58cc19ab1607a8d9b402f78499e7f1f41d7ae55906953108469a033a581637c",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "unexpected",
+      "fail_pair": 1,
+      "http_status": 500,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "ab8c72c8cb8b9468ad6b78981629141ec8e206847ad83c0f6013ef2b574c6e0f",
+      "csv_after_sha256": "ab8c72c8cb8b9468ad6b78981629141ec8e206847ad83c0f6013ef2b574c6e0f",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "unexpected",
+      "fail_pair": 3,
+      "http_status": 500,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "e263d3ab3296cdd96dd7d82d163e5755fcb9e46ee71d70728aa5ad2f7d1210d5",
+      "csv_after_sha256": "e263d3ab3296cdd96dd7d82d163e5755fcb9e46ee71d70728aa5ad2f7d1210d5",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "unexpected",
+      "fail_pair": 5,
+      "http_status": 500,
+      "complete_session_preserved": true,
+      "changed_tables": [],
+      "csv_before_sha256": "688ceb2195ba7342014d3be97d7b0d22c6ce995f7afd8e59a641e66832934267",
+      "csv_after_sha256": "688ceb2195ba7342014d3be97d7b0d22c6ce995f7afd8e59a641e66832934267",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 0
+    },
+    {
+      "mode": "after",
+      "failure": "none",
+      "fail_pair": null,
+      "http_status": 200,
+      "complete_session_preserved": false,
+      "changed_tables": [
+        "dashboard_alerts",
+        "dashboard_states"
+      ],
+      "csv_before_sha256": "dfb056a3efab49adac31fbce4624f701b53af6c33d2943287622a877208778eb",
+      "csv_after_sha256": "dfb056a3efab49adac31fbce4624f701b53af6c33d2943287622a877208778eb",
+      "target_pairs_after": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "successful_commits": 1
+    }
+  ]
+}
