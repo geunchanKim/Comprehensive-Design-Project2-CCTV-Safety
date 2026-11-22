@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
 
-from label_set import candidates, iou, match, read_yolo, summarize, to_yolo  # noqa: E402
+from label_set import candidates, iou, match, read_yolo, summarize, sweep_rows, to_yolo  # noqa: E402
 
 
 def test_iou_and_yolo_round_trip(tmp_path):
@@ -46,3 +46,35 @@ def test_candidates_use_stride_alternate_cameras_and_fixed_seed(tmp_path):
     s1 = sorted((n, c) for f, n, c in got if f.parent.name == "s1")
     assert s1 == [(16, "cam1"), (46, "cam2"), (76, "cam1")]              # 카메라 번갈아
     assert got == candidates(tmp_path, stride=30, seed=0)                # 같은 seed면 같은 순서
+
+
+class RoundingDetector:
+    """실제 탐지기처럼 반올림 전 신뢰도로 거르고 반올림한 값을 돌려준다"""
+
+    def __init__(self, boxes):
+        self.boxes = boxes
+        self.class_conf = {"person": 0.5, "chair": 0.4}
+
+    def __call__(self, image, track=False):
+        return [{"cls": c, "conf": round(raw, 3), "bbox": list(box)} for c, raw, box in self.boxes
+                if raw >= self.class_conf[c]]
+
+
+def test_sweep_uses_unrounded_conf_at_threshold():
+    below, at = (0, 0, 100, 100), (200, 0, 300, 100)
+    detector = RoundingDetector([("chair", 0.3996, below), ("chair", 0.4, at)])
+    truth = [("chair", below), ("chair", at)]
+    high, low = sweep_rows(["frame"], lambda path: (None, truth), detector, "chair", [0.4, 0.39])
+    assert (high["tp"], high["fp"], high["fn"]) == (1, 0, 1)      # 0.3996은 반올림하면 0.4지만 기준 0.4 미만
+    assert (low["tp"], low["fp"], low["fn"]) == (2, 0, 0)
+    assert detector.class_conf == {"person": 0.5, "chair": 0.4}   # 끝나면 원래 기준으로 돌아옴
+
+
+def test_sweep_changes_only_the_chosen_class():
+    box, other, person = (0, 0, 100, 100), (200, 0, 300, 100), (400, 0, 500, 100)
+    detector = RoundingDetector([("chair", 0.5, box), ("chair", 0.3, other), ("person", 0.3, person)])
+    truth = [("chair", box), ("person", person)]
+    high, low = sweep_rows(["frame"], lambda path: (None, truth), detector, "chair", [0.4, 0.25])
+    assert (high["tp"], high["fp"], high["fn"]) == (1, 0, 0)
+    assert (low["tp"], low["fp"], low["fn"]) == (1, 1, 0)
+    assert low["class_conf"] == {"person": 0.5, "chair": 0.25}
