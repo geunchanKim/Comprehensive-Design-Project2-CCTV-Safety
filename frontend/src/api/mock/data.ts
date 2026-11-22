@@ -1,4 +1,4 @@
-import type { Alert, AreaConfig, AreaSummary, Camera, ClassInfo, HelmetState, TrackedObject, VestState, ZoneState } from '../types'
+import type { Alert, AreaConfig, AreaSummary, Camera, ClassInfo, TrackedObject, PpeState, ZoneState } from '../types'
 
 // 디자인 시안과 같은 예시 데이터. 실제 연결은 구역 A(작업장 1)만 가정한다
 
@@ -40,42 +40,35 @@ export const CAMERAS: Record<string, Omit<Camera, 'lastFrameAtMs'>[]> = {
   ],
 }
 
-const vest = (status: VestState['status'], confidence: number | null): VestState =>
-  ({ status, confidence, observedAtMs: null })
-const helmet = (status: HelmetState['status'], confidence: number | null): HelmetState =>
+const ppe = (status: PpeState['status'], confidence: number | null): PpeState =>
   ({ status, confidence, observedAtMs: null })
 const zone = (status: ZoneState['status'], distanceM: number | null): ZoneState[] => [{ zoneId: 'z1', status, distanceM }]
-const NO_PPE = vest('unknown', null)
-const NO_HELMET = helmet('unknown', null)
+const NO_PPE = ppe('unknown', null)
 
 export const OBJECTS: Record<string, TrackedObject[]> = {
   A: [
     {
       objectId: 3, cls: 'person', world: { x: 3.2, y: 3.6 }, velocity: { x: 0.9, y: -0.1 }, cameraTracks: { cam1: 10, cam2: 20 }, positionSource: 'two_camera',
-      vest: vest('wearing', 0.93), zoneStates: zone('outside', 3.41),
-      helmet: helmet('wearing', 0.91),
+      vest: ppe('wearing', 0.93), helmet: ppe('wearing', 0.88), zoneStates: zone('outside', 3.41),
       trail: [{ x: 1.6, y: 3.1 }, { x: 2.0, y: 3.25 }, { x: 2.4, y: 3.4 }, { x: 2.8, y: 3.5 }],
     },
     {
       objectId: 21, cls: 'cart', world: { x: 3.9, y: 3.9 }, velocity: { x: -0.7, y: -0.2 }, cameraTracks: { cam1: 14, cam2: 22 }, positionSource: 'two_camera',
-      vest: NO_PPE, zoneStates: [],
-      helmet: NO_HELMET,
+      vest: NO_PPE, helmet: NO_PPE, zoneStates: [],
       trail: [{ x: 5.5, y: 4.4 }, { x: 5.1, y: 4.3 }, { x: 4.7, y: 4.15 }, { x: 4.3, y: 4.05 }],
     },
     {
       objectId: 5, cls: 'person', world: { x: 6.6, y: 2.05 }, velocity: { x: 0.1, y: -0.35 }, cameraTracks: { cam1: 11, cam2: 23 }, positionSource: 'two_camera',
-      vest: vest('wearing', 0.9), zoneStates: zone('warning', 0.65),
-      helmet: helmet('wearing', 0.88),
+      vest: ppe('wearing', 0.9), helmet: NO_PPE, zoneStates: zone('warning', 0.65),
       trail: [{ x: 6.2, y: 3.1 }, { x: 6.35, y: 2.75 }, { x: 6.5, y: 2.4 }],
     },
     {
       objectId: 9, cls: 'person', world: { x: 1.4, y: 1.3 }, velocity: { x: 0, y: 0 }, cameraTracks: { cam1: 12 }, positionSource: 'single_camera',
-      vest: vest('not_wearing', 0.82), zoneStates: zone('outside', 4.4), trail: [],
-      helmet: helmet('not_wearing', 0.79),
+      vest: ppe('not_wearing', 0.82), helmet: ppe('not_wearing', 0.79), zoneStates: zone('outside', 4.4), trail: [],
     },
-    { objectId: 12, cls: 'chair', world: { x: 2.4, y: 5.0 }, velocity: null, cameraTracks: { cam1: 13, cam2: 24 }, positionSource: 'two_camera', vest: NO_PPE, helmet: NO_HELMET, zoneStates: [], trail: [] },
+    { objectId: 12, cls: 'chair', world: { x: 2.4, y: 5.0 }, velocity: null, cameraTracks: { cam1: 13, cam2: 24 }, positionSource: 'two_camera', vest: NO_PPE, helmet: NO_PPE, zoneStates: [], trail: [] },
     // 사람 #9에 가려져 서버가 마지막 위치를 유지 중인 의자
-    { objectId: 14, cls: 'chair', world: { x: 0.9, y: 1.75 }, velocity: null, cameraTracks: {}, positionSource: 'held', vest: NO_PPE, helmet: NO_HELMET, zoneStates: [], trail: [] },
+    { objectId: 14, cls: 'chair', world: { x: 0.9, y: 1.75 }, velocity: null, cameraTracks: {}, positionSource: 'held', vest: NO_PPE, helmet: NO_PPE, zoneStates: [], trail: [] },
   ],
 }
 
@@ -94,7 +87,7 @@ export const ALERTS: (Omit<Alert, 'startedAtMs'> & { sinceMs: number })[] = [
     distanceM: 0.67, sinceMs: 5000, acknowledged: false,
   },
   { alertId: 'a-410', areaId: 'A', kind: 'vest', level: 'warning', object1Id: 9, sinceMs: 12000, acknowledged: false },
-  { alertId: 'a-409', areaId: 'A', kind: 'helmet', level: 'warning', object1Id: 9, sinceMs: 9000, acknowledged: false },
+  { alertId: 'a-409', areaId: 'A', kind: 'helmet', level: 'warning', object1Id: 9, sinceMs: 11000, acknowledged: false },
   {
     alertId: 'c-207', areaId: 'C', kind: 'zone', level: 'warning', object1Id: 2, zoneId: 'c-z1', message: '사람 #2 → 적재 구역',
     distanceM: 0.8, ttcS: 2.4, sinceMs: 41000, acknowledged: false,

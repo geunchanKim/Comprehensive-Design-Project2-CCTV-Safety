@@ -1,15 +1,14 @@
 import { Fragment, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { dataSource } from '../api/source'
-import type { AreaSnapshot, Camera, ClassInfo, VestState, ZoneState } from '../api/types'
+import type { AreaSnapshot, Camera, ClassInfo, ZoneState } from '../api/types'
 import AlertCard from '../components/AlertCard'
 import { useShell } from '../hooks/useShell'
 import FloorPlan, { type FloorPlanLayers } from '../components/FloorPlan'
 import { usePolling } from '../hooks/usePolling'
-import { alertTitle, formatClock, objectName } from '../lib/safety'
+import { alertTitle, formatClock, objectName, PPE_ITEMS, PPE_STATUS_TEXT, ppeStatus } from '../lib/safety'
 
 const LAYER_LABELS: [keyof FloorPlanLayers, string][] = [['trail', '이동 궤적'], ['fov', '카메라 시야'], ['zones', '구역']]
-const VEST_TEXT: Record<VestState['status'], string> = { wearing: '착용', not_wearing: '미착용', unknown: '미판단' }
 const ZONE_TEXT: Record<ZoneState['status'], string> = { outside: '밖', warning: '접근', intrusion: '진입', unknown: '미판단' }
 const EVALUATED_TEXT = { collision: '충돌', zone: '위험 구역', vest: '안전조끼', helmet: '안전모' }
 
@@ -108,7 +107,7 @@ function AreaView({ areaId }: { areaId: string }) {
             ))}
           </div>
           <FloorPlan label={`${config.name} 평면도`} config={config} cameras={cameras} classes={classes} objects={objects}
-            alerts={alerts} layers={layers} selectedId={selected?.objectId ?? null} onSelect={setSelectedId} />
+            alerts={alerts} layers={layers} selectedId={selected?.objectId ?? null} onSelect={setSelectedId} stale={stale} />
           <Legend classes={classes} />
         </section>
 
@@ -138,20 +137,20 @@ function AreaView({ areaId }: { areaId: string }) {
                         {selected.positionSource === 'single_camera' && ' (한 카메라)'}
                       </>}
                 </dd>
-                {selected.cls === 'person' && (
-                  <>
-                    <dt>안전조끼</dt>
-                    <dd>
-                      {evaluated.vest ? VEST_TEXT[selected.vest.status] : '미판단'}
-                      {evaluated.vest && selected.vest.confidence !== null && <span className="muted mono small"> {Math.round(selected.vest.confidence * 100)}%</span>}
-                    </dd>
-                      <dt>안전모</dt>
-                      <dd>
-                        {evaluated.helmet ? VEST_TEXT[selected.helmet.status] : '미판단'}
-                        {evaluated.helmet && selected.helmet.confidence !== null && <span className="muted mono small"> {Math.round(selected.helmet.confidence * 100)}%</span>}
+                {/* 보호구는 evaluated가 아니라 사람별 status로 판단한다. 오래된 snapshot은 미판단 */}
+                {selected.cls === 'person' && PPE_ITEMS.map(([key, name]) => {
+                  const status = ppeStatus(selected[key], stale)
+                  const confidence = selected[key].confidence
+                  return (
+                    <Fragment key={key}>
+                      <dt>{name}</dt>
+                      <dd className={status === 'not_wearing' ? 'warning-text' : status === 'unknown' ? 'muted' : undefined}>
+                        {PPE_STATUS_TEXT[status]}
+                        {status !== 'unknown' && confidence !== null && <span className="muted mono small"> {Math.round(confidence * 100)}%</span>}
                       </dd>
-                  </>
-                )}
+                    </Fragment>
+                  )
+                })}
                 {selected.zoneStates.map((zs) => (
                   <Fragment key={zs.zoneId}>
                     <dt>{config.zones.find((z) => z.zoneId === zs.zoneId)?.name ?? zs.zoneId}</dt>
@@ -202,8 +201,7 @@ function Legend({ classes }: { classes: ClassInfo[] }) {
       <li><span className="legend__line legend__line--warning" />주의</li>
       <li><span className="legend__line legend__line--danger" />위험</li>
       <li><span className="legend__zone" />위험 구역</li>
-      <li><span className="legend__ppe">조끼</span>안전조끼 미착용</li>
-      <li><span className="legend__ppe">모자</span>안전모 미착용</li>
+      {PPE_ITEMS.map(([key, name, short]) => <li key={key}><span className="legend__ppe">{short}</span>{name} 미착용</li>)}
     </ul>
   )
 }
