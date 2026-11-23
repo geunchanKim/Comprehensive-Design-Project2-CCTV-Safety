@@ -238,4 +238,5 @@ def test_ppe_alert_lifecycle_rollback_and_condition_isolation(item):
     assert {row["kind"] for row in both} == {"vest", "helmet"}
     assert len({row["alert_id"] for row in both}) == 2
     snapshot.objects = []
-    assert save("not_wearing", 1700) == []  # Object disappearance ends occurrence.
+    assert len(save("not_wearing", 1700)) == 2  # Brief disappearance preserves IDs.
+    assert save("not_wearing", 2651) == []  # Grace expires without another observation.

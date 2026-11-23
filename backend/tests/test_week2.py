@@ -161,7 +161,7 @@ def test_alert_warning_escalation_and_stream_reset(configured):
     assert new["alert_id"] != warning["alert_id"] and new["stream_id"] != warning["stream_id"]
     snapshot.risks = []
     # Ended warning-only occurrences disappear; the previous unacknowledged danger remains.
-    remaining = [item for item in save(500) if item["kind"] == "collision"]
+    remaining = [item for item in save(1501) if item["kind"] == "collision"]
     assert [item["alert_id"] for item in remaining] == [warning["alert_id"]]
 
 

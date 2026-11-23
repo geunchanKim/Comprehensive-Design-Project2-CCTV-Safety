@@ -1,4 +1,5 @@
 """Durable occurrences. Writers serialize on the dashboard condition row."""
+import os
 import time
 from typing import Literal
 from uuid import uuid4
@@ -19,6 +20,11 @@ except ImportError:
     from database import get_db
     from models import DashboardAlert
 
+ALERT_HOLD_MS = int(os.getenv("ALERT_HOLD_MS", "1000"))
+SESSION_ALERT_TIMEOUT_MS = int(os.getenv("SESSION_ALERT_TIMEOUT_MS", "3000"))
+if ALERT_HOLD_MS < 0 or SESSION_ALERT_TIMEOUT_MS <= ALERT_HOLD_MS:
+    raise ValueError("require 0 <= ALERT_HOLD_MS < SESSION_ALERT_TIMEOUT_MS")
+
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
@@ -31,7 +37,8 @@ def alert_query(key):
 
 def as_state(row):
     return AlertState(
-        alert_id=row.alert_id, stream_id=row.stream_id, **row.details,
+        alert_id=row.alert_id, stream_id=row.stream_id,
+        **{key: value for key, value in row.details.items() if not key.startswith("_")},
         level=row.level, reached_danger=row.reached_danger,
         started_at_ms=row.started_at_ms, last_seen_at_ms=row.last_seen_at_ms,
         ended_at_ms=row.ended_at_ms, active=row.active_key is not None,
@@ -84,10 +91,23 @@ def sync_alerts(db, key, snapshot, now):
         alert_query(key).where(DashboardAlert.active_key.is_not(None)))}
     for target, row in active.items():
         if target not in candidates:
+            kind = row.details["kind"]
+            # Zones and explicit PPE unknown/wearing retain immediate resolution.
+            missing_person = kind in {"vest", "helmet"} and not any(
+                obj.object_id in row.details["object_ids"] for obj in snapshot.objects)
+            hold = (kind == "collision" and snapshot.collision_evaluated) or missing_person
+            if hold and now - row.last_seen_at_ms <= ALERT_HOLD_MS:
+                row.details = {**row.details, "_missing": True}
+                continue
             row.active_key = None
-            row.ended_at_ms = now
+            row.ended_at_ms = row.last_seen_at_ms + ALERT_HOLD_MS if hold else now
     for target, (level, details) in candidates.items():
         row = active.get(target)
+        if row is not None and row.details.get("_missing") and now - row.last_seen_at_ms > ALERT_HOLD_MS:
+            row.active_key = None
+            row.ended_at_ms = row.last_seen_at_ms + ALERT_HOLD_MS
+            db.flush()  # Release the unique active key before inserting a new occurrence.
+            row = None
         if row is None:
             row = DashboardAlert(
                 alert_id=str(uuid4()), session_id=key[0], calibration_profile=key[1],
@@ -110,6 +130,11 @@ def sync_alerts(db, key, snapshot, now):
 
 @router.get("", response_model=list[AlertState])
 def get_alerts(key=Depends(condition), db: Session = Depends(get_db)):
+    try:
+        from .dashboard_api import expire_stale_alerts
+    except ImportError:
+        from dashboard_api import expire_stale_alerts
+    expire_stale_alerts(db, key)
     return Response(
         "[" + ",".join(item.model_dump_json() for item in visible_alerts(db, key)) + "]",
         media_type="application/json", headers={"Cache-Control": "no-store"})
