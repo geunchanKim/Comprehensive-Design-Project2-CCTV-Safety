@@ -114,6 +114,10 @@ python build_calibration.py --run ../../runs/real/classroom-1014-calib-0900 `
 같은 이름의 `.report.json`에서 precise 검증점별 cm 오차를 확인한다. ID 0 중심과 방향을
 월드 원점 및 X/Y축으로 사용하도록 `grid_points.json`의 좌표도 같은 기준으로 측정한다.
 
+카메라가 ID 0에서 멀면(약 7m 이상) 단일 마커 자세가 크게 틀어질 수 있다. 라이브 전송은 항상
+`basic`을 쓰므로, 이때는 `--basic-from-precise`를 붙여 `basic`에 다점 계산 자세를 넣는다.
+이 파일로 만든 `basic`과 `precise` 조건은 같은 자세이므로 두 프로필 비교에는 쓰지 않는다.
+
 ## 6. 세션 일괄 등록과 2×2 재계산
 
 세션 목록은 `^(diy|classroom)-\d{4}-s\d+-t\d+(-v\d+)?$` 형식으로 한 줄에 하나씩 쓴다.
