@@ -1,14 +1,14 @@
 {
   "unit": "meter",
-  "world_origin_note": "11/25 shoot. Large ID 5 is at the origin (0,0,0); small ID 0 is at the center (3,1,0). Use build_calibration.py --basic-from-precise. Fill ID 7 z with the measured box height before running.",
+  "world_origin_note": "11/25 shoot. Large ID 5 is at the origin (0,0,0); small ID 0 is at (2,0,0); 3m x 3m grid (x 0-3, y -1-2). Use build_calibration.py --basic-from-precise. ID 7 box 0.42 m. ID 0 and ID 6 use tape-measured positions (11/25: ID4-ID0 1.42, ID1-ID0 1.43, ID3-ID6 1.03, ID2-ID6 3.16 m).",
   "points": [
-    {"marker_id": 0, "role": "pnp", "world": [3.0, 1.0, 0.0]},
-    {"marker_id": 1, "role": "pnp", "world": [5.0, 0.0, 0.0]},
-    {"marker_id": 2, "role": "pnp", "world": [0.0, 2.0, 0.0]},
-    {"marker_id": 3, "role": "pnp", "world": [5.0, 2.0, 0.0]},
-    {"marker_id": 4, "role": "pnp", "world": [2.0, -1.0, 0.0]},
+    {"marker_id": 0, "role": "pnp", "world": [1.993, 0.015, 0.0]},
+    {"marker_id": 1, "role": "pnp", "world": [3.0, -1.0, 0.0]},
+    {"marker_id": 2, "role": "pnp", "world": [0.0, 1.0, 0.0]},
+    {"marker_id": 3, "role": "pnp", "world": [3.0, 1.0, 0.0]},
+    {"marker_id": 4, "role": "pnp", "world": [1.0, -1.0, 0.0]},
     {"marker_id": 5, "role": "pnp", "world": [0.0, 0.0, 0.0]},
-    {"marker_id": 6, "role": "validation", "world": [5.0, 3.0, 0.0]},
-    {"marker_id": 7, "role": "validation", "world": [0.0, 3.0, null]}
+    {"marker_id": 6, "role": "validation", "world": [2.988, 2.03, 0.0]},
+    {"marker_id": 7, "role": "validation", "world": [0.0, 2.0, 0.42]}
   ]
 }
