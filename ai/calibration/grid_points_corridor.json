@@ -1,0 +1,14 @@
+{
+  "unit": "meter",
+  "world_origin_note": "11/25 corridor (2.5 m x 15 m). Grid x 0-2 across the corridor, y 0-4 along it; row y=0 is nearest the cameras. Large ID 5 at the origin (0,0,0). Fill ID 7 z with the measured box height. Use build_calibration.py --basic-from-precise.",
+  "points": [
+    {"marker_id": 0, "role": "pnp", "world": [1.0, 2.0, 0.0]},
+    {"marker_id": 1, "role": "pnp", "world": [2.0, 0.0, 0.0]},
+    {"marker_id": 2, "role": "pnp", "world": [0.0, 2.0, 0.0]},
+    {"marker_id": 3, "role": "pnp", "world": [2.0, 3.0, 0.0]},
+    {"marker_id": 4, "role": "pnp", "world": [1.0, 1.0, 0.0]},
+    {"marker_id": 5, "role": "pnp", "world": [0.0, 0.0, 0.0]},
+    {"marker_id": 6, "role": "validation", "world": [2.0, 4.0, 0.0]},
+    {"marker_id": 7, "role": "validation", "world": [0.0, 3.0, 0.25]}
+  ]
+}
