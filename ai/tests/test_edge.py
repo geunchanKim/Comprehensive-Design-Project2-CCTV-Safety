@@ -1,0 +1,919 @@
+"""
+엣지 코드 테스트 (CI에서 PR마다 실행)
+
+YOLO·torch 없이 돌 수 있는 부분만 검사한다.
+  - unity_calibration: Unity 카메라 → OpenCV 캘리브레이션 변환이 정확한지 (투영 → 삼각측량 왕복)
+  - server_client: dry-run 저장, 대기열이 꽉 차도 메시지를 버리지 않는지
+  - eval_position: 서버 응답과 정답 비교 계산
+  - bundle: session_id 규칙, 서버로 보내는 탐지 묶음 형식
+  - realtime: 두 카메라 프레임을 가장 가까운 것끼리 짝짓는지
+  - feet: 발 위치(foot)와 좌우 발목(ankles)
+  - run_experiment·crossing: 다른 조건 결과(results.csv) 변환, 교차 구간 지표
+  - 실시간 속도: Sender가 짝마다 시간을 기록하는지, timing_summary가 표를 맞게 계산하는지
+  - 녹화 폴더 재생: 녹화한 사진을 기록한 시각 간격대로 흘려보내는지
+  - 녹화 여러 개 재생(replay_all): 녹화 폴더를 순서대로 찾는지
+  - clock: 시스템 시계가 뒤로 가도 엣지 시각은 뒤로 가지 않는지
+  - 오래된 짝 버리기: max_age_ms 를 넘긴 짝은 보내지 않고 stale 로 남기는지
+  - heartbeat: 카메라마다 계약 필드를 순서대로 보내는지, 첫 프레임 전 last_recv_ms 가 null 인지
+
+실행 (레포 루트에서): python -m pytest ai/tests -q
+"""
+
+import json
+import time
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+AI_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(AI_DIR / "edge"))
+sys.path.insert(0, str(AI_DIR / "eval"))
+
+import pytest  # noqa: E402
+from bundle import build_bundle, build_frame, check_session_id, clean_detections  # noqa: E402
+import camera_source  # noqa: E402
+import clock  # noqa: E402
+from camera_source import Frame  # noqa: E402
+from eval_position import evaluate  # noqa: E402
+from feet import LEFT_ANKLE, RIGHT_ANKLE, attach_feet  # noqa: E402
+from realtime import Recorder  # noqa: E402
+from server_client import ServerClient  # noqa: E402
+from unity_calibration import load_calibrations, project, projection, unity_to_world  # noqa: E402
+
+# 실제 Unity 강의실 카메라 값 (unity-classroom-03)
+CAMERAS = {
+    "unity_version": "6000.3.8f1",
+    "cameras": [
+        {"camera_id": "cam1", "image_size": [1920, 1080], "vertical_fov_deg": 46.8, "position": [0.3, 2, 0.3],
+         "rotation_quat": [0.195, 0.4233, -0.0938, 0.8798], "rotation_euler_deg": [25, 51.3892, 0]},
+        {"camera_id": "cam2", "image_size": [1920, 1080], "vertical_fov_deg": 46.8, "position": [10.28, 2, 0.3],
+         "rotation_quat": [0.195, -0.4233, 0.0938, 0.8798], "rotation_euler_deg": [25, 308.6108, 0]},
+    ],
+}
+
+
+def make_scene(tmp_path: Path) -> Path:
+    folder = tmp_path / "unity-test-01"
+    folder.mkdir()
+    (folder / "cameras.json").write_text(json.dumps(CAMERAS), encoding="utf-8")
+    return folder
+
+
+def test_unity_to_world_swaps_y_and_z():
+    assert unity_to_world([1.0, 2.0, 3.0]) == [1.0, 3.0, 2.0]
+
+
+def test_calibration_format_matches_backend_schema(tmp_path):
+    calibs = load_calibrations(make_scene(tmp_path), session_id="unity-test-01-run1")
+    for cam in ("cam1", "cam2"):
+        c = calibs[cam]
+        assert c["session_id"] == "unity-test-01-run1"
+        assert c["method"] == "unity-gt"
+        assert c["image_size"] == [1920, 1080]
+        assert len(c["K"]) == 3 and all(len(row) == 3 for row in c["K"])
+        assert len(c["dist"]) == 5 and len(c["rvec"]) == 3 and len(c["tvec"]) == 3
+        assert abs(c["K"][0][2] - 960) < 1e-6 and abs(c["K"][1][2] - 540) < 1e-6
+
+
+def test_projection_and_triangulation_round_trip(tmp_path):
+    """방 안 여러 바닥 점을 두 카메라에 투영했다가 다시 삼각측량하면 원래 점이 나와야 한다"""
+    calibs = load_calibrations(make_scene(tmp_path))
+    P = {c: projection(calibs[c]) for c in calibs}
+    for x, z in [(2.0, 2.0), (5.3, 3.4), (8.6, 2.0), (5.3, 7.6)]:
+        X = np.array(unity_to_world([x, 0.0, z]))
+        uv = {}
+        for cam in P:
+            uv[cam], depth = project(P[cam], X)
+            assert depth > 0, f"{cam} 뒤쪽에 있음: {(x, z)}"
+        h = cv2.triangulatePoints(P["cam1"], P["cam2"], uv["cam1"].reshape(2, 1), uv["cam2"].reshape(2, 1))
+        assert np.linalg.norm((h[:3] / h[3]).ravel() - X) < 1e-4
+
+
+def test_camera_looks_down_with_y_axis_pointing_down(tmp_path):
+    """바닥 점은 화면 아래쪽, 높은 점은 화면 위쪽에 찍혀야 한다 (Unity y-up → OpenCV y-down 변환 확인)"""
+    calibs = load_calibrations(make_scene(tmp_path))
+    P = projection(calibs["cam1"])
+    floor, _ = project(P, np.array(unity_to_world([3.0, 0.0, 3.0])))
+    head, _ = project(P, np.array(unity_to_world([3.0, 1.7, 3.0])))
+    assert floor[1] > head[1]
+
+
+def test_server_client_dry_run_keeps_every_message(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True, max_queue=5)
+    for i in range(50):
+        client.send({"pair_id": i}, "/detections")
+        client.send({"frame": i}, "/ground-truth")
+    client.close()
+    assert len((tmp_path / "sent_detections.jsonl").read_text().splitlines()) == 50
+    assert len((tmp_path / "sent_ground-truth.jsonl").read_text().splitlines()) == 50
+    assert client.stats["dropped"] == 0
+
+
+def test_eval_position_compares_server_world_with_ground_truth(tmp_path):
+    run_dir, gt_dir = tmp_path / "run", tmp_path / "gt"
+    run_dir.mkdir()
+    gt_dir.mkdir()
+    (gt_dir / "frames.jsonl").write_text(json.dumps({
+        "frame": 1, "ts": 0, "objects": [{"object_id": "person_1", "cls": "person", "world": [2.0, 0.0, 3.0],
+                                           "bbox": {"cam1": [0, 0, 10, 10], "cam2": [0, 0, 10, 10]}}]}) + "\n")
+    (run_dir / "responses_detections.jsonl").write_text(json.dumps({
+        "pair_id": 1, "matches": [{"object_id": 1, "cls": "person", "world": {"x": 2.1, "y": 3.0, "z": 0.0},
+                                    "epipolar_error_px": 5.0}]}) + "\n")
+    rows, visible = evaluate(run_dir, gt_dir)
+    assert len(rows) == 1 and visible == {"person": 1}
+    assert abs(rows[0]["floor_err_cm"] - 10.0) < 0.1
+    assert abs(rows[0]["dx_cm"] - 10.0) < 0.1
+
+
+def test_pipeline_diagram_marks_changed_settings():
+    import pipeline_diagram as pd
+    rows = [{"pack": "s1", "cls": "person", "ok": 9, "chance": 10, "mean_cm": 6.0, "mismatch_rate": 0.0}]
+    meta = {"packs": ["s1"], "pack_runs": {"s1": {"edge": {"model": "coco", "imgsz": 1280, "foot": "ankle"}}},
+            "health": {"commit": "a", "max_epipolar_error_px": 50.0, "bbox_position_method": "triangulate"}}
+    before = pd.describe(meta, rows)
+    meta["health"]["bbox_position_method"] = "plane"
+    text = pd.mermaid(pd.describe(meta, rows), before)
+    assert "삼각측량 → <b>바닥 평면 교점</b>" in text
+    assert "class position changed" in text
+    assert "class" not in pd.mermaid(before, before).split("classDef")[1].split("\n", 1)[1]
+
+
+def test_session_id_rule_and_list(tmp_path):
+    for ok in ("classroom-1014-s2-t1", "diy-1014-s10-t3-v2"):
+        assert check_session_id(ok) == ok
+    for bad in ("classroom-s1", "lab-1014-s1-t1", "classroom-1014-s1", "classroom-1014-s1-t1-run1"):
+        with pytest.raises(SystemExit):
+            check_session_id(bad)
+    sessions = tmp_path / "classroom-1014.txt"
+    sessions.write_text("# 강의실\nclassroom-1014-s1-t1\n\nclassroom-1014-s2-t1\n", encoding="utf-8")
+    assert check_session_id("classroom-1014-s2-t1", str(sessions))
+    with pytest.raises(SystemExit):
+        check_session_id("classroom-1014-s3-t1", str(sessions))
+
+
+def test_bundle_follows_server_rules():
+    dets = [
+        {"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [-5, 10, 300, 1085], "foot": [150, 1080], "foot_src": "ankle"},
+        {"track_id": None, "cls": "person", "conf": 0.9, "bbox": [0, 0, 10, 10]},   # 추적 번호 없음
+        {"track_id": 2, "cls": "tv", "conf": 0.9, "bbox": [0, 0, 10, 10]},          # 서버가 모르는 클래스
+        {"track_id": 3, "cls": "chair", "conf": 0.9, "bbox": [1919.5, 0, 1925, 10]},  # 잘라내면 폭 1px 미만
+    ]
+    kept, removed = clean_detections(dets, 1920, 1080)
+    assert removed == 3 and len(kept) == 1
+    assert kept[0]["bbox"] == [0.0, 10.0, 300.0, 1080.0]
+    assert kept[0]["foot"][1] < 1080                     # 서버는 foot < 이미지 크기 를 요구
+    frames = [build_frame("cam1", 7, 1000, (1920, 1080), kept), build_frame("cam2", 7, 1030, (1920, 1080), [])]
+    bundle = build_bundle("classroom-1014-s1-t1", 7, frames)
+    assert bundle["calibration_profile"] == "basic" and bundle["pair_id"] == 7
+    assert bundle["max_sync_delta_ms"] == 50
+    assert [f["camera_id"] for f in bundle["frames"]] == ["cam1", "cam2"]
+    assert set(bundle["frames"][0]) == {"camera_id", "frame_id", "ts", "image_size", "detections"}
+
+
+def test_frame_carries_pts_and_receive_times():
+    frame = build_frame("cam1", 1, 1000, (1920, 1080), [], pts_ms=12.25, recv_ms=1010)
+    assert frame["pts_ms"] == 12.25
+    assert frame["recv_ms"] == 1010
+
+
+def test_tapo_credentials_are_url_encoded(monkeypatch):
+    monkeypatch.setattr(camera_source, "_credentials", ("user@name", "p:a/ss"))
+    target, shown, kind = camera_source.resolve("tapo:192.168.0.10")
+    assert target == "rtsp://user%40name:p%3Aa%2Fss@192.168.0.10:554/stream1"
+    assert shown == "rtsp://192.168.0.10:554/stream1"
+    assert kind == "rtsp"
+
+
+def test_recorder_pairs_nearest_frames(tmp_path):
+    """cam1 30fps, cam2 15fps: cam2 프레임마다 시각이 가장 가까운 cam1 프레임과 짝지어야 한다"""
+    image = np.zeros((4, 4, 3), np.uint8)
+    pairs = []
+    rec = Recorder(tmp_path, tol_ms=50, cam2_offset_ms=0, jpeg_quality=90, save=False,
+                   on_pair=lambda n, f1, f2, dt: pairs.append((f1.seq, f2.seq, dt)))
+    events = [(round(i * 33.3), "cam1", i) for i in range(60)] + [(round(i * 66.7 + 20), "cam2", i) for i in range(30)]
+    for t, cam, seq in sorted(events):
+        rec.add(Frame(cam, seq, 0.0, 1_000_000 + t, image))
+    rec.close()
+    assert len(pairs) >= 29
+    assert max(abs(dt) for _, _, dt in pairs) <= 17          # 30fps 간격(33ms)의 절반 이하
+    assert all(f1 in (2 * f2, 2 * f2 + 1) for f1, f2, _ in pairs)
+
+
+def _pose(box, left, right):
+    """포즈 결과 하나: 17개 키포인트 중 발목만 값을 넣는다. left/right = (x, y, conf)"""
+    kps = [(0.0, 0.0, 0.0)] * 17
+    kps[LEFT_ANKLE], kps[RIGHT_ANKLE] = left, right
+    return (box, kps)
+
+
+def test_attach_feet_sends_left_and_right_ankles():
+    box = [100.0, 100.0, 200.0, 400.0]
+    both, one, none = (
+        attach_feet([{"cls": "person", "bbox": box}], [_pose(box, left, right)])[0]
+        for left, right in (((130, 390, 0.9), (170, 395, 0.8)),     # 두 발목 보임
+                            ((130, 390, 0.9), (170, 395, 0.2)),     # 오른발목 가려짐
+                            ((130, 390, 0.1), (170, 395, 0.2))))    # 둘 다 안 보임
+    assert both["foot_src"] == "ankle" and both["foot"] == [150.0, 392.5]
+    assert both["ankles"] == {"left": [130, 390, 0.9], "right": [170, 395, 0.8]}
+    assert one["foot_src"] == "box" and one["ankles"] == {"left": [130, 390, 0.9], "right": None}
+    assert none["foot_src"] == "box" and "ankles" not in none
+    chair = attach_feet([{"cls": "chair", "bbox": box}], [_pose(box, (1, 1, 0.9), (2, 2, 0.9))])[0]
+    assert "ankles" not in chair                              # 사람이 아니면 발목 없음
+    far = attach_feet([{"cls": "person", "bbox": box}], [_pose([500, 500, 600, 800], (1, 1, 0.9), (2, 2, 0.9))])[0]
+    assert "ankles" not in far                                # 겹치는 포즈가 없으면 발목 없음
+
+
+def test_bundle_keeps_ankles_inside_image():
+    d = {"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [10, 10, 100, 1080], "foot": [50, 1080],
+         "foot_src": "ankle", "ankles": {"left": [40, 1085, 0.9], "right": None}}
+    kept, _ = clean_detections([d], 1920, 1080)
+    assert kept[0]["ankles"]["left"][1] < 1080 and kept[0]["ankles"]["left"][2] == 0.9
+    assert kept[0]["ankles"]["right"] is None
+
+
+def test_results_csv_becomes_responses(tmp_path):
+    """recompute 결과(results.csv)를 카메라별 ts 로 짝 번호에 붙이고, 같은 물체는 한 번만 넣는다"""
+    import gzip
+    import run_experiment as rx
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    bundles = [{"pair_id": 1, "frames": [{"camera_id": "cam1", "ts": 1000}, {"camera_id": "cam2", "ts": 1010}]},
+               {"pair_id": 2, "frames": [{"camera_id": "cam1", "ts": 1100}, {"camera_id": "cam2", "ts": 1105}]}]
+    with gzip.open(pack / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.writelines(json.dumps(b) + "\n" for b in bundles)
+    text = "\n".join(["record_type,timestamp_ms,object_id,object2_id,cls,x,y,z,distance_m,ttc_s,level,settings",
+                      "position,1000,7,,person,1.0,2.0,0.1,,,,{}",
+                      "position,1010,7,,person,1.0,2.0,0.1,,,,{}",       # 같은 묶음의 cam2 줄
+                      "risk,1000,7,8,,,,,0.8,,warning,{}"])
+    resp = rx.results_to_responses(text, pack)
+    assert [r["pair_id"] for r in resp] == [1, 2]
+    assert resp[0]["matches"] == [{"object_id": 7, "cls": "person", "world": {"x": 1.0, "y": 2.0, "z": 0.1}}]
+    assert resp[1]["matches"] == []
+
+
+def test_crossing_metrics_counts_close_frames():
+    import crossing
+    gt = {f: {"objects": [{"object_id": "a", "cls": "person", "world": [0.0, 0, 0.0]},
+                          {"object_id": "b", "cls": "person", "world": [d, 0, 0.0]}]}
+          for f, d in ((1, 2.0), (2, 0.8), (3, 0.5), (4, 0.5))}
+    ok = lambda f, o, x, sid: {"frame": f, "cls": "person", "status": "ok", "object_id": o,
+                               "server_object_id": sid, "est_x": x, "est_y": 0.0}
+    rows = [ok(1, "a", 0.0, 1), ok(1, "b", 0.9, 2),          # 정답 2m 인데 서버 0.9m → 오경보
+            ok(2, "a", 0.0, 1), ok(2, "b", 0.8, 2),          # 0.8m: 둘 다 추적, 경고 맞음
+            ok(3, "a", 0.0, 1),                               # 0.5m: b 놓침 → 경고 놓침
+            ok(4, "a", 0.0, 3), ok(4, "b", 0.6, 2)]           # a 의 ID 가 1 → 3 으로 바뀜 (가까운 구간)
+    m = crossing.crossing_metrics(rows, gt)
+    assert (m["near_1m"], m["near_06m"]) == (3, 2)
+    assert m["both_1m"] == round(2 / 3, 4) and m["both_06m"] == 0.5
+    assert (m["warn_tp"], m["warn_fn"], m["warn_fp"]) == (2, 1, 1)
+    assert m["id_switches_near"] == 1
+    assert m["dist_err_cm"] == 5.0                            # (0 + 10) / 2
+    one = {1: {"objects": [{"object_id": "a", "cls": "person", "world": [0, 0, 0]}]}}
+    assert crossing.crossing_metrics([], one) is None          # 사람 한 명이면 계산 안 함
+
+
+def test_experiment_conditions_and_feature_labels():
+    import run_experiment as rx
+    assert rx.build_conditions("basic", "baseline,improved", None) == ["basic/baseline", "basic/improved"]
+    assert rx.build_conditions("basic", "ablation", None) == [f"basic/{a}" for a in rx.ABLATION]
+    both = rx.build_conditions("all", "baseline,f-g", None)
+    assert both == ["basic/baseline", "basic/f-g", "precise/baseline", "precise/f-g"]
+    assert rx.build_conditions("basic", "f-g", None)[0] == "basic/baseline"     # 탐지를 보내는 조건은 항상 포함
+    assert rx.build_conditions("basic", "x", "all") == rx.ALL_CONDITIONS         # 예전 --conditions 가 우선
+    with pytest.raises(SystemExit):
+        rx.build_conditions("basic", "fast", None)
+    assert rx.cond_label("basic/f-gk") == "+바닥+칼만"
+    assert rx.cond_label("precise/improved") == "정밀 · 개선(전체)"
+    assert rx.cond_label("basic/f-cdef") == "+바닥추적+한카메라+시간보정+경고유지"
+
+
+def test_results_csv_with_pair_id_keeps_every_person(tmp_path):
+    """#58 이후 csv 는 pair_id 가 있고 한 사람당 한 줄 → 번호가 겹쳐도 사람을 빼지 않는다"""
+    import gzip
+    import run_experiment as rx
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    with gzip.open(pack / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"pair_id": 3, "frames": [{"camera_id": "cam1", "ts": 1}, {"camera_id": "cam2", "ts": 2}]}) + "\n")
+    text = "\n".join(["record_type,pair_id,frame_id,timestamp_ms,object_id,object2_id,cls,x,y,z,distance_m,ttc_s,level,settings",
+                      "position,3,3,1,5,,person,1.0,2.0,0.1,,,,{}",
+                      "position,3,3,1,5,,person,4.0,2.0,0.1,,,,{}"])
+    resp = rx.results_to_responses(text, pack)
+    assert len(resp[0]["matches"]) == 2
+
+
+def test_crossing_uses_server_warning_levels_and_band():
+    """서버가 경고 단계(F)를 주면 그걸로 채점하고, 0.9~1.1m 여유 구간은 따로 뺀 개수도 센다"""
+    import crossing
+    gt = {f: {"objects": [{"object_id": "a", "cls": "person", "world": [0.0, 0, 0.0]},
+                          {"object_id": "b", "cls": "person", "world": [d, 0, 0.0]}]}
+          for f, d in ((1, 0.95), (2, 1.05), (3, 2.0))}
+    ok = lambda f, o, x, sid: {"frame": f, "cls": "person", "status": "ok", "object_id": o,
+                               "server_object_id": sid, "est_x": x, "est_y": 0.0}
+    rows = [ok(1, "a", 0.0, 1), ok(1, "b", 1.02, 2),      # 정답 0.95m, 서버 1.02m → 거리로는 놓침
+            ok(2, "a", 0.0, 1), ok(2, "b", 1.05, 2),      # 정답 1.05m, 서버 1.05m → 맞게 경고 없음
+            ok(3, "a", 0.0, 1), ok(3, "b", 1.9, 2)]
+    plain = crossing.crossing_metrics(rows, gt)
+    assert (plain["warn_tp"], plain["warn_fn"], plain["warn_fp"]) == (0, 1, 0)
+    assert (plain["warn_fn_band"], plain["warn_fp_band"]) == (0, 0)       # 놓친 1개는 여유 구간 안
+    # 서버 경고 유지(F): 1번 프레임은 경고, 2번 프레임도 아직 경고 유지 → 맞음 1, 오경보 1 (여유 구간 안)
+    risks = crossing.risk_levels([{"pair_id": 1, "risks": [{"object1_id": 1, "object2_id": 2, "level": "warning"}]},
+                                  {"pair_id": 2, "risks": [{"object1_id": 1, "object2_id": 2, "level": "warning"}]},
+                                  {"pair_id": 3, "risks": [{"object1_id": 1, "object2_id": 2, "level": "safe"}]}])
+    held = crossing.crossing_metrics(rows, gt, risks)
+    assert (held["warn_tp"], held["warn_fn"], held["warn_fp"]) == (1, 0, 1)
+    assert (held["warn_fn_band"], held["warn_fp_band"]) == (0, 0)
+    # 깜빡임: 정답은 1번→2번 프레임에서 꺼짐(1번). 서버 거리는 계속 꺼짐(0번), 경고 유지는 2→3번에서 꺼짐(1번)
+    assert (plain["warn_toggles"], plain["gt_toggles"]) == (0, 1)
+    assert (held["warn_toggles"], held["gt_toggles"]) == (1, 1)
+
+
+def test_results_csv_risk_rows_become_response_risks(tmp_path):
+    import gzip
+    import run_experiment as rx
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    with gzip.open(pack / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"pair_id": 3, "frames": [{"camera_id": "cam1", "ts": 1}, {"camera_id": "cam2", "ts": 2}]}) + "\n")
+    text = "\n".join(["record_type,pair_id,frame_id,timestamp_ms,object_id,object2_id,cls,x,y,z,distance_m,ttc_s,level,settings",
+                      "position,3,3,1,5,,person,1.0,2.0,0.1,,,,{}",
+                      "risk,3,,2,5,6,,,,,1.04,,warning,{}"])
+    resp = rx.results_to_responses(text, pack)
+    assert resp[0]["risks"] == [{"object1_id": 5, "object2_id": 6, "level": "warning", "distance_m": 1.04}]
+
+
+def test_shift_pack_makes_cam2_late(tmp_path, monkeypatch):
+    """E 실험용 pack: 묶음 k 에 cam2 의 k-1 번째 사진을 붙이고, 서버 시간차 허용을 넓힌다"""
+    import gzip
+    import types
+    import run_experiment as rx
+    monkeypatch.setattr(rx, "PACK_DIR", tmp_path)
+    src = tmp_path / "base"
+    src.mkdir()
+    bundles = [{"pair_id": k, "frames": [{"camera_id": "cam1", "ts": 100 * k, "detections": []},
+                                         {"camera_id": "cam2", "ts": 100 * k, "detections": [{"track_id": k}]}]}
+               for k in range(1, 4)]
+    with gzip.open(src / "detections.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.writelines(json.dumps(b) + "\n" for b in bundles)
+    (src / "meta.json").write_text(json.dumps({"name": "base"}), encoding="utf-8")
+    (src / "calibration.json").write_text("{}", encoding="utf-8")
+    rx.shift_pack(types.SimpleNamespace(source="base", name="late", cam2_frames=1, force=False))
+    shifted = rx.read_jsonl(tmp_path / "late" / "detections.jsonl.gz")
+    assert [b["pair_id"] for b in shifted] == [2, 3]
+    assert [(b["frames"][0]["ts"], b["frames"][1]["ts"]) for b in shifted] == [(200, 100), (300, 200)]
+    assert shifted[0]["frames"][1]["detections"] == [{"track_id": 1}]
+    meta = json.loads((tmp_path / "late" / "meta.json").read_text(encoding="utf-8"))
+    assert meta["max_sync_delta_ms"] == 150 and meta["cam2_late_frames"] == 1
+
+
+def _down_looking_calib():
+    """(0, -3, 2)에서 바닥 원점을 내려다보는 카메라 두 대 (cam2는 x로 1m 옆)"""
+    out = {}
+    for cam, cx in (("cam1", 0.0), ("cam2", 1.0)):
+        center, target = np.array([cx, -3.0, 2.0]), np.array([cx, 0.0, 0.0])
+        forward = (target - center) / np.linalg.norm(target - center)
+        right = np.cross(forward, [0.0, 0.0, 1.0])
+        right /= np.linalg.norm(right)
+        rotation = np.vstack([right, np.cross(forward, right), forward])
+        rvec, _ = cv2.Rodrigues(rotation)
+        body = {"method": "test", "image_size": [1920, 1080], "K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]],
+                "dist": [0, 0, 0, 0, 0], "rvec": rvec.reshape(3).tolist(), "tvec": (-rotation @ center).tolist(),
+                "reproj_error_px": 0}
+        out[cam] = {"basic": body, "precise": body}
+    return out
+
+
+def test_real_pack_keeps_all_detections_and_scores_only_gt_frames(tmp_path):
+    """실측 pack: 탐지는 전부 넣고 정답은 일부 프레임만. 채점은 정답 프레임만 한다"""
+    import run_experiment as rx
+    import real_pack
+    edge = tmp_path / "edge"
+    edge.mkdir()
+    rx.write_jsonl(edge / "sent_detections.jsonl",
+                   [{"session_id": "s", "pair_id": p, "frames": []} for p in (1, 2, 3)])
+    (tmp_path / "calib.json").write_text(json.dumps(_down_looking_calib()), encoding="utf-8")
+    rx.write_jsonl(tmp_path / "gt.jsonl", [{"frame": 2, "objects": [
+        {"object_id": "person_1", "cls": "person", "rel": [0.5, 0.5, 0]},
+        {"object_id": "person_2", "cls": "person", "rel": [0.0, -10.0, 0]},    # 카메라 뒤
+        {"object_id": "chair_1", "cls": "chair", "rel": [1.0, 0.0, 0]}]}])
+    pack = real_pack.make_real_pack(edge, tmp_path / "gt.jsonl", tmp_path / "calib.json", "real-x",
+                                    real_pack.parse_exclude("2:chair_1"), pack_root=tmp_path / "packs")
+    assert len(rx.read_jsonl(pack / "detections.jsonl.gz")) == 3
+    assert "session_id" not in rx.read_jsonl(pack / "detections.jsonl.gz")[0]
+    frames = rx.read_jsonl(pack / "frames.jsonl.gz")
+    objects = {o["object_id"]: o for o in frames[0]["objects"]}
+    assert set(objects) == {"person_1", "person_2"}                          # 뺀 의자 없음
+    assert objects["person_1"]["world"] == [0.5, 0, 0.5]                     # 바닥 (x, y) → Unity [x, 0, y]
+    assert set(objects["person_1"]["bbox"]) == {"cam1", "cam2"}
+    assert objects["person_2"]["bbox"] == {}
+    meta = json.loads((pack / "meta.json").read_text(encoding="utf-8"))
+    assert meta["sparse_gt"] and meta["gt_frames"] == [2] and meta["excluded_count"] == 1
+
+    out = tmp_path / "out"
+    out.mkdir()
+    hit = {"object_id": 7, "cls": "person", "world": {"x": 0.52, "y": 0.5, "z": 0.1}}
+    rx.write_jsonl(out / "responses_detections.jsonl",
+                   [{"pair_id": 1, "matches": [hit]}, {"pair_id": 2, "matches": [hit]}, {"pair_id": 3, "matches": [hit]}])
+    rows, visible = rx.score(out, pack, 50.0)
+    assert [(r["frame"], r["status"]) for r in rows] == [(2, "ok")]          # 정답 없는 1·3 프레임은 채점 안 함
+    assert visible == {"person": 1}
+    assert not (out / "gt_only").exists()
+
+
+def test_real_pack_refuses_gt_frame_missing_from_detections(tmp_path):
+    import run_experiment as rx
+    import real_pack
+    edge = tmp_path / "edge"
+    edge.mkdir()
+    rx.write_jsonl(edge / "sent_detections.jsonl", [{"pair_id": 1, "frames": []}])
+    (tmp_path / "calib.json").write_text(json.dumps(_down_looking_calib()), encoding="utf-8")
+    rx.write_jsonl(tmp_path / "gt.jsonl", [{"frame": 5, "objects": []}])
+    with pytest.raises(SystemExit):
+        real_pack.make_real_pack(edge, tmp_path / "gt.jsonl", tmp_path / "calib.json", "real-y", set(),
+                                 pack_root=tmp_path / "packs")
+
+
+def test_sender_writes_timing_per_pair(tmp_path):
+    import time
+    from types import SimpleNamespace
+    from realtime import Sender
+
+    class FakeClient:                                       # 서버 대신: 보내면 바로 응답 받은 것으로 처리
+        out_dir = tmp_path
+        last_failure = None
+        on_done = None
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, message, path, meta=None, age_ms=0.0):
+            self.sent.append(message)
+            self.on_done(meta, 201, 12.5, 0.3)
+
+        def close(self, wait=None):
+            pass
+
+        def summary(self):
+            return "ok"
+
+    class FakeDetector:
+        last_ms = {"yolo": 0.0, "pose": 0.0}
+
+        def __call__(self, image):
+            time.sleep(0.01)
+            self.last_ms = {"yolo": 7.0, "pose": 3.0}
+            return [{"track_id": 1, "cls": "person", "conf": 0.9, "bbox": [10, 10, 50, 100],
+                     "foot": [30, 100], "foot_src": "box"}]
+
+    recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms)
+    client = FakeClient()
+    sender = Sender("classroom-1101-s1-t1", {"cam1": FakeDetector(), "cam2": FakeDetector()}, client, recorder)
+    now = int(time.time() * 1000)
+    frame = lambda cam: SimpleNamespace(camera=cam, image=np.zeros((1080, 1920, 3), np.uint8),
+                                        recv_ms=now, pts_ms=0.0)
+    sender.offer(3, frame("cam1"), frame("cam2"), 0)
+    for _ in range(100):                                    # 별도 스레드가 처리할 때까지 최대 2초
+        if client.sent:
+            break
+        time.sleep(0.02)
+    sender.close()
+
+    rows = [json.loads(line) for line in (tmp_path / "timings.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["frame"] == 3
+    assert set(rows[0]["detect_ms"]) == {"cam1", "cam2"}
+    assert all(ms >= 10 for ms in rows[0]["detect_ms"].values())
+    assert rows[0]["age_ms"] >= sum(rows[0]["detect_ms"].values())
+    assert rows[0]["yolo_ms"] == {"cam1": 7.0, "cam2": 7.0}
+    assert rows[0]["pose_ms"] == {"cam1": 3.0, "cam2": 3.0}
+    assert (rows[0]["rtt_ms"], rows[0]["status"]) == (12.5, 201)   # 응답 왕복이 같은 줄(frame)에 붙음
+    assert "왕복 중간값" in sender.status()
+
+
+def test_server_client_reports_result_with_meta(tmp_path):
+    results = []
+    client = ServerClient(None, tmp_path, dry_run=True)
+    client.on_done = lambda meta, status, rtt, queue_ms: results.append((meta, status, rtt))
+    client.send({"pair_id": 4}, "/detections", meta={"frame": 4})
+    client.send({"frame": 1}, "/ground-truth")                     # meta 없는 메시지도 그대로 동작
+    client.close()
+    assert results == [({"frame": 4}, "dry-run", None), (None, "dry-run", None)]
+    assert (tmp_path / "sent_detections.jsonl").exists()
+
+
+def test_timing_summary_counts_skipped_pairs_and_rate(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    timings, sent = [], []
+    for n in range(1, 21, 2):                               # 1~19번 중 홀수 10개만 보냄 → 9/19 건너뜀
+        first = n == 1                                      # 첫 짝은 모델 준비로 아주 느림 (warmup 으로 뺌)
+        timings.append({"frame": n, "wait_ms": 5.0,
+                        "detect_ms": {"cam1": 4000.0 if first else 40.0, "cam2": 60.0},
+                        "yolo_ms": {"cam1": 30.0, "cam2": 45.0}, "pose_ms": {"cam1": 8.0, "cam2": 12.0},
+                        "age_ms": 120.0, "rtt_ms": 30.0, "status": 404 if n == 19 else 201})
+        sent.append({"pair_id": n, "frames": [{"ts": 0, "recv_ms": 1000 + n * 50}, {"ts": 0, "recv_ms": 1000 + n * 50}]})
+    rx.write_jsonl(tmp_path / "timings.jsonl", timings)
+    rx.write_jsonl(tmp_path / "sent_detections.jsonl", sent)
+
+    line = ts.summarize(tmp_path, warmup=1)
+    assert line[1:4] == ["9", "47%", "10.0"]                 # 짝(첫 짝 뺌), 건너뜀(3~19의 17칸 중 9개만 보냄), 초당 짝(100ms 간격)
+    assert line[5:8] == ["75 / 75 / 75", "20 / 20 / 20", "100 / 100 / 100"]   # 검출 합, 포즈 합, 탐지 합
+    assert line[9:] == ["30 / 30 / 30", "1"]                 # 서버 왕복, 실패(404) 1개
+
+    old = tmp_path / "old"                                  # 예전 기록 (yolo_ms·rtt_ms 없음)도 읽힘
+    old.mkdir()
+    rx.write_jsonl(old / "timings.jsonl", [{"frame": 1, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0}, "age_ms": 50.0}])
+    assert ts.summarize(old, warmup=0)[5] == "-"
+
+
+def test_recorded_folder_replays_at_recorded_pace(tmp_path):
+    import time
+    rec = tmp_path / "s1" / "t1"
+    rows = []
+    for n, gap in enumerate([0, 100, 100], start=1):        # 짝 사이 100ms
+        t = 1_000_000 + (n - 1) * 100
+        rows.append({"frame": n, "ts": t, "objects": [], "dt_ms": 5.0,
+                     "cam1": {"seq": n * 3, "pts_ms": n * 100.0, "recv_ms": t},
+                     "cam2": {"seq": n * 3 + 1, "pts_ms": n * 100.0 + 5, "recv_ms": t + 5}})
+        for cam in ("cam1", "cam2"):
+            (rec / cam).mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(rec / cam / f"{n:06d}.jpg"), np.full((48, 64, 3), n * 40, np.uint8))
+    (rec / "frames.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    source = camera_source.CameraSource(str(rec / "cam2"), name="cam2")
+    assert source.kind == "folder"
+    source.start()
+    frames = []
+    while len(frames) < 3:
+        frame = source.get(timeout=2)
+        assert frame is not None
+        frames.append(frame)
+    source.stop()
+
+    assert source.size == (64, 48)
+    assert [f.seq for f in frames] == [4, 7, 10]               # 녹화 때 카메라 seq 그대로
+    assert [f.pts_ms for f in frames] == [105.0, 205.0, 305.0]
+    gaps = [b.recv_ms - a.recv_ms for a, b in zip(frames, frames[1:])]
+    assert all(80 <= g <= 160 for g in gaps)                    # 녹화 간격(100ms)대로 재생
+
+
+def test_recorded_folder_needs_frames_jsonl(tmp_path):
+    (tmp_path / "cam1").mkdir()
+    with pytest.raises(SystemExit):
+        camera_source.CameraSource(str(tmp_path / "cam1"))
+
+
+def test_replay_all_finds_recordings_in_number_order(tmp_path):
+    import replay_all
+    for scene, take in [("s10", "t1"), ("s2", "t1"), ("s1", "t2"), ("s1", "t1")]:
+        folder = tmp_path / scene / take
+        (folder / "cam1").mkdir(parents=True)
+        (folder / "cam2").mkdir()
+        (folder / "frames.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "s3" / "t1").mkdir(parents=True)            # frames.jsonl 없는 폴더는 녹화로 보지 않음
+    names = [name for name, _ in replay_all.find_recordings(tmp_path)]
+    assert names == ["s1-t1", "s1-t2", "s2-t1", "s10-t1"]   # 글자 순(s10 < s2)이 아니라 숫자 순
+
+
+def test_timing_summary_detail_counts_status_and_missing_responses(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    rows = [{"frame": n, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0, "cam2": 40.0},
+             "yolo_ms": {"cam1": 20.0, "cam2": 20.0}, "pose_ms": {"cam1": 20.0, "cam2": 20.0},
+             "age_ms": 100.0, "queue_ms": 1.0, "rtt_ms": 50.0 if n != 4 else None,
+             "status": 201 if n != 4 else 404} for n in range(1, 5)]
+    rx.write_jsonl(tmp_path / "timings.jsonl", rows)
+    rx.write_jsonl(tmp_path / "sent_detections.jsonl", [{"pair_id": n, "frames": []} for n in (1, 2, 3)])
+    rx.write_jsonl(tmp_path / "responses_detections.jsonl", [{"pair_id": n} for n in (1, 2)])   # 3번 응답 없음
+    rx.write_jsonl(tmp_path / "failed.jsonl", [{"status": 404, "message": {"pair_id": 4}}])
+
+    text = ts.detail([tmp_path], warmup=0)
+    assert "| 서버 왕복 | 3 | 50.0 | 50.0 | 50.0 | 50.0 | 50.0 |" in text
+    assert "| 201 | 3 |" in text and "| 404 | 1 |" in text
+    assert "받았는데 응답 기록이 없는 짝: 1" in text and "실패 기록(failed): 1" in text
+
+
+def test_replay_all_finds_sessions_that_already_have_records(tmp_path):
+    import replay_all
+    edge, replay = tmp_path / "edge", tmp_path / "replay"
+    (edge / "classroom-1014-s1-t1-v6").mkdir(parents=True)
+    (edge / "classroom-1014-s1-t1-v6" / "timings.jsonl").write_text("{}", encoding="utf-8")
+    (replay / "classroom-1014-s2-t1-v6").mkdir(parents=True)
+    (replay / "classroom-1014-s2-t1-v6" / "meta.json").write_text("{}", encoding="utf-8")
+    (edge / "classroom-1014-s3-t1-v6").mkdir()                 # 빈 폴더는 기록 없음으로 봄
+    plan = [(f"classroom-1014-s{n}-t1-v6", tmp_path) for n in (1, 2, 3)]
+    found = replay_all.existing_records(plan, replay, edge)
+    assert set(found) == {"classroom-1014-s1-t1-v6", "classroom-1014-s2-t1-v6"}
+
+
+def test_timing_summary_keeps_warmup_failures_in_counts(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    rows = [{"frame": n, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0}, "age_ms": 100.0,
+             "rtt_ms": None if n <= 2 else 30.0, "status": {1: 404, 2: "dropped"}.get(n, 201)}
+            for n in range(1, 7)]                              # 예열(앞 5짝) 안에 404·dropped
+    rx.write_jsonl(tmp_path / "timings.jsonl", rows)
+
+    line = ts.summarize(tmp_path, warmup=5)
+    assert line[1] == "1" and line[-1] == "2"                 # 시간 표본은 1짝, 실패·버림은 예열 포함 2건
+    text = ts.detail([tmp_path], warmup=5)
+    assert "| 404 | 1 |" in text and "| dropped | 1 |" in text and "| 201 | 4 |" in text
+    assert "| 서버 왕복 | 1 |" in text
+
+
+def test_timing_summary_short_session_has_no_time_samples(tmp_path):
+    import run_experiment as rx
+    import timing_summary as ts
+    rx.write_jsonl(tmp_path / "timings.jsonl",
+                   [{"frame": 1, "wait_ms": 5.0, "detect_ms": {"cam1": 40.0}, "age_ms": 100.0, "status": 201}])
+    line = ts.summarize(tmp_path, warmup=5)                    # 전부 예열이면 시간 통계 없음
+    assert line[1] == "0" and line[4:10] == ["-"] * 6 and line[-1] == "0"
+    assert "| 대기 | 0 | - |" in ts.detail([tmp_path], warmup=5)
+    with pytest.raises(ValueError):
+        ts.summarize(tmp_path, warmup=-1)
+
+
+def test_replay_all_stops_when_a_session_fails(tmp_path, monkeypatch):
+    import replay_all
+    for scene in ("s1", "s2"):
+        folder = tmp_path / "real" / scene / "t1"
+        (folder / "cam1").mkdir(parents=True)
+        (folder / "cam2").mkdir()
+        (folder / "frames.jsonl").write_text("", encoding="utf-8")
+    calls = []
+    real_run = replay_all.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if not str(cmd[1]).endswith("realtime.py"):            # 장비 정보 조회 등 다른 호출은 그대로
+            return real_run(cmd, **kwargs)
+        calls.append(cmd[cmd.index("--session") + 1])
+        return type("Done", (), {"returncode": 2})()           # realtime.py 가 서버 거절(404)로 멈춘 경우
+
+    monkeypatch.setattr(replay_all.subprocess, "run", fake_run)
+    monkeypatch.setattr(replay_all, "AI_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["replay_all.py", "--root", str(tmp_path / "real"), "--version", "v9",
+                                      "--dry-run", "--out", str(tmp_path / "replay")])
+    with pytest.raises(SystemExit):
+        replay_all.main()
+    assert calls == ["classroom-1014-s1-t1-v9"]                # 첫 세션에서 멈추고 다음 세션은 실행 안 함
+    info = json.loads(next((tmp_path / "replay").glob("run-*.json")).read_text(encoding="utf-8"))
+    assert info["done"] == []
+
+
+def test_sender_catches_rejection_that_arrives_while_closing(tmp_path):
+    from types import SimpleNamespace
+    from realtime import Sender, exit_code
+
+    class LateFailClient:                                      # 마지막 요청의 404가 close() 대기 중에 도착
+        out_dir = tmp_path
+        last_failure = None
+        on_done = None
+
+        def send(self, message, path, meta=None, age_ms=0.0):
+            pass
+
+        def close(self, wait=None):
+            self.last_failure = ("/detections", 404, {"detail": "calibration not found"})
+
+        def summary(self):
+            return "ok"
+
+    recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms)
+    sender = Sender("classroom-1101-s1-t1", {}, LateFailClient(), recorder)
+    assert exit_code(sender) == 0
+    sender.close()
+    assert sender.stop_reason                                  # 종료 대기 중 온 거절도 멈춘 이유로 남음
+    assert exit_code(sender) == 2                              # → realtime.py 종료 코드 2 → replay_all 이 멈춤
+    assert exit_code(None) == 0
+
+
+# ---------- clock: 뒤로 가지 않는 엣지 시각 ----------
+
+def test_clock_starts_near_system_time():
+    before = int(time.time() * 1000)
+    c = clock.EdgeClock()
+    assert abs(c.now_ms() - before) < 1000
+
+
+def test_clock_ignores_system_time_going_back(monkeypatch):
+    c = clock.EdgeClock()
+    first = c.now_ms()
+    # 시스템 시계가 1시간 뒤로 보정돼도 엣지 시각은 그대로 앞으로 간다
+    real_time = time.time
+    monkeypatch.setattr(clock.time, "time", lambda: real_time() - 3600)
+    assert c.now_ms() >= first
+
+
+def test_clock_never_decreases():
+    values = [clock.now_ms() for _ in range(1000)]
+    assert values == sorted(values)
+
+
+# ---------- 오래된 짝 버리기 (max_age_ms) ----------
+
+def test_server_client_drops_stale_pair(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True, max_age_ms=100)
+    results = []
+    client.on_done = lambda meta, status, rtt_ms, queue_ms: results.append((meta, status))
+    client.send({"pair_id": 1}, "/detections", meta=1, age_ms=150)   # 이미 100ms를 넘김 → 버림
+    client.send({"pair_id": 2}, "/detections", meta=2, age_ms=10)    # 아직 신선함 → 보냄
+    client.close()
+    assert results == [(1, "stale"), (2, "dry-run")]
+    sent = [json.loads(line)["pair_id"] for line in (tmp_path / "sent_detections.jsonl").read_text().splitlines()]
+    assert sent == [2]
+    assert client.stats["stale"] == 1 and client.dropped_total == 1
+
+
+def test_server_client_keeps_old_pair_when_policy_off(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)               # max_age_ms 없음 = 끄기
+    client.send({"pair_id": 1}, "/detections", age_ms=10_000)
+    client.close()
+    assert client.stats["stale"] == 0
+    assert len((tmp_path / "sent_detections.jsonl").read_text().splitlines()) == 1
+
+
+def test_server_client_max_queue_age_resets_after_pop(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)
+    client._note_queue_age(42.4)
+    client._note_queue_age(7.0)
+    assert client.pop_max_queue_age_ms() == 42
+    assert client.pop_max_queue_age_ms() == 0
+
+
+# ---------- heartbeat ----------
+
+class FakeHeartbeatClient:                                  # ServerClient 대신: 보낸 것만 모아 둔다
+    def __init__(self):
+        self.posts = []
+        self.dropped_total = 3
+        self.pops = 0
+
+    def pop_max_queue_age_ms(self):
+        self.pops += 1
+        return 250
+
+    def post_now(self, path, body, timeout=0.5):
+        self.posts.append((path, body))
+        return True
+
+
+def test_heartbeat_sends_contract_fields_per_camera():
+    from heartbeat import Heartbeat
+    times = iter(range(1000, 2000, 10))
+    client = FakeHeartbeatClient()
+    hb = Heartbeat("classroom-1014-s1-t1", {"cam1": "rtsp", "cam2": "folder"}, client, now_ms=lambda: next(times))
+    hb.note_frame("cam1")                                    # cam1 만 프레임을 받음 (시각 1000)
+    hb.beat()
+    assert [p for p, _ in client.posts] == ["/edge/heartbeat", "/edge/heartbeat"]
+    cam1, cam2 = (b for _, b in client.posts)
+    assert set(cam1) == {"session_id", "camera_id", "edge_run_id", "source", "last_recv_ms", "sent_at_ms",
+                         "dropped_count", "max_queue_age_ms"}
+    assert cam1["camera_id"] == "cam1" and cam2["camera_id"] == "cam2"     # 카메라 순서대로
+    assert cam1["last_recv_ms"] == 1000 and cam1["sent_at_ms"] > 1000
+    assert cam2["last_recv_ms"] is None                                    # 첫 프레임 전
+    assert cam1["source"] == "rtsp" and cam2["source"] == "folder"
+    assert cam1["edge_run_id"] == cam2["edge_run_id"]
+    assert cam1["dropped_count"] == 3
+    assert cam1["max_queue_age_ms"] == cam2["max_queue_age_ms"] == 250
+    assert client.pops == 1                                                # 한 바퀴에 한 번만 꺼냄
+    assert hb.stats == {"sent": 2, "failed": 0}
+
+
+def test_heartbeat_new_run_id_each_start():
+    from heartbeat import Heartbeat
+    a = Heartbeat("s", {"cam1": "rtsp"}, FakeHeartbeatClient())
+    b = Heartbeat("s", {"cam1": "rtsp"}, FakeHeartbeatClient())
+    assert a.edge_run_id != b.edge_run_id
+
+
+def test_heartbeat_thread_beats_until_stopped():
+    import time
+    from heartbeat import Heartbeat
+    client = FakeHeartbeatClient()
+    hb = Heartbeat("s", {"cam1": "rtsp", "cam2": "rtsp"}, client, interval_s=0.05)
+    hb.start()
+    time.sleep(0.18)
+    hb.stop()
+    count = len(client.posts)
+    assert count >= 4                                        # 0.05초마다 두 카메라
+    time.sleep(0.1)
+    assert len(client.posts) == count                        # 멈춘 뒤에는 더 보내지 않음
+
+
+def test_server_client_post_now_dry_run_writes_file(tmp_path):
+    client = ServerClient(None, tmp_path, dry_run=True)
+    assert client.post_now("/edge/heartbeat", {"camera_id": "cam1"})
+    client.close()
+    lines = (tmp_path / "sent_edge_heartbeat.jsonl").read_text().splitlines()
+    assert [json.loads(line)["camera_id"] for line in lines] == ["cam1"]
+
+
+# ── 보호구 판별 (ppe_judge.py): 판별할 사람 고르기, 서버 계약 필드, Sender 연결 ──
+
+def _person(tid, bbox=(100, 100, 200, 400), cls="person"):
+    return {"track_id": tid, "cls": cls, "conf": 0.9, "bbox": list(bbox), "foot": [150, 400], "foot_src": "box"}
+
+
+def test_ppe_schedule_picks_new_people_first_and_waits_interval():
+    from ppe_judge import PpeSchedule
+    schedule = PpeSchedule(interval_ms=500, max_per_frame=2)
+    dets = [_person(1), _person(2), _person(3), _person(None), _person(4, cls="chair"),
+            _person(5, bbox=(0, 0, 20, 40))]                     # ID 없음·사람 아님·너무 작음은 판별 안 함
+    first = schedule.pick(dets, 1000)
+    assert first == [0, 1]                                         # 한 프레임 최대 2명
+    schedule.mark([dets[i]["track_id"] for i in first], 1000)
+    assert schedule.pick(dets, 1100) == [2]                        # 아직 판별 안 한 3번만
+    schedule.mark([3], 1100)
+    assert schedule.pick(dets, 1400) == []                         # 500ms 안 지남
+    assert schedule.pick(dets, 1500) == [0, 1]                     # 오래된 사람부터
+    assert schedule.pick(dets, 900) == [0, 1]                      # 시각이 뒤로 가면(재생 다시 시작) 다시 판별
+
+
+def test_ppe_schedule_rejects_interval_longer_than_server_hold():
+    from ppe_judge import PpeSchedule
+    with pytest.raises(ValueError):
+        PpeSchedule(interval_ms=3000)
+
+
+def test_judge_people_adds_server_contract_fields_only_when_judged():
+    from ppe_judge import PpeSchedule, judge_people
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    crops = []
+
+    def predict(images):
+        crops.extend(images)
+        # 안전모 씀(위쪽) + 조끼 안 씀 / 아무것도 없음
+        return [[(0, 0.8, 0.5, 0.1, 0.2, 0.1), (3, 0.7, 0.5, 0.5, 0.6, 0.4)], []][:len(images)]
+
+    schedule = PpeSchedule(interval_ms=500)
+    dets = [_person(1), _person(2), _person(3, cls="chair")]
+    assert judge_people(frame, dets, 1000, schedule, predict) == 2
+    assert crops[0].shape[:2] == (360, 120)                        # 학습과 같은 비율로 넓혀 자름 (위 15%, 아래 5%, 좌우 10%)
+    assert dets[0]["helmet"] == {"status": "wearing", "confidence": 0.8, "observed_at_ms": 1000}
+    assert dets[0]["vest"] == {"status": "not_wearing", "confidence": 0.7, "observed_at_ms": 1000}
+    assert dets[1]["helmet"] == {"status": "unknown", "confidence": None, "observed_at_ms": 1000}
+    assert "helmet" not in dets[2] and "vest" not in dets[2]       # 사람 이외 객체에는 안 붙임
+
+    later = [_person(1), _person(2)]
+    assert judge_people(frame, later, 1200, schedule, predict) == 0
+    assert all("helmet" not in d and "vest" not in d for d in later)   # 판별 안 한 프레임은 필드를 뺌
+
+
+def test_clean_detections_keeps_ppe_fields():
+    det = {**_person(1), "helmet": {"status": "wearing", "confidence": 0.8, "observed_at_ms": 1000}}
+    kept, removed = clean_detections([det], 1920, 1080)
+    assert removed == 0 and kept[0]["helmet"] == det["helmet"]
+
+
+def test_sender_attaches_ppe_with_frame_ts(tmp_path):
+    import time
+    from types import SimpleNamespace
+    from realtime import Sender
+
+    class FakeClient:
+        out_dir = tmp_path
+        last_failure = None
+        on_done = None
+        sent = []
+
+        def send(self, message, path, meta=None, age_ms=0.0):
+            self.sent.append((message, meta))
+            self.on_done(meta, 201, 1.0, 0.1)
+
+        def close(self, wait=None):
+            pass
+
+        def summary(self):
+            return "ok"
+
+    class FakeDetector:
+        last_ms = {"yolo": 1.0, "pose": 1.0}
+
+        def __call__(self, image):
+            return [_person(7)]
+
+    class FakeJudge:
+        last_ms = 4.0
+
+        def __call__(self, image, detections, ts_ms):
+            detections[0]["vest"] = {"status": "wearing", "confidence": 0.9, "observed_at_ms": ts_ms}
+
+    recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms - 5)
+    client = FakeClient()
+    sender = Sender("classroom-1101-s1-t1", {"cam1": FakeDetector(), "cam2": FakeDetector()}, client, recorder,
+                    ppe={"cam1": FakeJudge()})
+    now = int(time.time() * 1000)
+    frame = lambda cam: SimpleNamespace(camera=cam, image=np.zeros((1080, 1920, 3), np.uint8), recv_ms=now, pts_ms=0.0)
+    sender.offer(1, frame("cam1"), frame("cam2"), 0)
+    for _ in range(100):
+        if client.sent:
+            break
+        time.sleep(0.02)
+    sender.close()
+
+    message, meta = client.sent[0]
+    cam1, cam2 = message["frames"]
+    assert cam1["detections"][0]["vest"]["observed_at_ms"] == cam1["ts"] == now - 5   # frame.ts 와 같은 시계
+    assert "vest" not in cam2["detections"][0]                                         # 판별기 없는 카메라
+    assert meta["ppe_ms"] == {"cam1": 4.0}

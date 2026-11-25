@@ -1,0 +1,124 @@
+{
+  "baseline": "c51d7a2",
+  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+  "database": "SQLite, local temporary file",
+  "metric": "tracemalloc Python allocations; excludes DB/native memory; no HTTP/network",
+  "scenarios": [
+    {
+      "pairs": 10000,
+      "input_detections": 20000,
+      "input_risks": 10000,
+      "output_rows": 20000,
+      "runs": {
+        "before": [
+          {
+            "seconds": 3.756574900005944,
+            "peak_python_mib": 59.54762554168701,
+            "bytes": 1862352,
+            "sha256": "83f698599cf896baa846891c8c8b9b8dd96d78b4290e630d2421c9521b18e959"
+          },
+          {
+            "seconds": 3.4762438999605365,
+            "peak_python_mib": 59.54751110076904,
+            "bytes": 1862352,
+            "sha256": "83f698599cf896baa846891c8c8b9b8dd96d78b4290e630d2421c9521b18e959"
+          },
+          {
+            "seconds": 3.776435599953402,
+            "peak_python_mib": 59.54857921600342,
+            "bytes": 1862352,
+            "sha256": "83f698599cf896baa846891c8c8b9b8dd96d78b4290e630d2421c9521b18e959"
+          }
+        ],
+        "after": [
+          {
+            "seconds": 1.6584929999662563,
+            "peak_python_mib": 1.8152589797973633,
+            "bytes": 1862352,
+            "sha256": "83f698599cf896baa846891c8c8b9b8dd96d78b4290e630d2421c9521b18e959"
+          },
+          {
+            "seconds": 1.7141350000165403,
+            "peak_python_mib": 1.8146133422851562,
+            "bytes": 1862352,
+            "sha256": "83f698599cf896baa846891c8c8b9b8dd96d78b4290e630d2421c9521b18e959"
+          },
+          {
+            "seconds": 2.171228700026404,
+            "peak_python_mib": 1.8162126541137695,
+            "bytes": 1862352,
+            "sha256": "83f698599cf896baa846891c8c8b9b8dd96d78b4290e630d2421c9521b18e959"
+          }
+        ]
+      },
+      "median": {
+        "before": {
+          "seconds": 3.756574900005944,
+          "peak_python_mib": 59.54762554168701
+        },
+        "after": {
+          "seconds": 1.7141350000165403,
+          "peak_python_mib": 1.8152589797973633
+        }
+      }
+    },
+    {
+      "pairs": 50000,
+      "input_detections": 100000,
+      "input_risks": 50000,
+      "output_rows": 100000,
+      "runs": {
+        "before": [
+          {
+            "seconds": 24.08115969999926,
+            "peak_python_mib": 295.4691562652588,
+            "bytes": 9522354,
+            "sha256": "9a6ab14bf174bd7e8e27b2fa8199a96aec0f8015ef1898f036063997171060b4"
+          },
+          {
+            "seconds": 30.387817799986806,
+            "peak_python_mib": 295.4688129425049,
+            "bytes": 9522354,
+            "sha256": "9a6ab14bf174bd7e8e27b2fa8199a96aec0f8015ef1898f036063997171060b4"
+          },
+          {
+            "seconds": 27.982668999989983,
+            "peak_python_mib": 295.4687442779541,
+            "bytes": 9522354,
+            "sha256": "9a6ab14bf174bd7e8e27b2fa8199a96aec0f8015ef1898f036063997171060b4"
+          }
+        ],
+        "after": [
+          {
+            "seconds": 9.089029699971434,
+            "peak_python_mib": 1.756246566772461,
+            "bytes": 9522354,
+            "sha256": "9a6ab14bf174bd7e8e27b2fa8199a96aec0f8015ef1898f036063997171060b4"
+          },
+          {
+            "seconds": 35.4114208999672,
+            "peak_python_mib": 1.7560129165649414,
+            "bytes": 9522354,
+            "sha256": "9a6ab14bf174bd7e8e27b2fa8199a96aec0f8015ef1898f036063997171060b4"
+          },
+          {
+            "seconds": 10.367051600012928,
+            "peak_python_mib": 1.7559213638305664,
+            "bytes": 9522354,
+            "sha256": "9a6ab14bf174bd7e8e27b2fa8199a96aec0f8015ef1898f036063997171060b4"
+          }
+        ]
+      },
+      "median": {
+        "before": {
+          "seconds": 27.982668999989983,
+          "peak_python_mib": 295.4688129425049
+        },
+        "after": {
+          "seconds": 10.367051600012928,
+          "peak_python_mib": 1.7560129165649414
+        }
+      }
+    }
+  ]
+}

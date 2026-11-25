@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-12",
+  "remote": {
+    "api": "http://121.182.60.2:32130",
+    "commit": "ff68630",
+    "health_http": 200,
+    "db_http": 200,
+    "baseline_risk_analysis": false,
+    "dashboard_api": false,
+    "heartbeat_api": false,
+    "alerts_api": false,
+    "registered_session": "classroom-1014-s10-t1-v91",
+    "basic_calibration_http": {
+      "cam1": 200,
+      "cam2": 200
+    },
+    "detections_sent": 0
+  },
+  "local_s10": {
+    "condition": {
+      "session_id": "classroom-1014-s10-t1-v91",
+      "calibration_profile": "basic",
+      "algorithm": "baseline"
+    },
+    "requests": 822,
+    "source_duration_s": 86.66,
+    "risk_counts": {
+      "safe": 3156,
+      "warning": 531
+    },
+    "minimum_distance_m": 0.6159397411381426,
+    "elapsed_s": 86.75,
+    "heartbeat_sent": false
+  },
+  "local_sc10_gt_derived": {
+    "condition": {
+      "session_id": "unity-grid-sc10-gt-contract-run2",
+      "calibration_profile": "basic",
+      "algorithm": "baseline"
+    },
+    "bundles": 130,
+    "sent": 130,
+    "complete": true,
+    "provenance": "gt-derived",
+    "risk_pair_samples": {
+      "safe": 656,
+      "warning": 16,
+      "danger": 108
+    },
+    "minimum_distance_m": 0.3886314095217984,
+    "elapsed_s": 8.62,
+    "heartbeat_sent": false
+  },
+  "sc10_ack": {
+    "condition": {
+      "session_id": "unity-grid-sc10-gt-contract-run1",
+      "calibration_profile": "basic",
+      "algorithm": "baseline"
+    },
+    "provenance": "Unity sc10 GT-derived metadata; no detector inference",
+    "danger_occurrences": 2,
+    "active_ack_keeps_active": true,
+    "ended_unacknowledged_danger_retained": true,
+    "ended_ack_removed": true,
+    "repeated_ack_204": true,
+    "heartbeat_sent": false
+  },
+  "postgresql_ack_persistence_verified": true,
+  "tests": {
+    "backend_passed": 115,
+    "edge_passed": 37
+  },
+  "limitations": [
+    "No actual sc10 detector inference",
+    "No team frontend popup verification",
+    "No live edge heartbeat rehearsal",
+    "Classroom map bounds are diagnostic only",
+    "No push, merge or deployment"
+  ]
+}

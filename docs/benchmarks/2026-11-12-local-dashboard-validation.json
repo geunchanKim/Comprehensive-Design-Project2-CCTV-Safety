@@ -1,0 +1,35 @@
+{
+  "pack": "real-s1-t1",
+  "condition": {
+    "session_id": "sw-demo-real-s1-t1-46b0f5e0",
+    "calibration_profile": "basic",
+    "algorithm": "baseline"
+  },
+  "bundles": 536,
+  "positioned_bundles": 536,
+  "collision_alerts": 9,
+  "heartbeat_source": "folder: stored detection pack sender, not camera hardware",
+  "map": "diagnostic bounds, not validated floor plan",
+  "ack_verified": true,
+  "heartbeat_offline_verified": true,
+  "seconds": 26.75,
+  "date": "2026-11-12",
+  "code_commit": "75276bf",
+  "database": "PostgreSQL 16.15",
+  "transport": "HTTP localhost:8001",
+  "input": "stored detection pack; no image inference rerun",
+  "schema_revision": "0013",
+  "schema_check": "passed",
+  "browser_ui_verified": false,
+  "team_frontend_verified": false,
+  "external_access_verified": false,
+  "restart_validation": {
+    "passed": true,
+    "snapshot_seq": 536,
+    "stored_bundles": 536,
+    "stored_alerts": 9,
+    "acknowledged_alerts": 1,
+    "database_health_http": 200,
+    "diagnostic_page_http": 200
+  }
+}

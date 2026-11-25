@@ -1,0 +1,1 @@
+{"frame": 94, "objects": [{"object_id": "person_1", "cls": "person", "rel": [1, -1, 0]}, {"object_id": "chair_1", "cls": "chair", "rel": [3, 1, 0]}, {"object_id": "chair_2", "cls": "chair", "rel": [3, 3, 0]}], "source": "claude-verified-1015"}

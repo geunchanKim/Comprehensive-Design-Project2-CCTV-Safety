@@ -1,0 +1,103 @@
+{
+  "verified_at_kst": "2026-11-14T00:37:35.961515+09:00",
+  "base_url": "http://121.182.60.2:32132",
+  "server_commit": "348f5ff",
+  "condition": {
+    "session_id": "unity-grid-sc10-run1",
+    "calibration_profile": "basic",
+    "algorithm": "baseline"
+  },
+  "archive_sha256": "3571d50aa95be6901be1f2a2b2a5673714e9a48389da3e3049a8dba3892ab26d",
+  "validated_detection_bundles": 130,
+  "pair_ids": [
+    1,
+    130
+  ],
+  "calibration_registration": [
+    {
+      "path": "/cameras/cam1/calibration",
+      "status_code": 200
+    },
+    {
+      "path": "/cameras/cam2/calibration",
+      "status_code": 200
+    }
+  ],
+  "configuration": {
+    "map": {
+      "coordinate_system": "world_xy_m",
+      "coordinate_frame_id": "unity-world-xzy",
+      "bounds": {
+        "x_min": 2.79,
+        "x_max": 7.79,
+        "y_min": 1.785,
+        "y_max": 6.785
+      }
+    },
+    "zones": {
+      "schema_version": "1.0",
+      "coordinate_system": "world_xy_m",
+      "coordinate_frame_id": "unity-world-xzy",
+      "zones": [
+        {
+          "zone_id": "classroom-demo-01",
+          "name": "교실 검토용 구역",
+          "vertices": [
+            [
+              3.0,
+              3.0
+            ],
+            [
+              4.0,
+              3.0
+            ],
+            [
+              4.0,
+              4.0
+            ],
+            [
+              3.0,
+              4.0
+            ]
+          ],
+          "warning_distance_m": 0.5,
+          "enabled": true
+        }
+      ]
+    }
+  },
+  "zone_etag": "\"1\"",
+  "zone_gt_expected_samples": {
+    "outside": 390
+  },
+  "ground_truth_frames": 130,
+  "edge_config": {
+    "model": "coco",
+    "imgsz": 1280,
+    "foot": "ankle",
+    "classes": [
+      "person",
+      "chair",
+      "suitcase",
+      "backpack"
+    ],
+    "conf": 0.4,
+    "class_conf": {
+      "person": 0.5,
+      "chair": 0.4,
+      "suitcase": 0.4,
+      "backpack": 0.4
+    },
+    "tracker": "bytetrack.yaml"
+  },
+  "snapshot_status": 204,
+  "actual_detection_sent": false,
+  "heartbeat_sent": false,
+  "ack_sent": false,
+  "readiness": "ready for edge replay; frontend rendering/danger/ack remain unverified",
+  "limitations": [
+    "Existing agreed Unity zone does not intersect sc10 person GT; sc10 alone cannot demonstrate intrusion with this zone.",
+    "No classroom physical-zone coordinates were supplied; existing s10 diagnostic map and empty zones are preserved.",
+    "GT polygon calculation is offline metadata validation, not actual detector/server zone accuracy."
+  ]
+}

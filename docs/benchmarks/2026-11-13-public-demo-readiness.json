@@ -1,0 +1,21 @@
+{
+  "base_url": "http://121.182.60.2:32132",
+  "server_commit": "348f5ff",
+  "condition": {
+    "session_id": "classroom-1014-s10-t1-v91",
+    "calibration_profile": "basic",
+    "algorithm": "baseline"
+  },
+  "calibration_registered": [
+    "cam1",
+    "cam2"
+  ],
+  "map_kind": "diagnostic-only",
+  "snapshot_status": 204,
+  "edge_heartbeat_sent": false,
+  "synthetic_smoke_session": "classroom-1014-s10-t1-v1794557726694634500",
+  "synthetic_online_recent": true,
+  "synthetic_offline_after_wait_s": 3.2,
+  "production_commit": "ff68630",
+  "production_risk_analysis": false
+}
