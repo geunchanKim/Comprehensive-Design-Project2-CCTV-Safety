@@ -197,7 +197,7 @@ function Legend({ classes }: { classes: ClassInfo[] }) {
         <li key={c.cls}><span className={`legend__shape legend__shape--${c.shape} ${c.protected ? 'legend__shape--protected' : ''}`} />{c.label}</li>
       ))}
       <li><span className="legend__shape legend__shape--single" />한 카메라만 봄 (추정 오차)</li>
-      <li><span className="legend__shape legend__shape--held" />가려짐 · 마지막 위치 (최대 3초)</li>
+      <li><span className="legend__shape legend__shape--held" />가려짐 · 마지막 관측 위치</li>
       <li><span className="legend__line legend__line--warning" />주의</li>
       <li><span className="legend__line legend__line--danger" />위험</li>
       <li><span className="legend__zone" />위험 구역</li>

@@ -1,4 +1,6 @@
 """Fill short chair occlusions from durable, real two-camera observations."""
+import os
+
 from sqlalchemy import func, select
 
 try:
@@ -6,10 +8,14 @@ try:
 except ImportError:
     from models import Detection
 
-CHAIR_HOLD_MS = 3000
+CHAIR_HOLD_MS = int(os.getenv("CHAIR_HOLD_MS", "3000"))
+if not 0 <= CHAIR_HOLD_MS <= 10000:
+    raise ValueError("CHAIR_HOLD_MS must be between 0 and 10000")
 
 
 def hold_chairs(db, session_id, profile, algorithm, timestamp_ms, matches):
+    if CHAIR_HOLD_MS == 0:
+        return
     # Flush real observations in this transaction. Synthetic positions are never
     # stored as detections, so holding cannot renew its own expiry.
     db.flush()

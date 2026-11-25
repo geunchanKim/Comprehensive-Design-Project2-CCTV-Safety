@@ -190,4 +190,4 @@ See [configuration, alert lifecycle and position source](specs/live-alert-contin
 
 ## Chair position provenance
 
-C/f-cd retains missing chairs for 3000ms before risk calculation. Held positions have `position_source=held`, `position_observed_at_ms` and empty camera_tracks/observations. See [live alert continuity](specs/live-alert-continuity.md) for lifetime, CSV behavior and replay checks.
+C/f-cd retains missing chairs for CHAIR_HOLD_MS (default 3000ms, range 0..10000; 0 disables) before risk calculation. Held positions have `position_source=held`, `position_observed_at_ms` and empty camera_tracks/observations. See [live alert continuity](specs/live-alert-continuity.md) for lifetime, CSV behavior and replay checks.

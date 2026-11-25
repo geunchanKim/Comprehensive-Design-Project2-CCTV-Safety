@@ -1,13 +1,36 @@
 """Chair occlusion lifetime, risk path and condition isolation."""
 import pytest
+import os
+from pathlib import Path
+import subprocess
+import sys
 from backend.tests.test_week2 import configured, client, setup_module
 from backend.tests.test_api import detection_payload
 
 
+@pytest.mark.parametrize("value,valid", [("0", True), ("5000", True), ("10000", True),
+                                         ("-1", False), ("10001", False), ("3.5", False)])
+def test_chair_hold_startup_configuration(value, valid):
+    result = subprocess.run(
+        [sys.executable, "-c", "from backend.chair_hold import CHAIR_HOLD_MS; print(CHAIR_HOLD_MS)"],
+        cwd=Path(__file__).resolve().parents[2],
+        env={**os.environ, "CHAIR_HOLD_MS": value}, capture_output=True, text=True,
+    )
+    assert (result.returncode == 0) == valid, result.stderr
+    if valid:
+        assert result.stdout.strip() == value
+
+
+@pytest.mark.parametrize("hold_ms", [0, 3000, 5000])
 @pytest.mark.parametrize("algorithm", ["f-cd", "baseline"])
-def test_chair_hold_lifetime_and_risks(configured, monkeypatch, algorithm):
+def test_chair_hold_lifetime_and_risks(configured, monkeypatch, algorithm, hold_ms):
     import backend.api as api
+    import backend.main as main
+    import backend.chair_hold as chair_hold
+    monkeypatch.setattr(chair_hold, "CHAIR_HOLD_MS", hold_ms)
+    monkeypatch.setattr(api, "CHAIR_HOLD_MS", hold_ms)
     monkeypatch.setattr(api, "LIVE_ALGORITHM", algorithm)
+    monkeypatch.setattr(main, "LIVE_ALGORITHM", algorithm)
     monkeypatch.setattr(api, "ENABLE_RISK_ANALYSIS", True)
     key, config = configured
     key = {**key, "algorithm": algorithm}
@@ -29,10 +52,12 @@ def test_chair_hold_lifetime_and_risks(configured, monkeypatch, algorithm):
 
     first = send(1, 1000, True)
     real, = [m for m in first["matches"] if m["cls"] == "chair"]
-    for pair, timestamp in [(2, 2000), (3, 4000)]:
+    health = client.get("/health").json()
+    assert health["live_settings"]["chair_hold_ms"] == (hold_ms if algorithm != "baseline" else 0)
+    for pair, timestamp in [(2, 1000 + hold_ms // 2), (3, 1000 + hold_ms)]:
         result = send(pair, timestamp, False)
         chairs = [m for m in result["matches"] if m["cls"] == "chair"]
-        if algorithm == "baseline":
+        if algorithm == "baseline" or hold_ms == 0:
             assert chairs == []
             continue
         held, = chairs
@@ -44,8 +69,8 @@ def test_chair_hold_lifetime_and_risks(configured, monkeypatch, algorithm):
         assert any(real["object_id"] in (r["object1_id"], r["object2_id"]) for r in result["risks"])
         snapshot = client.get("/dashboard/snapshot", params=key).json()
         assert next(o for o in snapshot["objects"] if o["cls"] == "chair")["position_source"] == "held"
-    assert not any(m["cls"] == "chair" for m in send(4, 4001, False)["matches"])
-    renewed = send(5, 4100, True)
+    assert not any(m["cls"] == "chair" for m in send(4, 1001 + hold_ms, False)["matches"])
+    renewed = send(5, 1100 + hold_ms, True)
     chairs = [m for m in renewed["matches"] if m["cls"] == "chair"]
     assert len(chairs) == 1 and chairs[0]["position_source"] != "held"
 

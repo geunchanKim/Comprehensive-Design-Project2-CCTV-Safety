@@ -96,7 +96,7 @@ export interface TrackedObject {
   velocity: Vec2 | null
   // 카메라별 track ID. held면 지금 보이지 않아 비어 있다
   cameraTracks: Record<string, number>
-  // held: 가려져 안 보이는 의자의 마지막 실제 위치 (서버가 최대 3초 유지)
+  // held: 가려져 안 보이는 의자의 마지막 실제 위치 (서버 CHAIR_HOLD_MS 동안 유지)
   positionSource: PositionSource
   vest: PpeState
   helmet: PpeState
