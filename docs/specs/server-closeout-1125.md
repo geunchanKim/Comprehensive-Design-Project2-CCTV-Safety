@@ -1,0 +1,82 @@
+# 11/25 서버 담당 마무리 기록
+
+## 근거와 상태
+
+- 원격 develop: b68a0f14db89113b493dc1a713729c773fc1cbe9. 현재 작업 위치는 feat/server-week2-dashboard/e60e837이며 기존 변경은 보존했다.
+- 수신 원문과 서버 조회 원문은 주 작업 위치 output/followup-1124/에 보관했다(저장소 미포함). 아래 GitHub 댓글 링크로 담당자 보고를 확인할 수 있다.
+- 근찬 회신: https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/105#issuecomment-7127066420
+- 성윤 검증 회신: https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/105#issuecomment-7129409687
+- 성윤 등록 회신: https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/87#issuecomment-7129898205
+
+## v95 판정
+
+근찬 보고는 11/22 20:36:35 KST 시작한 87초 단일 실행이다. 11/24 재시험은 없었다. 서버 96ba9b4, 엣지 bf0b8e6(실행 로컬 4f9dbed는 문서 추가), basic/f-cd 조건이다.
+
+| 기준 | 회신 수치 | 판단 |
+| --- | --- | --- |
+| 1 전송 | 634건, 실패 0, stale 2건(0.3%) | 담당자 보고상 통과 |
+| 2 설정 | 현재 health: f-cd, 위험 분석 true, 경고 1000ms/입력 만료 3000ms/의자 유지 3000ms | 현재 설정 일치; 실행 당시 근거와 구분 |
+| 3 사람 ID | 3개 | 담당자 보고상 통과 |
+| 4 사람 누락 | 6 | 담당자 보고상 통과 |
+| 5 세 명 snapshot | 260회 조회, 95.8% | 담당자 보고상 통과; 전체 고유 snapshot 비율로 일반화하지 않음 |
+| 6 충돌 경고 ID | 31개(사람–의자 28) | 담당자 보고상 통과 |
+| 7 종료 후 경고 | 3.6초 뒤 active 0 | 담당자 보고상 통과; 정확히 3초 경계 실측은 아님 |
+| 8 의자 과다 | 11.0% | 담당자 보고상 통과 |
+| 9 응답 P90 | 98.8ms | 담당자 보고상 통과 |
+| 10 화면 | 성윤이 영상 2개와 실행 조건 제공 | 자료 수령; 영상 내용 검토와 화면 오류 판정은 미완료 |
+
+원본 공유 위치가 실제 URL 대신 '(드라이브 링크)'로 기재돼 있다. 로그 수령·재계산 완료로 기록하지 않는다. 영상 첨부 링크는 수령했으나 이번 작업에서 재생 검토하지 않았다.
+
+의자 기준은 0.4 유지, v96 실행은 불필요하다. 로컬 v901의 의자 과다 비율이 11.0→16.7%(+5.7%p)로 적용 조건(+2%p 이하)을 넘었다는 담당자 결정이다. 서버 운영값을 변경하지 않았다.
+
+엣지 7.3묶음/초는 목표 10 미달이며 원인 미확정이다. 근찬이 촬영 직전 실제 카메라·새 세션으로 재측정한다. 서버 병목으로 단정하지 않는다.
+
+11/25 --basic-from-precise 사용 예정: basic에도 precise 자세가 들어가므로 해당 촬영을 독립적인 basic/precise 비교 실험으로 쓰지 않는다.
+
+## 서버 확인(ack) 검증
+
+현재 GET /alerts에 반환된 8건은 모두 inactive·미확인 이력이다. 종료되고 확인된 경고는 목록에서 제외될 수 있으므로 이 조회로 과거 ack 실패를 단정할 수 없다. 화면의 '확인됨' 표시만으로 DB 저장 성공도 확정할 수 없다.
+
+남은 근거는 실제 버튼 클릭 요청의 alert_id, HTTP 204 응답, 클릭 시각·세션, 가능하면 서버 저장의 acknowledged_at_ms/action 대조다. 기존 경고에 대신 ack를 보내지 않았다. 입력 중단 stale 화면은 성윤이 미촬영이라고 명시했다.
+
+## 등록 자료
+
+성윤의 본문 수정, mock 캡처 3장, Windows 11/Node 26.12.1/npm 11.20.0/Chrome 환경, 실제 서버 확인·미확인 목록을 수령했다. 버전은 담당자 보고값이다. Chrome 버전은 미기재다.
+
+등록 기준 main 78ac9ba와 최신 화면을 구분한다. 보호구 및 held 등 후속 기능을 기존 등록본에 자동 추가하지 않는다. mock 캡처는 실제 서버 검증 화면으로 표기하지 않는다. 경고음·관리자 알림·확인한 사람 기록은 문구만 있고 미구현이라는 회신을 반영해 기능 설명에서 제외한다.
+
+사용자가 전달한 PR-2026-131-01-KR 보완 메일로 제출 후 보완 단계임은 확인된다. 기존 '제출 미확인' 기록을 현 상태로 사용하지 않는다. 보완 회신 발송·보완 신청 완료 여부는 아직 확인되지 않았다.
+
+## 등록 기준에 맞춘 화면 본문 검토안
+
+관제 화면은 웹 브라우저에서 동작하며, 구역 평면도 위에 서버가 계산한 사람·물체의 위치와 이동 방향을 표시하고, 주의·위험 상태의 객체를 색으로 구분한다. 등록된 위험구역 다각형과 카메라 위치·시야 범위를 함께 표시한다. 객체를 선택하면 종류, 위치, 속도와 추적 중인 카메라 정보를 확인할 수 있다.
+
+카메라마다 연결 상태를 표시하고, 위치 정보 갱신이 기준 시간보다 늦어지면 갱신 지연을 알린다. 주의·위험 경고는 목록에 표시하고 위험 경고는 팝업으로도 알린다. 팝업에는 발생 구역과 시각, 거리, 지속 시간 및 팝업을 열 때 조회한 평면도를 표시한다. 관제자는 조치를 선택하거나 단순 확인할 수 있으며, 확인 시각과 선택 조치를 서버에 저장하는 기능을 제공한다. 실제 화면의 서버 저장 검증은 별도로 남아 있다.
+
+위치·카메라 상태·경고 목록은 약 0.5초, 구역 전체 현황은 약 5초 간격으로 조회한다. 서버 주소와 운영 조건은 환경 설정으로 지정한다. React, TypeScript, Vite로 구현했다.
+
+이 문안은 기존 원고의 잘못된 예시 데이터 전환·이동 경로·발생 순간 평면도 설명을 수정한 검토안이다. 실제 제출본을 덮어쓰거나 재제출하지 않았다.
+
+## 남은 회신만 요청할 문안(미게시)
+
+근찬 선배님: 회신 감사합니다. 11/22 단일 실행 결과와 의자 기준 0.4 유지, v96 미실행 결정 반영했습니다. 원본 공유 위치가 '(드라이브 링크)'로 보여 실제 링크만 부탁드립니다. 260회 snapshot 조회 원본도 함께 있으면 수치 대조하겠습니다. 7.3묶음/초는 촬영 직전 재측정 항목으로, --basic-from-precise 촬영은 프로필 독립 비교 불가로 기록했습니다.
+
+성윤님: 실행 조건·영상과 #87 원고/캡처/환경 자료 수령했습니다. 원고·캡처를 다시 요청하지 않겠습니다. 남은 것은 stale 표시 화면과 실제 확인 버튼 요청의 alert_id·HTTP 응답·클릭 시각입니다. 현재 경고 목록에 없는 확인 완료 이력은 GET 목록만으로 판단할 수 없어 서버 저장 대조에 이 정보가 필요합니다. 최신 화면 기능은 기존 등록 기준과 분리해 반영하겠습니다.
+
+## 11/25 작업 완료와 외부 의존
+
+- 최신 #105·#87 댓글 재확인: 11/24 회신 이후 새 댓글 없음, 열린 PR 없음.
+- sw-registration-integrated.md에 수령 상태·화면 수정·mock 표시·환경·미확인 범위·보완 단계 반영 완료.
+- main 78ac9ba의 AreaPage/AppShell/DangerAlertModal에서 500ms/5000ms 조회와 팝업 조회 시점, 확인 요청 흐름 대조. 실행 코드는 변경하지 않아 테스트를 재실행하지 않았다. git diff --check로 문서 공백 검증.
+- 실제 로그 URL 미제공으로 원본 재검산 대기. 영상 내용 직접 검토 및 화면 stale/서버 ack 대조는 미완료로 유지.
+- GitHub 댓글·메일 발송은 이번 요청에 구체적인 발송 지시가 없어 문안만 준비했다. push·병합·배포하지 않았다.
+- SQL 삭제 회신안: '안녕하세요, 노수정 선생님. PR-2026-131-01-KR 지능형 CCTV 기반 산업현장 안전관제 시스템의 사용언어 항목에서 SQL 삭제를 요청드립니다. 나머지 기재 언어는 유지하며 SQL 소스파일 추가 제출은 진행하지 않겠습니다. 감사합니다.' 발송 여부는 미확인.
+
+## Evening integration update (2026-11-25)
+
+The sections above record the pre-shoot review at 01:00 KST, including the then-current PR and evidence status. For the afternoon experiments, use [the shoot results](../shoot-results-1125.md), merged in PR #114, alongside this historical record.
+
+- Integration base: develop 2a44bef. Server PRs #96, #100, #101, #102, #106 and #108 are already merged; they do not need duplicate PRs.
+- DIY shooting used calib3 from s20 t2 onward. s20 t1 was discarded after camera movement. Do not apply the earlier calib2 errors to calib3.
+- Server follow-up: evaluate chair retention during occlusion (s27 chair detection 29%). No retention setting was changed. Longer retention must also be checked for stale positions and false alerts.
+- This PR updates documentation only. It does not change server code, database or deployment settings. The develop-to-main release PR #115 remains under the team lead's control.
