@@ -1,0 +1,482 @@
+"""
+실시간 녹화·전송: 카메라 두 대 영상을 받아 "같은 순간" 프레임끼리 짝짓고, 저장하고(기본), 탐지해서 서버로 보낸다(--send).
+
+저장 형식은 Unity 폴더와 같다. 그래서 녹화한 폴더를 unity_reader.py에 그대로 넣어 탐지·서버 전송을 다시 할 수 있다.
+  runs/real/<이름>-<시각>/   (--name 을 주면 --out/<이름>/ 그대로, 예: --out runs/real/s1 --name t1 → runs/real/s1/t1/)
+    cam1/000001.jpg, cam2/000001.jpg   짝지은 프레임 (같은 번호 = 같은 순간)
+    frames.jsonl                       짝마다 한 줄: frame, ts, objects(빈 목록), cam1·cam2 시각, dt_ms
+    stamps.jsonl                       받은 프레임 전부의 시각 (짝 못 지은 것 포함, 끊김·지연 분석용)
+    meta.json                          소스, 해상도, 짝 기준, 결과 수, 전송 결과
+
+짝 맞추기
+  - 노트북이 받은 시각(recv_ms) 기준으로 가장 가까운 프레임끼리 짝짓는다.
+  - 차이가 --tol-ms 이내만 짝으로 인정하고 같은 값을 서버 세션 설정으로 보낸다. 기본 50ms.
+  - 짝마다 실제 차이(dt_ms)를 적어 두므로, 나중에 17·33·50ms 기준별로 다시 골라 평가할 수 있다.
+  - --cam2-offset-ms: 깜빡임 동기화로 잰 cam2 지연을 빼고 비교한다 (재기 전에는 0).
+
+서버 전송 (--send) — 규칙은 bundle.py
+  - --session: 해민이 캘리브레이션을 등록해 둔 session_id (예: classroom-1014-s2-t1). 규칙에 안 맞으면 시작 안 함
+  - --sessions: 목록 파일을 주면 목록에 있는 이름인지도 확인
+  - 캘리브레이션은 등록하지 않는다 (해민 담당). 항상 calibration_profile=basic 으로 보낸다
+  - 탐지가 카메라보다 느리면 밀린 짝은 건너뛰고 가장 최근 짝을 탐지한다 (저장은 모든 짝을 함)
+  - 전송 큐에서 오래 기다린 짝은 버린다: 카메라 수신부터 --max-age-ms(기본 800ms)가 지나면 보내지 않는다
+    (화면까지 1초 목표. 0 이면 끄기)
+  - 탐지 결과와 따로 카메라마다 1초에 한 번 heartbeat 를 보낸다 (heartbeat.py, POST /edge/heartbeat)
+    heartbeat 를 아직 받지 않는 서버에는 --no-heartbeat. 실패해도 탐지·전송은 멈추지 않는다
+    dry-run 이면 runs/edge/<session_id>/sent_edge_heartbeat.jsonl 에 저장
+  - 서버가 "캘리브레이션 없음(404)", "해상도 다름(422)", "중복(409)"으로 거절하면 이유를 말하고 멈춘다
+    (기록·meta.json 을 남긴 뒤 종료 코드 2로 끝낸다)
+  - 보낸 것·서버 응답·실패: runs/edge/<session_id>/ (sent_detections.jsonl, responses_detections.jsonl, failed.jsonl)
+  - 짝마다 걸린 시간: runs/edge/<session_id>/timings.jsonl (실시간 속도 측정용). 서버 응답을 받으면 한 줄을 쓴다
+      frame      짝 번호 (= 서버로 보낸 pair_id. 응답 기록과 이 번호로 연결)
+      wait_ms    짝이 만들어진 뒤 탐지를 시작하기까지 기다린 시간
+      detect_ms  카메라별 탐지 전체 시간 (= yolo_ms + pose_ms + ppe_ms + 정리 시간)
+      yolo_ms    카메라별 물체 검출·추적 시간
+      pose_ms    카메라별 발목(포즈) 시간. 사람이 없어 건너뛰면 0 근처
+      ppe_ms     카메라별 보호구 판별 시간 (--ppe 일 때만). 판별할 사람이 없으면 0 근처
+      age_ms     카메라가 프레임을 받은 뒤 서버 전송 큐에 넣기까지 걸린 전체 시간
+      queue_ms   전송 큐에서 기다린 시간
+      rtt_ms     서버에 요청을 보낸 순간부터 응답을 받기까지 (노트북 단조 시계). dry-run 이면 null
+      status     서버 상태 코드(201 등), dry-run, network-error, dropped(큐가 꽉 차 버림),
+                 stale(카메라 수신부터 --max-age-ms 가 지나 보내지 않고 버림)
+  - --ppe: 사람마다 안전모·조끼 판별 결과(helmet·vest)를 붙인다. 규칙은 ppe_judge.py
+  - 같은 session_id 기록 폴더가 이미 있으면 시작하지 않는다 (기록이 섞이지 않게. 이름 버전을 올리거나 폴더를 지우기)
+
+실행 (ai/ 폴더에서)
+  python edge/realtime.py --cam1 0 --cam2 ~/Downloads/CCTVTEST.mp4 --seconds 20 --show            # 녹화만
+  python edge/realtime.py --cam1 0 --cam2 ~/Downloads/CCTVTEST.mp4 --seconds 20 \\
+      --send --dry-run --session classroom-1014-s1-t1                                               # 서버 없이 전송 연습
+  python edge/realtime.py --cam1 tapo:192.168.0.10 --cam2 tapo:192.168.0.11 --show \\
+      --send --server http://<서버>:32130 --session classroom-1014-s2-t1 --sessions sessions/classroom-1014.txt
+  끝내기: --seconds 가 지나거나, 미리보기 창에서 q, 또는 Ctrl+C
+
+녹화 다시 틀어 속도 재기 (새 촬영 없이 녹화 폴더를 녹화 때 속도 그대로 재생)
+  python edge/realtime.py --cam1 runs/real/classroom/s10/t1/cam1 --cam2 runs/real/classroom/s10/t1/cam2 \\
+      --no-save --send --server http://<서버>:32130 --session classroom-1014-s10-t1-v6
+  --no-save: 같은 사진을 다시 저장하지 않음. 녹화가 끝나면 남은 짝까지 처리하고 멈춘다
+
+녹화만 해 두고 나중에 보내기
+  python edge/unity_reader.py runs/real/<폴더> --server http://... --only detections --calib none --session <session_id>
+"""
+
+import argparse
+import json
+import statistics
+import threading
+import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+import cv2
+
+from bundle import MAX_SYNC_DELTA_MS, build_bundle, build_frame, check_session_id, clean_detections, edge_config, \
+    explain_failure
+from camera_source import CameraSource
+from ppe_judge import add_ppe_args
+
+AI_DIR = Path(__file__).resolve().parent.parent           # ai/
+OUT_ROOT = AI_DIR / "runs" / "real"
+SEND_ROOT = AI_DIR / "runs" / "edge"
+CAMERAS = ("cam1", "cam2")
+REAL_CLASSES = "person,chair,suitcase"                   # 실측 촬영 물체: 사람, 의자, 캐리어
+
+
+class Recorder:
+    """두 카메라 프레임을 가장 가까운 것끼리 짝짓는다. 짝이 생기면 저장하고 on_pair(번호, f1, f2, dt)를 부른다"""
+
+    def __init__(self, out_dir: Path, tol_ms: float, cam2_offset_ms: float, jpeg_quality: int,
+                 save: bool = True, on_pair=None):
+        self.out_dir = out_dir
+        self.tol_ms = tol_ms
+        self.offset = {"cam1": 0.0, "cam2": cam2_offset_ms}
+        self.params = [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+        self.save = save
+        self.on_pair = on_pair
+        self.waiting = {cam: deque() for cam in CAMERAS}
+        self.pairs = 0
+        self.unpaired = {cam: 0 for cam in CAMERAS}
+        self.dts = []
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if save:
+            for cam in CAMERAS:
+                (out_dir / cam).mkdir(parents=True, exist_ok=True)
+        self.frames_file = open(out_dir / "frames.jsonl", "w", encoding="utf-8")
+        self.stamps_file = open(out_dir / "stamps.jsonl", "w", encoding="utf-8")
+
+    def corrected_ms(self, f) -> int:
+        """서버로 보낼 시각: 받은 시각에서 그 카메라 지연을 뺀 값"""
+        return int(round(f.recv_ms - self.offset[f.camera]))
+
+    def _t(self, f) -> float:
+        return f.recv_ms - self.offset[f.camera]
+
+    def _stamp(self, f, frame_no):
+        self.stamps_file.write(json.dumps({"camera": f.camera, "seq": f.seq, "pts_ms": round(f.pts_ms, 1),
+                                           "recv_ms": f.recv_ms, "frame": frame_no}) + "\n")
+
+    def add(self, f):
+        self.waiting[f.camera].append(f)
+        self._match()
+
+    def _drop(self, cam):
+        self._stamp(self.waiting[cam].popleft(), None)
+        self.unpaired[cam] += 1
+
+    def _match(self):
+        """가장 가까운 프레임끼리 짝짓는다.
+        오래된 쪽 바로 다음 프레임이 상대와 더 가까우면, 오래된 쪽을 버리고 다음 것과 짝짓는다.
+        다음 프레임이 아직 안 왔으면 올 때까지 기다린다 (최대 한 프레임 늦어짐)."""
+        a, b = self.waiting["cam1"], self.waiting["cam2"]
+        while a and b:
+            dt = self._t(b[0]) - self._t(a[0])
+            if dt > self.tol_ms:               # cam1이 너무 오래됨 → 짝이 될 cam2가 더는 안 옴
+                self._drop("cam1")
+                continue
+            if dt < -self.tol_ms:
+                self._drop("cam2")
+                continue
+            older, other = (a, b) if dt > 0 else (b, a)
+            if dt != 0:
+                if len(older) < 2:
+                    break                      # 더 가까운 다음 프레임이 올 수 있으니 기다림
+                if abs(self._t(other[0]) - self._t(older[1])) < abs(dt):
+                    self._drop(older[0].camera)
+                    continue
+            self._pair(a.popleft(), b.popleft(), dt)
+
+    def _pair(self, f1, f2, dt):
+        self.pairs += 1
+        n = self.pairs
+        if self.save:
+            cv2.imwrite(str(self.out_dir / "cam1" / f"{n:06d}.jpg"), f1.image, self.params)
+            cv2.imwrite(str(self.out_dir / "cam2" / f"{n:06d}.jpg"), f2.image, self.params)
+        row = {"frame": n, "ts": f1.recv_ms, "objects": [], "dt_ms": round(dt, 1)}
+        for f in (f1, f2):
+            row[f.camera] = {"seq": f.seq, "pts_ms": round(f.pts_ms, 1), "recv_ms": f.recv_ms}
+            self._stamp(f, n)
+        self.frames_file.write(json.dumps(row) + "\n")
+        self.dts.append(abs(dt))
+        if self.on_pair:
+            self.on_pair(n, f1, f2, dt)
+
+    def close(self):
+        for cam in CAMERAS:                    # 끝날 때 짝 없이 남은 것도 기록
+            while self.waiting[cam]:
+                self._drop(cam)
+        self.frames_file.close()
+        self.stamps_file.close()
+
+    def status(self) -> str:
+        dt = f"{statistics.median(self.dts):.0f}ms" if self.dts else "-"
+        return f"짝 {self.pairs} | 짝 못 지음 cam1 {self.unpaired['cam1']}, cam2 {self.unpaired['cam2']} | 시각 차이 중간값 {dt}"
+
+
+class Sender:
+    """짝지은 프레임을 탐지해서 서버로 보낸다. 별도 스레드에서 가장 최근 짝 하나만 처리한다"""
+
+    def __init__(self, session_id: str, detectors: dict, client, recorder: Recorder, ppe: dict | None = None):
+        self.session_id = session_id
+        self.detectors = detectors
+        self.ppe = ppe or {}                        # 카메라별 보호구 판별기 (--ppe 일 때만)
+        self.client = client
+        self.recorder = recorder
+        self.stats = {"sent": 0, "skipped": 0, "removed": 0, "empty": 0, "errors": 0}
+        self.stop_reason = None
+        self._latest = None
+        self.detect_ms = deque(maxlen=100)          # 최근 100짝의 탐지 시간 (상태 줄의 중간값용)
+        self.rtt_ms = deque(maxlen=100)             # 최근 100짝의 서버 왕복 시간
+        self._timings = (client.out_dir / "timings.jsonl").open("a", encoding="utf-8")
+        self._timings_lock = threading.Lock()
+        client.on_done = self._write_timing        # 서버 응답을 받으면 그 짝의 시간 기록 한 줄을 완성
+        self._cond = threading.Condition()
+        self._closing = False
+        self._thread = threading.Thread(target=self._run, name="sender", daemon=True)
+        self._thread.start()
+
+    def offer(self, n, f1, f2, dt):
+        """Recorder가 짝을 만들 때마다 부른다. 아직 탐지 못 한 짝이 있으면 버리고 새 짝으로 바꾼다"""
+        with self._cond:
+            if self._latest is not None:
+                self.stats["skipped"] += 1
+            self._latest = (n, f1, f2)
+            self._cond.notify()
+
+    def close(self, wait: float = 10):
+        """탐지를 멈추고, 전송 큐가 빌 때까지 기다린 뒤 시간 기록을 닫는다"""
+        with self._cond:
+            self._closing = True
+            self._cond.notify()
+        self._thread.join(timeout=wait)
+        self.client.close(wait=wait)
+        self._check_server()                       # 마지막 요청의 거절(404 등)이 종료 대기 중에 와도 놓치지 않게
+        with self._timings_lock:
+            self._timings.close()
+
+    def _write_timing(self, meta, status, rtt_ms, queue_ms):
+        if meta is None:
+            return
+        row = {**meta, "queue_ms": round(queue_ms, 1),
+               "rtt_ms": None if rtt_ms is None else round(rtt_ms, 1), "status": status}
+        if rtt_ms is not None:
+            self.rtt_ms.append(rtt_ms)
+        with self._timings_lock:
+            if not self._timings.closed:
+                self._timings.write(json.dumps(row) + "\n")
+                self._timings.flush()
+
+    def _run(self):
+        while True:
+            with self._cond:
+                while self._latest is None and not self._closing:
+                    self._cond.wait()
+                if self._latest is None:
+                    return
+                n, f1, f2 = self._latest
+                self._latest = None
+            received_ms = max(f1.recv_ms, f2.recv_ms)
+            wait_ms = time.time() * 1000 - received_ms
+            detect_ms, yolo_ms, pose_ms, ppe_ms = {}, {}, {}, {}
+            try:
+                frames = []
+                for f in (f1, f2):
+                    h, w = f.image.shape[:2]
+                    detector = self.detectors[f.camera]
+                    ts = self.recorder.corrected_ms(f)
+                    t0 = time.perf_counter()
+                    raw = detector(f.image)
+                    if f.camera in self.ppe:            # 판별한 사람에게만 vest·helmet (observed_at_ms = 이 프레임 ts)
+                        judge = self.ppe[f.camera]
+                        judge(f.image, raw, ts)
+                        ppe_ms[f.camera] = judge.last_ms
+                    detect_ms[f.camera] = round((time.perf_counter() - t0) * 1000, 1)
+                    parts = getattr(detector, "last_ms", None) or {}
+                    yolo_ms[f.camera] = parts.get("yolo")
+                    pose_ms[f.camera] = parts.get("pose")
+                    dets, removed = clean_detections(raw, w, h)
+                    self.stats["removed"] += removed
+                    frames.append(build_frame(f.camera, n, ts, (w, h), dets,
+                                              pts_ms=f.pts_ms, recv_ms=f.recv_ms))
+            except Exception as e:                     # 모델 오류는 이 짝만 건너뜀
+                self.stats["errors"] += 1
+                print(f"  [탐지 오류] 짝 {n}: {e}")
+                continue
+            if not any(fr["detections"] for fr in frames):
+                self.stats["empty"] += 1
+            meta = {"frame": n, "wait_ms": round(wait_ms, 1), "detect_ms": detect_ms,
+                    "yolo_ms": yolo_ms, "pose_ms": pose_ms, **({"ppe_ms": ppe_ms} if self.ppe else {}),
+                    "age_ms": round(time.time() * 1000 - received_ms, 1)}
+            self.client.send(build_bundle(self.session_id, n, frames,
+                                          max_sync_delta_ms=int(self.recorder.tol_ms)), path="/detections", meta=meta,
+                             age_ms=meta["age_ms"])
+            self.stats["sent"] += 1
+            self.detect_ms.append(sum(detect_ms.values()))
+            self._check_server()
+
+    def _check_server(self):
+        """서버가 계속 거절할 이유(캘리브레이션 없음 등)로 실패했으면 멈춤 표시"""
+        if self.client.last_failure and self.stop_reason is None:
+            _, status, body = self.client.last_failure
+            self.stop_reason = explain_failure(status, body)
+
+    def status(self) -> str:
+        s = self.stats
+        det = f"{statistics.median(self.detect_ms):.0f}ms" if self.detect_ms else "-"
+        rtt = f" | 왕복 중간값 {statistics.median(self.rtt_ms):.0f}ms" if self.rtt_ms else ""
+        return f"전송 {s['sent']} | 밀려서 건너뜀 {s['skipped']} | 탐지 중간값 {det}{rtt} | 서버 {self.client.summary()}"
+
+
+def exit_code(sender) -> int:
+    """서버가 계속 거절할 이유로 멈췄으면 2, 아니면 0. sender.close() 뒤에 불러야 마지막 응답까지 반영된다"""
+    return 2 if sender is not None and sender.stop_reason else 0
+
+
+def preview(f1, f2, width=640):
+    def small(img):
+        h, w = img.shape[:2]
+        return cv2.resize(img, (width, int(h * width / w)))
+    a, b = small(f1.image), small(f2.image)
+    if a.shape[0] != b.shape[0]:
+        b = cv2.resize(b, (b.shape[1], a.shape[0]))
+    return cv2.hconcat([a, b])
+
+
+def make_sender(args, recorder):
+    """--send 준비: session_id 확인 → 서버 확인 → 탐지기 2개(카메라별 추적) 준비"""
+    from detector import Detector, parse_class_conf, parse_classes   # torch는 전송할 때만 불러옴
+    from ppe_judge import make_judges
+    from server_client import ServerClient
+
+    log_dir = SEND_ROOT / args.session
+    if log_dir.exists() and any(log_dir.iterdir()):
+        raise SystemExit(f"이미 전송 기록이 있어요: {log_dir}\n"
+                         f"  기록이 섞이지 않게 멈춰요. session_id 버전을 올리거나(예: -v7) 폴더를 지우세요")
+    client = ServerClient(args.server, log_dir, dry_run=args.dry_run, drop_when_full=True,
+                          max_age_ms=args.max_age_ms or None)
+    if not client.check_server():
+        raise SystemExit(f"서버 {args.server}/health 응답 없음")
+    detectors = {cam: Detector(model=args.model, conf=args.conf, imgsz=args.imgsz,
+                               class_conf=parse_class_conf(args.class_conf), classes=parse_classes(args.classes),
+                               foot=args.foot) for cam in CAMERAS}
+    judges = make_judges(args, CAMERAS)
+    config = edge_config(detectors["cam1"])
+    config["ppe"] = judges["cam1"].config() if judges else None
+    (client.out_dir / "edge_config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    mode = "dry-run (파일로만 저장)" if args.dry_run else args.server
+    ppe = f"켬 ({args.ppe_interval_ms:.0f}ms마다, 최대 {args.ppe_max_people}명)" if judges else "끔"
+    print(f"전송: session {args.session} | {mode} | 클래스 {args.classes} | 발 위치 {args.foot} | 보호구 {ppe}")
+    return Sender(args.session, detectors, client, recorder, ppe=judges)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="카메라 두 대 동시 녹화·실시간 전송")
+    parser.add_argument("--cam1", required=True, help="웹캠 번호, 영상 파일, tapo:IP, rtsp://..., 녹화 폴더(.../cam1)")
+    parser.add_argument("--cam2", required=True)
+    parser.add_argument("--name", default=None,
+                        help="녹화 폴더 이름 그대로 (예: t1). 안 주면 session_id(없으면 rec)-시각. 이미 있으면 멈춤")
+    parser.add_argument("--out", default=str(OUT_ROOT))
+    parser.add_argument("--seconds", type=float, default=0, help="녹화 시간 (0 = q나 Ctrl+C로 끝낼 때까지)")
+    parser.add_argument("--tol-ms", type=float, default=MAX_SYNC_DELTA_MS, help="짝으로 인정할 최대 시각 차이")
+    parser.add_argument("--cam2-offset-ms", type=float, default=0, help="깜빡임 동기화로 잰 cam2 지연")
+    parser.add_argument("--jpeg-quality", type=int, default=95)
+    parser.add_argument("--no-save", action="store_true", help="사진 저장 안 함 (시각 기록은 남김)")
+    parser.add_argument("--show", action="store_true", help="두 카메라 미리보기 (q로 종료)")
+    send = parser.add_argument_group("서버 전송")
+    send.add_argument("--send", action="store_true", help="짝마다 탐지해서 서버로 보냄")
+    send.add_argument("--server", default=None, help="예: http://121.182.60.2:32130")
+    send.add_argument("--dry-run", action="store_true", help="서버로 보내지 않고 파일로만 저장")
+    send.add_argument("--session", default=None, help="session_id (예: classroom-1014-s2-t1)")
+    send.add_argument("--sessions", default=None, help="session 목록 파일 (주면 목록에 있는지 확인)")
+    send.add_argument("--model", choices=["coco", "v2", "ensemble"], default="coco")
+    send.add_argument("--classes", default=REAL_CLASSES)
+    send.add_argument("--class-conf", default=None, help="클래스별 conf. 예: person=0.5,chair=0.4")
+    send.add_argument("--conf", type=float, default=0.4)
+    send.add_argument("--imgsz", type=int, default=1280)
+    send.add_argument("--foot", choices=["box", "ankle"], default="ankle")
+    send.add_argument("--max-age-ms", type=float, default=800,
+                      help="카메라 수신부터 이 시간이 지난 짝은 보내지 않고 버림 (0 = 끄기)")
+    send.add_argument("--no-heartbeat", action="store_true",
+                      help="heartbeat 를 보내지 않음 (서버에 /edge/heartbeat 가 아직 없을 때)")
+    add_ppe_args(parser)
+    args = parser.parse_args()
+
+    if args.send:
+        if not args.session:
+            raise SystemExit("--send 에는 --session 이 필요해요 (해민이 캘리브레이션을 등록한 이름)")
+        check_session_id(args.session, args.sessions)
+        if args.tol_ms < 0 or args.tol_ms > 10_000:
+            raise SystemExit("--tol-ms 는 0~10000ms 범위여야 해요")
+        if args.max_age_ms < 0:
+            raise SystemExit("--max-age-ms 는 0 이상이어야 해요 (0 = 끄기)")
+        if not args.dry_run and not args.server:
+            raise SystemExit("--server 주소를 주거나 --dry-run 으로 실행하세요")
+
+    if args.name:   # --name 을 주면 그 이름 그대로 (예: --out runs/real/s1 --name t1 → runs/real/s1/t1)
+        out_dir = Path(args.out).expanduser() / args.name
+        if out_dir.exists() and any(out_dir.iterdir()):
+            raise SystemExit(f"이미 녹화가 있어요: {out_dir}\n  덮어쓰지 않으려고 멈춰요. 회차 번호를 올리세요 (예: t2)")
+    else:           # 안 주면 session_id(없으면 rec) + 시각
+        out_dir = Path(args.out).expanduser() / f"{args.session or 'rec'}-{datetime.now():%Y%m%d-%H%M%S}"
+    rec = Recorder(out_dir, args.tol_ms, args.cam2_offset_ms, args.jpeg_quality, save=not args.no_save)
+    sender = make_sender(args, rec) if args.send else None   # 모델을 먼저 불러온 뒤 카메라를 연다
+    if sender:
+        rec.on_pair = sender.offer
+
+    cams = {"cam1": CameraSource(args.cam1, name="cam1"), "cam2": CameraSource(args.cam2, name="cam2")}
+    heartbeat = None
+    if sender and not args.no_heartbeat:
+        from heartbeat import Heartbeat
+        heartbeat = Heartbeat(args.session, {name: c.kind for name, c in cams.items()}, sender.client)
+    for cam in cams.values():
+        cam.start()
+    if heartbeat:
+        heartbeat.start()
+    print(f"저장 위치: {out_dir}\n시작 (끝내기: q 또는 Ctrl+C)")
+
+    started = time.time()
+    last_print = started
+    latest = {}
+    try:
+        while all(c.alive for c in cams.values()):
+            if args.seconds and time.time() - started >= args.seconds:
+                break
+            if sender and sender.stop_reason:
+                print(f"\n[멈춤] {sender.stop_reason}")
+                break
+            for cam in cams.values():
+                f = cam.get(timeout=0.005)
+                if f is not None:
+                    if heartbeat:
+                        heartbeat.note_frame(f.camera)
+                    latest[f.camera] = f
+                    rec.add(f)
+            if args.show and len(latest) == 2:
+                cv2.imshow("cam1 | cam2", preview(latest["cam1"], latest["cam2"]))
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            if time.time() - last_print >= 5:
+                print(f"  {time.time() - started:.0f}초 | {rec.status()}")
+                if sender:
+                    print(f"         | {sender.status()}")
+                last_print = time.time()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for cam in cams.values():
+            cam.stop()
+        while True:                            # 큐에 남은 프레임까지 처리
+            left = [f for f in (c.get(timeout=0) for c in cams.values()) if f is not None]
+            if not left:
+                break
+            for f in left:
+                rec.add(f)
+        rec.close()
+        if sender:
+            sender.close()                     # 탐지 멈춤 → 전송 큐 비우기 → 시간 기록 닫기
+        if heartbeat:
+            heartbeat.stop()                   # 전송이 다 끝난 뒤 멈춤 (마지막 요청까지 기다림)
+        if args.show:
+            cv2.destroyAllWindows()
+
+    elapsed = time.time() - started
+    meta = {
+        "name": out_dir.name, "started": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
+        "seconds": round(elapsed, 1), "tol_ms": args.tol_ms, "cam2_offset_ms": args.cam2_offset_ms,
+        "saved_images": not args.no_save,
+        "pairs": rec.pairs, "pair_fps": round(rec.pairs / max(elapsed, 1e-9), 2),
+        "dt_ms_median": round(statistics.median(rec.dts), 1) if rec.dts else None,
+        "dt_ms_max": round(max(rec.dts), 1) if rec.dts else None,
+        "cameras": {cam: {"source": c.shown, "kind": c.kind, "size": c.size, "fps": c.fps,
+                          "received": c.received, "queue_dropped": c.dropped, "reconnects": c.reconnects,
+                          "unpaired": rec.unpaired[cam], "error": c.error} for cam, c in cams.items()},
+    }
+    if sender:
+        meta["send"] = {"session_id": args.session, "server": "dry-run" if args.dry_run else args.server,
+                        **sender.stats, "server_result": sender.client.summary(),
+                        "stop_reason": sender.stop_reason, "log_dir": str(sender.client.out_dir),
+                        "max_age_ms": args.max_age_ms or None,
+                        "heartbeat": None if heartbeat is None else {"edge_run_id": heartbeat.edge_run_id,
+                                                                     **heartbeat.stats}}
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    print(f"\n끝: {elapsed:.1f}초 | {rec.status()} | 짝 {meta['pair_fps']} fps")
+    for cam, c in cams.items():
+        print(f"  {cam}: 받음 {c.received} | 큐에서 버림 {c.dropped} | 재연결 {c.reconnects} | {c.size}")
+    if sender:
+        s = sender.stats
+        print(f"  전송: 보냄 {s['sent']} (탐지 0개 {s['empty']}) | 밀려서 건너뜀 {s['skipped']} | "
+              f"탐지 오류 {s['errors']} | 뺀 탐지 {s['removed']}")
+        print(f"  서버: {sender.client.summary()}")
+        if heartbeat:
+            print(f"  {heartbeat.summary()}")
+        if sender.stop_reason:
+            print(f"  멈춘 이유: {sender.stop_reason}")
+        print(f"  전송 기록: {sender.client.out_dir}")
+    print(f"저장 위치: {out_dir}")
+    code = exit_code(sender)                   # 기록은 다 남긴 뒤, 실패로 끝났음을 종료 코드로 알린다 (replay_all 이 멈추게)
+    if code:
+        raise SystemExit(code)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,7 @@
+{
+  "map": {
+    "coordinate_frame_id": "classroom-diagnostic-xy",
+    "bounds": {"x_min": -15, "x_max": 15, "y_min": -15, "y_max": 15}
+  },
+  "zones": {"coordinate_frame_id": "classroom-diagnostic-xy", "zones": []}
+}

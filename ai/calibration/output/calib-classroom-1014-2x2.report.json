@@ -1,0 +1,47 @@
+{
+  "purpose": "논문 2x2 (캘리브레이션 basic·precise × 알고리즘 baseline·improved). basic 과 precise 는 같은 바닥 십자 점으로 구했고, 다른 것은 렌즈 왜곡을 아느냐뿐",
+  "source_images": "runs/real/check-20261014-160715 cam1/000052.jpg, cam2/000052.jpg (16:07, 사람 없음)",
+  "points": "바닥 파란 테이프 십자(1m 격자). 마커 판 위·벽 근처 등 애매한 점 제외. cam1 15점, cam2 9점",
+  "basic": {
+    "meaning": "렌즈 왜곡을 측정하지 않은 현장 설치. 카메라 위치를 왜곡 0 으로 PnP(solvePnPRefineLM). 서버도 basic 에서는 왜곡을 0 으로 씀",
+    "cam1": {
+      "reproj_rmse_px": 13.01,
+      "camera_center_world_m": [
+        -3.003,
+        -1.854,
+        2.007
+      ]
+    },
+    "cam2": {
+      "reproj_rmse_px": 7.13,
+      "camera_center_world_m": [
+        7.153,
+        -2.253,
+        1.881
+      ]
+    }
+  },
+  "precise": {
+    "meaning": "calib-classroom-1014-floorcross.json 그대로 (ChArUco 내부 파라미터의 왜곡 반영)",
+    "same_points_reproj_rmse_px": {
+      "cam1": 5.85,
+      "cam2": 5.01
+    },
+    "camera_center_world_m": {
+      "cam1": [
+        -2.72,
+        -1.75,
+        1.92
+      ],
+      "cam2": [
+        7.1,
+        -2.16,
+        1.83
+      ]
+    }
+  },
+  "intrinsics": "K, dist 는 두 프로필 모두 해민이 구한 값 그대로 (basic 의 dist 는 서버가 무시)",
+  "expected": "정답 지점 57곳 기준, 렌즈 왜곡만으로 생기는 기본 조건 오차 5.4cm(이전 basic) → 4.8cm(이 basic) 예상",
+  "replaces_basic_of": "calib-classroom-1014-floorcross.json (basic 에 왜곡을 알고 구한 카메라 위치가 들어 있었음)",
+  "server_method_field": "서버 스키마가 unity-gt / charuco-aruco 만 받아 method 는 charuco-aruco 로 둠"
+}

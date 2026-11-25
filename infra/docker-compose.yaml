@@ -1,0 +1,91 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cctv_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: cctv_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: cctv_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      LIVE_ALGORITHM: ${LIVE_ALGORITHM:-baseline}
+      ALERT_HOLD_MS: ${ALERT_HOLD_MS:-1000}
+      CHAIR_HOLD_MS: ${CHAIR_HOLD_MS:-3000}
+      SESSION_ALERT_TIMEOUT_MS: ${SESSION_ALERT_TIMEOUT_MS:-3000}
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:-unknown}
+      DASHBOARD_SESSION_ID: ${DASHBOARD_SESSION_ID:-}
+      DASHBOARD_CALIBRATION_PROFILE: ${DASHBOARD_CALIBRATION_PROFILE:-}
+      DASHBOARD_ALGORITHM: ${DASHBOARD_ALGORITHM:-}
+      MAX_SYNC_DELTA_MS: ${MAX_SYNC_DELTA_MS:-50}
+      MAX_EPIPOLAR_ERROR_PX: ${MAX_EPIPOLAR_ERROR_PX:-50}
+      BOX_FOOT_Z_MIN: ${BOX_FOOT_Z_MIN:--0.35}
+      BOX_FOOT_Z_MAX: ${BOX_FOOT_Z_MAX:-0.2}
+      ANKLE_FOOT_Z_MIN: ${ANKLE_FOOT_Z_MIN:--0.1}
+      ANKLE_FOOT_Z_MAX: ${ANKLE_FOOT_Z_MAX:-0.15}
+      BBOX_POSITION_METHOD: ${BBOX_POSITION_METHOD:-triangulate}
+      MAX_GROUND_DISTANCE_M: ${MAX_GROUND_DISTANCE_M:-1.5}
+      GROUND_ANKLE_Z_M: ${GROUND_ANKLE_Z_M:-0.08}
+      SINGLE_CAMERA_ANKLE_Z_M: ${SINGLE_CAMERA_ANKLE_Z_M:-0.08}
+      FLOOR_TRACK_GATE_M: ${FLOOR_TRACK_GATE_M:-0.8}
+      ENABLE_KALMAN_FILTER: ${ENABLE_KALMAN_FILTER:-true}
+      ENABLE_TRACK_PAIR_HOLD: ${ENABLE_TRACK_PAIR_HOLD:-true}
+      TRACK_PAIR_CONFIRM_FRAMES: ${TRACK_PAIR_CONFIRM_FRAMES:-3}
+      TRACK_PAIR_IMPROVEMENT_RATIO: ${TRACK_PAIR_IMPROVEMENT_RATIO:-0.9}
+      ENABLE_RISK_ANALYSIS: ${ENABLE_RISK_ANALYSIS:-false}
+      ENABLE_ANKLE_PAIRING: ${ENABLE_ANKLE_PAIRING:-true}
+      IMPROVED_FEATURES: ${IMPROVED_FEATURES:-cdfg}
+      MIN_ANKLE_CONFIDENCE: ${MIN_ANKLE_CONFIDENCE:-0.6}
+      PPE_CONFIRM_SAMPLES: ${PPE_CONFIRM_SAMPLES:-3}
+      PPE_MIN_CONFIDENCE: ${PPE_MIN_CONFIDENCE:-0.4}
+      PPE_MAX_AGE_MS: ${PPE_MAX_AGE_MS:-3000}
+      WARNING_DISTANCE_M: ${WARNING_DISTANCE_M:-1.0}
+      DANGER_DISTANCE_M: ${DANGER_DISTANCE_M:-0.5}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ../backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: cctv_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-32123}:80"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:

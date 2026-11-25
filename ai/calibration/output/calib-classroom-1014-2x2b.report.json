@@ -1,0 +1,47 @@
+{
+  "purpose": "논문 2x2 B안: basic 은 ChArUco 를 전혀 쓰지 않음. precise 는 2x2 와 동일",
+  "basic": {
+    "method": "바닥 테이프 십자만으로 cv2.calibrateCamera (사진 1장). 주점 = 화면 중앙(960,540) 고정, fx=fy, 왜곡 0 고정. 초점거리·카메라 위치를 함께 추정. 초기값(1000/1920/3000)과 무관하게 같은 값으로 수렴",
+    "points": {
+      "cam1": 15,
+      "cam2": 9
+    },
+    "cam1": {
+      "focal_px": 1517.7,
+      "reproj_rmse_px": 13.64,
+      "camera_center_world_m": [
+        -2.926,
+        -1.821,
+        1.978
+      ]
+    },
+    "cam2": {
+      "focal_px": 1568.0,
+      "reproj_rmse_px": 6.61,
+      "camera_center_world_m": [
+        7.206,
+        -2.286,
+        1.907
+      ]
+    }
+  },
+  "compare_chArUco": {
+    "cam1": {
+      "focal_px": 1545.3,
+      "principal": [
+        982.7,
+        520.0
+      ]
+    },
+    "cam2": {
+      "focal_px": 1540.0,
+      "principal": [
+        979.7,
+        522.3
+      ]
+    }
+  },
+  "source_images": "runs/real/check-20261014-160715 cam1/000052.jpg, cam2/000052.jpg",
+  "previous": "calib-classroom-1014-2x2.json 의 basic 은 ChArUco K 를 그대로 쓰고 카메라 위치만 왜곡 없이 다시 구한 값(A안)",
+  "server_method_field": "서버 스키마 때문에 method 는 charuco-aruco 로 둠 (basic 은 실제로 ChArUco 미사용)"
+}

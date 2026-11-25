@@ -1,0 +1,20 @@
+# Keep repository text files consistent across Windows, macOS, Linux, and Docker.
+* text=auto
+
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.ini text eol=lf
+*.mako text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
+
+# Do not apply line-ending conversion to binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

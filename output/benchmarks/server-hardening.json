@@ -1,0 +1,180 @@
+{
+  "baseline": "957d47f",
+  "timing_note": "single local samples, not a speed benchmark",
+  "before": {
+    "database": "isolated temporary SQLite",
+    "risk_queries": [
+      {
+        "people": 5,
+        "pair": 1,
+        "matches": 5,
+        "risk_pairs": 10,
+        "state_selects": 10,
+        "result_sha256": "ddda8d12534034b889cf829685846c5479e08dcc74bdde203a1c0a178326b076",
+        "risk_ms": 11.547899979632348
+      },
+      {
+        "people": 5,
+        "pair": 2,
+        "matches": 5,
+        "risk_pairs": 10,
+        "state_selects": 10,
+        "result_sha256": "fc1e9e6dd159714f54ef17923a09b3f659bfa1ac7b978e8cd09a79f60103f2d5",
+        "risk_ms": 11.152299994137138
+      },
+      {
+        "people": 10,
+        "pair": 1,
+        "matches": 10,
+        "risk_pairs": 45,
+        "state_selects": 45,
+        "result_sha256": "c7e52b353e333dc26dd17b51f0a4293b0829b727b7e6b55ca7abe7d3d5551d39",
+        "risk_ms": 74.97099996544421
+      },
+      {
+        "people": 10,
+        "pair": 2,
+        "matches": 10,
+        "risk_pairs": 45,
+        "state_selects": 45,
+        "result_sha256": "8eda2e0ab76faee147b22f395fdfc0a8706175911b674d7ec3f424106a912b71",
+        "risk_ms": 68.12429998535663
+      },
+      {
+        "people": 20,
+        "pair": 1,
+        "matches": 20,
+        "risk_pairs": 190,
+        "state_selects": 190,
+        "result_sha256": "27b303830b86a43e8780be35cc539ad7f15342ba6a0c9a0e087e00828fafec74",
+        "risk_ms": 450.66919998498634
+      },
+      {
+        "people": 20,
+        "pair": 2,
+        "matches": 20,
+        "risk_pairs": 190,
+        "state_selects": 190,
+        "result_sha256": "a61706d6e04c88127a161536fcd50a4362f5ae5e01fc9019a01382f922be6130",
+        "risk_ms": 289.5060000009835
+      }
+    ],
+    "calibration": [
+      {
+        "case": "zero_fx",
+        "update_status": 200,
+        "camera_preserved": false,
+        "matches_before": 1,
+        "matches_after": 0
+      },
+      {
+        "case": "zero_fy",
+        "update_status": 200,
+        "camera_preserved": false,
+        "matches_before": 1,
+        "matches_after": 0
+      }
+    ],
+    "late_input": {
+      "capture_before": 2000,
+      "capture_after": 1000,
+      "seq_before": 1,
+      "seq_after": 2,
+      "alert_active_before": true,
+      "alert_active_after": false
+    },
+    "idle_sse": {
+      "observation_seconds": 1.1,
+      "polls": 5,
+      "full_payloads_returned": 5
+    }
+  },
+  "after": {
+    "database": "isolated temporary SQLite",
+    "risk_queries": [
+      {
+        "people": 5,
+        "pair": 1,
+        "matches": 5,
+        "risk_pairs": 10,
+        "state_selects": 1,
+        "result_sha256": "ddda8d12534034b889cf829685846c5479e08dcc74bdde203a1c0a178326b076",
+        "risk_ms": 9.284299972932786
+      },
+      {
+        "people": 5,
+        "pair": 2,
+        "matches": 5,
+        "risk_pairs": 10,
+        "state_selects": 1,
+        "result_sha256": "fc1e9e6dd159714f54ef17923a09b3f659bfa1ac7b978e8cd09a79f60103f2d5",
+        "risk_ms": 5.303399986587465
+      },
+      {
+        "people": 10,
+        "pair": 1,
+        "matches": 10,
+        "risk_pairs": 45,
+        "state_selects": 1,
+        "result_sha256": "c7e52b353e333dc26dd17b51f0a4293b0829b727b7e6b55ca7abe7d3d5551d39",
+        "risk_ms": 16.009800019674003
+      },
+      {
+        "people": 10,
+        "pair": 2,
+        "matches": 10,
+        "risk_pairs": 45,
+        "state_selects": 1,
+        "result_sha256": "8eda2e0ab76faee147b22f395fdfc0a8706175911b674d7ec3f424106a912b71",
+        "risk_ms": 12.48839998152107
+      },
+      {
+        "people": 20,
+        "pair": 1,
+        "matches": 20,
+        "risk_pairs": 190,
+        "state_selects": 1,
+        "result_sha256": "27b303830b86a43e8780be35cc539ad7f15342ba6a0c9a0e087e00828fafec74",
+        "risk_ms": 54.790199967101216
+      },
+      {
+        "people": 20,
+        "pair": 2,
+        "matches": 20,
+        "risk_pairs": 190,
+        "state_selects": 1,
+        "result_sha256": "a61706d6e04c88127a161536fcd50a4362f5ae5e01fc9019a01382f922be6130",
+        "risk_ms": 42.92229999555275
+      }
+    ],
+    "calibration": [
+      {
+        "case": "zero_fx",
+        "update_status": 422,
+        "camera_preserved": true,
+        "matches_before": 1,
+        "matches_after": 1
+      },
+      {
+        "case": "zero_fy",
+        "update_status": 422,
+        "camera_preserved": true,
+        "matches_before": 1,
+        "matches_after": 1
+      }
+    ],
+    "late_input": {
+      "capture_before": 2000,
+      "capture_after": 2000,
+      "seq_before": 1,
+      "seq_after": 1,
+      "alert_active_before": true,
+      "alert_active_after": true
+    },
+    "idle_sse": {
+      "observation_seconds": 1.1,
+      "polls": 5,
+      "full_payloads_returned": 1
+    }
+  }
+}

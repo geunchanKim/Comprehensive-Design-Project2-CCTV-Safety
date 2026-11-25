@@ -1,0 +1,251 @@
+from datetime import datetime
+
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, ForeignKeyConstraint, Integer, JSON, String, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+try:
+    from .database import Base
+except ImportError:  # Docker runs this directory as the import root.
+    from database import Base
+
+
+class Camera(Base):
+    __tablename__ = "cameras"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True, default="basic",
+                                                     server_default="basic")
+    method: Mapped[str] = mapped_column(String(32))
+    image_width: Mapped[int] = mapped_column(Integer)
+    image_height: Mapped[int] = mapped_column(Integer)
+    intrinsic_matrix: Mapped[list] = mapped_column(JSON)
+    distortion_coefficients: Mapped[list] = mapped_column(JSON)
+    rotation_vector: Mapped[list] = mapped_column(JSON)
+    rotation_matrix: Mapped[list] = mapped_column(JSON)
+    translation_vector: Mapped[list] = mapped_column(JSON)
+    reprojection_error_px: Mapped[float] = mapped_column(Float)
+    validation_rmse_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    validation_max_error_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    validation_point_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FrameBundle(Base):
+    __tablename__ = "frame_bundles"
+    __table_args__ = (UniqueConstraint("session_id", "pair_id", "calibration_profile", "algorithm"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    pair_id: Mapped[int] = mapped_column(BigInteger)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    sync_delta_ms: Mapped[int] = mapped_column(Integer)
+    source_frames: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    detections: Mapped[list["Detection"]] = relationship(cascade="all, delete-orphan")
+
+
+class Detection(Base):
+    __tablename__ = "detections"
+    __table_args__ = (
+        UniqueConstraint("session_id", "camera_id", "frame_id", "track_id", "calibration_profile", "algorithm"),
+        ForeignKeyConstraint(["session_id", "camera_id", "calibration_profile"],
+                             ["cameras.session_id", "cameras.id", "cameras.calibration_profile"]),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bundle_id: Mapped[int] = mapped_column(ForeignKey("frame_bundles.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    camera_id: Mapped[str] = mapped_column(String(64), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    frame_id: Mapped[int] = mapped_column(Integer, index=True)
+    captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    track_id: Mapped[int] = mapped_column(Integer)
+    object_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    cls: Mapped[str] = mapped_column(String(16))
+    confidence: Mapped[float] = mapped_column(Float)
+    bbox: Mapped[list] = mapped_column(JSON)
+    foot_pixel: Mapped[list] = mapped_column(JSON)
+    foot_src: Mapped[str] = mapped_column(String(16), default="box", server_default="box")
+    ankles: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    world_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    world_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    world_z: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class GlobalObject(Base):
+    __tablename__ = "global_objects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    cls: Mapped[str] = mapped_column(String(16))
+    ppe_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TrackLink(Base):
+    __tablename__ = "track_links"
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "camera1_id", "camera1_track_id", "camera2_id", "camera2_track_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), index=True)
+    camera1_id: Mapped[str] = mapped_column(String(64))
+    camera1_track_id: Mapped[int] = mapped_column(Integer)
+    camera2_id: Mapped[str] = mapped_column(String(64))
+    camera2_track_id: Mapped[int] = mapped_column(Integer)
+    cls: Mapped[str] = mapped_column(String(16))
+
+
+class ObjectMotionState(Base):
+    __tablename__ = "object_motion_states"
+
+    object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    mean: Mapped[list] = mapped_column(JSON)
+    covariance: Mapped[list] = mapped_column(JSON)
+    timestamp_ms: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class FloorTrack(Base):
+    """C 바닥 좌표 추적: 바닥 위에서 따라가는 사람 한 명 (칼만 상태 + 사람 번호)"""
+    __tablename__ = "floor_tracks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    cls: Mapped[str] = mapped_column(String(16))
+    object_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"), index=True)
+    mean: Mapped[list] = mapped_column(JSON)
+    covariance: Mapped[list] = mapped_column(JSON)
+    timestamp_ms: Mapped[int] = mapped_column(BigInteger)
+    missed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class TrackPairState(Base):
+    __tablename__ = "track_pair_states"
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "cls", "camera1_id", "camera1_track_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    cls: Mapped[str] = mapped_column(String(16))
+    camera1_id: Mapped[str] = mapped_column(String(64))
+    camera1_track_id: Mapped[int] = mapped_column(Integer)
+    camera2_id: Mapped[str] = mapped_column(String(64))
+    camera2_track_id: Mapped[int] = mapped_column(Integer)
+    challenger_track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    challenger_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_pair_id: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class RiskPairState(Base):
+    """F 경고 유지: 사람 두 명 사이의 직전 경고 단계"""
+    __tablename__ = "risk_pair_states"
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "object1_id", "object2_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), default="basic", server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), default="baseline", server_default="baseline")
+    object1_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    object2_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    level: Mapped[str] = mapped_column(String(16))
+
+
+class RiskEvent(Base):
+    __tablename__ = "risk_events"
+    __table_args__ = (UniqueConstraint("bundle_id", "object1_id", "object2_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bundle_id: Mapped[int] = mapped_column(ForeignKey("frame_bundles.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    object1_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    object2_id: Mapped[int] = mapped_column(ForeignKey("global_objects.id"))
+    distance_m: Mapped[float] = mapped_column(Float)
+    ttc_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    level: Mapped[str] = mapped_column(String(16))
+
+
+class SessionSettings(Base):
+    __tablename__ = "session_settings"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True, default="basic",
+                                                     server_default="basic")
+    algorithm: Mapped[str] = mapped_column(String(16), primary_key=True, default="baseline",
+                                           server_default="baseline")
+    settings: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DashboardState(Base):
+    __tablename__ = "dashboard_states"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16), primary_key=True)
+    algorithm: Mapped[str] = mapped_column(String(16), primary_key=True)
+    map_config: Mapped[dict] = mapped_column(JSON)
+    zones: Mapped[dict] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    stream_id: Mapped[str] = mapped_column(String(36))
+    seq: Mapped[int] = mapped_column(BigInteger, default=0)
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    observations: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DashboardAlert(Base):
+    __tablename__ = "dashboard_alerts"
+    __table_args__ = (UniqueConstraint("session_id", "calibration_profile", "algorithm", "active_key"),)
+
+    alert_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    calibration_profile: Mapped[str] = mapped_column(String(16))
+    algorithm: Mapped[str] = mapped_column(String(16))
+    stream_id: Mapped[str] = mapped_column(String(36))
+    # NULL after resolution permits a new occurrence with a new ID.
+    active_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON)
+    level: Mapped[str] = mapped_column(String(16))
+    reached_danger: Mapped[bool] = mapped_column(Boolean)
+    started_at_ms: Mapped[int] = mapped_column(BigInteger)
+    last_seen_at_ms: Mapped[int] = mapped_column(BigInteger)
+    ended_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    acknowledged_at_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    action: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class EdgeHeartbeat(Base):
+    __tablename__ = "edge_heartbeats"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    camera_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    received_at_ms: Mapped[int] = mapped_column(BigInteger)
+
+
+class GroundTruth(Base):
+    __tablename__ = "ground_truth"
+    __table_args__ = (UniqueConstraint("session_id", "frame"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    frame: Mapped[int] = mapped_column(BigInteger)
+    captured_at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    objects: Mapped[list] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

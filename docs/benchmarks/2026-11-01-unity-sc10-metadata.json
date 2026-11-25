@@ -1,0 +1,26 @@
+{
+  "scene": "unity-grid-sc10",
+  "frames": 130,
+  "fps": 15.0,
+  "objects": [
+    "chair_1",
+    "person_1",
+    "person_2",
+    "person_3"
+  ],
+  "object_frames": 520,
+  "coordinate_frame_id": "unity-world-xzy",
+  "origin_world": [
+    5.29,
+    0,
+    1.285
+  ],
+  "max_rel_translation_error_m": 8.881784197001252e-16,
+  "max_calibration_roundtrip_error_m": 7.994747267349334e-15,
+  "objects_behind_camera": 0,
+  "events": 10,
+  "expected_alerts": 4,
+  "ankle_mid_samples": 390,
+  "ankle_mid_above_015m": 26,
+  "note": "GT height diagnostic only; not measured detector/server rejection rate."
+}

@@ -1,0 +1,31 @@
+{
+  "name": "s4-lr",
+  "source": "/Users/chan/Comprehensive-Design-Project2-CCTV-Safety/ai/runs/edge/unity-classroom-03-s4-run5",
+  "gt": "runs/unity/unity-classroom-04/unity-classroom-03-s4",
+  "note": "unity_reader --dry-run --foot ankle",
+  "edge": {
+    "model": "coco",
+    "imgsz": 1280,
+    "foot": "ankle",
+    "classes": [
+      "person",
+      "chair",
+      "suitcase",
+      "backpack"
+    ],
+    "conf": 0.4,
+    "class_conf": {
+      "person": 0.5,
+      "chair": 0.4,
+      "suitcase": 0.4,
+      "backpack": 0.4
+    },
+    "tracker": "bytetrack.yaml"
+  },
+  "pairs": 500,
+  "foot_src": {
+    "ankle": 1970,
+    "box": 1349
+  },
+  "created": "2026-10-13T17:32:04"
+}
