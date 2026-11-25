@@ -1,4 +1,4 @@
-﻿# SW 등록 통합 명세서 원고
+# SW 등록 통합 명세서 원고
 
 작성·통합: 해민. 갱신일: 2026-11-25. 등록 기능 기준: 원격 main `78ac9ba`(근찬 선배와 협의한 main 기준). 문서 작업은 develop에서 관리하지만 등록 본문에 develop 전용 기능을 넣지 않는다. 엣지 원고는 [근찬의 #87 회신](https://github.com/geunchanKim/Comprehensive-Design-Project2-CCTV-Safety/issues/87#issuecomment-6934791146)을반영했다. develop에는 보호구 서버·모델 및 엣지 #90이 추가됐으나 main에는 해당 기능이 없다. 화면 설명은 코드와 대조했으며 성윤의 11/24 최종 수정본·mock 캡처 3장·실행 환경을 수령했다. 사용자 전달 보완 메일(PR-2026-131-01-KR)로 제출 후 보완 단계임을 확인했으며, 보완 신청 완료 여부는 미확인이다.
 

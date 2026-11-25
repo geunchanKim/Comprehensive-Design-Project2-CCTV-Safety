@@ -1,4 +1,4 @@
-﻿# 11/25 서버 담당 마무리 기록
+# 11/25 서버 담당 마무리 기록
 
 ## 근거와 상태
 
@@ -71,3 +71,12 @@
 - 실제 로그 URL 미제공으로 원본 재검산 대기. 영상 내용 직접 검토 및 화면 stale/서버 ack 대조는 미완료로 유지.
 - GitHub 댓글·메일 발송은 이번 요청에 구체적인 발송 지시가 없어 문안만 준비했다. push·병합·배포하지 않았다.
 - SQL 삭제 회신안: '안녕하세요, 노수정 선생님. PR-2026-131-01-KR 지능형 CCTV 기반 산업현장 안전관제 시스템의 사용언어 항목에서 SQL 삭제를 요청드립니다. 나머지 기재 언어는 유지하며 SQL 소스파일 추가 제출은 진행하지 않겠습니다. 감사합니다.' 발송 여부는 미확인.
+
+## Evening integration update (2026-11-25)
+
+The sections above record the pre-shoot review at 01:00 KST, including the then-current PR and evidence status. For the afternoon experiments, use [the shoot results](../shoot-results-1125.md), merged in PR #114, alongside this historical record.
+
+- Integration base: develop 2a44bef. Server PRs #96, #100, #101, #102, #106 and #108 are already merged; they do not need duplicate PRs.
+- DIY shooting used calib3 from s20 t2 onward. s20 t1 was discarded after camera movement. Do not apply the earlier calib2 errors to calib3.
+- Server follow-up: evaluate chair retention during occlusion (s27 chair detection 29%). No retention setting was changed. Longer retention must also be checked for stale positions and false alerts.
+- This PR updates documentation only. It does not change server code, database or deployment settings. The develop-to-main release PR #115 remains under the team lead's control.
