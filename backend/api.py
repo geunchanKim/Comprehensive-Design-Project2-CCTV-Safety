@@ -317,7 +317,7 @@ def _object_id(db: Session, session_id, profile, algorithm,
                visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int],
                exact_links=None) -> int:
     if exact_links is not None:
-        link = exact_links().get((track1, track2, cls))
+        link = exact_links().get((track1, track2))
     else:
         link = db.scalar(
             select(TrackLink).where(
@@ -328,10 +328,9 @@ def _object_id(db: Session, session_id, profile, algorithm,
                 TrackLink.camera1_track_id == track1,
                 TrackLink.camera2_id == camera2,
                 TrackLink.camera2_track_id == track2,
-                TrackLink.cls == cls,
             )
         )
-    if link and link.object_id not in used_object_ids:
+    if link and link.cls == cls and link.object_id not in used_object_ids:
         return link.object_id
 
     def new_object_id() -> int:
@@ -341,10 +340,12 @@ def _object_id(db: Session, session_id, profile, algorithm,
         db.flush()
         return global_object.id
 
-    # A historical bad pairing may have assigned this exact pair an ID already used
-    # by another person in the current bundle. Split it instead of merging positions.
+    # The DB key identifies a track pair without its class. Reuse that row but
+    # split object identity on class changes or IDs already used in this bundle.
+    # Historical detections and GlobalObjects retain their original identity.
     if link:
         link.object_id = new_object_id()
+        link.cls = cls
         return link.object_id
 
     # Reconnect only when one local track is stable and the old counterpart has
@@ -548,6 +549,14 @@ def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorith
         return _store_detections(body, db, algorithm, commit=commit)
     except IntegrityError as exc:
         db.rollback()
+        # PostgreSQL exposes the constraint name; SQLite reports table/columns.
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        logging.getLogger("uvicorn.error").error(
+            "detection_integrity_error session_id=%s pair_id=%s profile=%s algorithm=%s "
+            "constraint=%s database_error=%s",
+            body.session_id, body.pair_id, body.calibration_profile, algorithm,
+            constraint, str(exc.orig),
+        )
         raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
 
 
@@ -572,7 +581,7 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
                 TrackLink.camera1_track_id.in_(visible_tracks[0]),
                 TrackLink.camera2_track_id.in_(visible_tracks[1]),
             )).all()
-            exact_link_cache = {(row.camera1_track_id, row.camera2_track_id, row.cls): row
+            exact_link_cache = {(row.camera1_track_id, row.camera2_track_id): row
                                 for row in rows}
         return exact_link_cache
 
