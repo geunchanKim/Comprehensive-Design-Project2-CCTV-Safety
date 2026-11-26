@@ -173,7 +173,7 @@ def test_bundle_follows_server_rules():
 
 
 def test_track_number_keeps_one_class():
-    from detector import ClassStableIds
+    from track_ids import ClassStableIds
     ids = ClassStableIds()
     assert ids(2, "person") == 2
     assert ids(2, "person") == 2                       # 같은 클래스면 원래 번호
