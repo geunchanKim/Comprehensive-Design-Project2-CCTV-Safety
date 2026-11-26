@@ -1,3 +1,4 @@
+from math import isfinite
 from typing import Literal
 
 from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
@@ -32,6 +33,19 @@ class AnklesIn(BaseModel):
         return self
 
 
+def _validate_intrinsics(matrix, distortion):
+    if len(matrix) != 3 or any(len(row) != 3 for row in matrix):
+        raise ValueError("K must be a 3x3 matrix")
+    if len(distortion) != 5:
+        raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+    if not all(isfinite(value) for row in matrix for value in row) or not all(map(isfinite, distortion)):
+        raise ValueError("K and dist must contain finite values")
+    if matrix[0][0] <= 0 or matrix[1][1] <= 0:
+        raise ValueError("K focal lengths fx and fy must be positive")
+    if matrix[2] != [0, 0, 1] or matrix[1][0] != 0:
+        raise ValueError("K must use the upper triangular pinhole form with last row [0, 0, 1]")
+
+
 class CameraCalibrationIn(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     calibration_profile: CalibrationProfile = "basic"
@@ -50,14 +64,16 @@ class CameraCalibrationIn(BaseModel):
     def validate_calibration(self):
         if any(value <= 0 for value in self.image_size):
             raise ValueError("image_size must contain positive values")
-        if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
-            raise ValueError("K must be a 3x3 matrix")
-        if len(self.dist) != 5:
-            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        _validate_intrinsics(self.K, self.dist)
+        values = [*self.rvec, *self.tvec, self.reproj_error_px,
+                  self.validation_rmse_cm, self.validation_max_error_cm]
+        if not all(isfinite(value) for value in values if value is not None):
+            raise ValueError("calibration values must be finite")
         return self
 
 
 class CalibrationPoint(BaseModel):
+    model_config = {"allow_inf_nan": False}
     image: tuple[float, float]
     world: tuple[float, float, float]
 
@@ -74,16 +90,30 @@ class PnPCalibrationIn(BaseModel):
     def validate_input(self):
         if any(value <= 0 for value in self.image_size):
             raise ValueError("image_size must contain positive values")
-        if len(self.K) != 3 or any(len(row) != 3 for row in self.K):
-            raise ValueError("K must be a 3x3 matrix")
-        if len(self.dist) != 5:
-            raise ValueError("dist must contain [k1, k2, p1, p2, k3]")
+        _validate_intrinsics(self.K, self.dist)
         training = {(point.image, point.world) for point in self.grid_points}
         if any((point.image, point.world) in training for point in self.validation_points):
             raise ValueError("validation points must be held out from PnP grid points")
         grid_heights = {point.world[2] for point in self.grid_points}
         if all(point.world[2] in grid_heights for point in self.validation_points):
             raise ValueError("validation points must include at least one different-height point")
+        return self
+
+
+class PPEState(BaseModel):
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+    status: Literal["wearing", "not_wearing", "unknown"] = "unknown"
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    observed_at_ms: int | None = Field(default=None, ge=0)
+
+
+class PPEObservation(PPEState):
+    observed_at_ms: int = Field(ge=0, description="Original inference sample time, same clock as frame.ts")
+
+    @model_validator(mode="after")
+    def known_requires_confidence(self):
+        if self.status != "unknown" and self.confidence is None:
+            raise ValueError("known PPE state requires confidence")
         return self
 
 
@@ -95,6 +125,14 @@ class DetectionIn(BaseModel):
     foot: tuple[float, float] | None = None
     foot_src: FootSource | None = None
     ankles: AnklesIn | None = None
+    vest: PPEObservation | None = None
+    helmet: PPEObservation | None = None
+
+    @model_validator(mode="after")
+    def ppe_person_only(self):
+        if self.cls != "person" and (self.vest is not None or self.helmet is not None):
+            raise ValueError("PPE observations are only allowed for person")
+        return self
 
     @field_validator("bbox")
     @classmethod
@@ -116,6 +154,10 @@ class CameraFrameIn(BaseModel):
 
     @model_validator(mode="after")
     def boxes_fit_image(self):
+        for detection in self.detections:
+            for sample in (detection.vest, detection.helmet):
+                if sample is not None and sample.observed_at_ms > self.ts:
+                    raise ValueError("PPE observed_at_ms must not exceed frame.ts")
         width, height = self.image_size
         if width <= 0 or height <= 0:
             raise ValueError("image_size must contain positive values")
@@ -168,6 +210,10 @@ class ObservationResult(BaseModel):
 
 
 class DetectionResult(BaseModel):
+    position_source: Literal["two_camera", "single_camera", "held"] | None = None
+    position_observed_at_ms: int | None = None
+    vest: PPEState = Field(default_factory=PPEState)
+    helmet: PPEState = Field(default_factory=PPEState)
     object_id: int
     cls: ObjectClass
     camera_tracks: dict[str, int]
@@ -177,7 +223,7 @@ class DetectionResult(BaseModel):
     raw_world: WorldPoint | None = None
     velocity: WorldPoint | None = None
     epipolar_error_px: float | None = None   # D 한 카메라 위치는 None
-    matching_method: Literal["epipolar", "ground-plane", "single-camera"] = "epipolar"
+    matching_method: Literal["epipolar", "ground-plane", "single-camera", "held"] = "epipolar"
     ground_distance_m: float | None = None
 
 

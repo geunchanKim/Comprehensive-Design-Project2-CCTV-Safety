@@ -22,10 +22,14 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://cctv_demo:${DEMO_DB_PASSWORD:?Demo password required}@db:5432/cctv_dashboard_demo
+      LIVE_ALGORITHM: ${LIVE_ALGORITHM:-baseline}
+      ALERT_HOLD_MS: ${ALERT_HOLD_MS:-1000}
+      CHAIR_HOLD_MS: ${CHAIR_HOLD_MS:-3000}
+      SESSION_ALERT_TIMEOUT_MS: ${SESSION_ALERT_TIMEOUT_MS:-3000}
       APP_COMMIT_SHA: ${DEMO_COMMIT_SHA:?Demo commit required}
-      DASHBOARD_SESSION_ID: classroom-1014-s10-t1-v91
-      DASHBOARD_CALIBRATION_PROFILE: basic
-      DASHBOARD_ALGORITHM: baseline
+      DASHBOARD_SESSION_ID: ${DASHBOARD_SESSION_ID:-classroom-1014-s10-t1-v91}
+      DASHBOARD_CALIBRATION_PROFILE: ${DASHBOARD_CALIBRATION_PROFILE:-basic}
+      DASHBOARD_ALGORITHM: ${LIVE_ALGORITHM:-baseline}
       ENABLE_RISK_ANALYSIS: "true"
       IMPROVED_FEATURES: cdfg
       MAX_SYNC_DELTA_MS: "50"
@@ -38,6 +42,9 @@ services:
       GROUND_ANKLE_Z_M: "0.08"
       SINGLE_CAMERA_ANKLE_Z_M: "0.08"
       FLOOR_TRACK_GATE_M: "0.8"
+      PPE_CONFIRM_SAMPLES: ${PPE_CONFIRM_SAMPLES:-3}
+      PPE_MIN_CONFIDENCE: ${PPE_MIN_CONFIDENCE:-0.4}
+      PPE_MAX_AGE_MS: ${PPE_MAX_AGE_MS:-3000}
       WARNING_DISTANCE_M: "1.0"
       DANGER_DISTANCE_M: "0.5"
     ports:

@@ -69,12 +69,17 @@ export interface ClassInfo {
   protected?: boolean
 }
 
+// 보호구(안전조끼·안전모) 상태. 서버가 사람 ID별로 연속 판별해 확정한 값이다
 // unknown은 미판단. 안전으로 표시하지 않는다
-export interface VestState {
+export interface PpeState {
   status: 'wearing' | 'not_wearing' | 'unknown'
   confidence: number | null
   observedAtMs: number | null
 }
+
+export type VestState = PpeState
+
+export type PpeItem = 'vest' | 'helmet'
 
 export interface ZoneState {
   zoneId: string
@@ -82,21 +87,26 @@ export interface ZoneState {
   distanceM: number | null
 }
 
+export type PositionSource = 'two_camera' | 'single_camera' | 'held'
+
 export interface TrackedObject {
   objectId: number
   cls: string
   world: Vec2
   velocity: Vec2 | null
-  // 카메라별 track ID. 1개뿐이면 한 카메라로만 추정한 위치
+  // 카메라별 track ID. held면 지금 보이지 않아 비어 있다
   cameraTracks: Record<string, number>
-  vest: VestState
+  // held: 가려져 안 보이는 의자의 마지막 실제 위치 (서버 CHAIR_HOLD_MS 동안 유지)
+  positionSource: PositionSource
+  vest: PpeState
+  helmet: PpeState
   zoneStates: ZoneState[]
   // 서버는 보내지 않는다. 데이터 소스가 최근 snapshot 위치를 쌓아 채운다 (오래된 것부터)
   trail: Vec2[]
 }
 
-// 위험 3종(충돌·위험 구역·안전조끼) + 카메라 끊김 같은 시스템 경고
-export type AlertKind = 'collision' | 'zone' | 'vest' | 'system'
+// 충돌·위험 구역·보호구 + 카메라 끊김 같은 시스템 경고
+export type AlertKind = 'collision' | 'zone' | 'vest' | 'helmet' | 'system'
 
 export interface Alert {
   alertId: string
@@ -129,7 +139,8 @@ export interface AreaSnapshot {
   objects: TrackedObject[]
   alerts: Alert[]
   // false인 판단은 결과가 비어 있어도 안전이 아니라 미판단
-  evaluated: { collision: boolean; zone: boolean; vest: boolean }
+  // vest·helmet은 판별된 사람이 한 명이라도 있으면 true. true여도 사람별 status는 unknown일 수 있다
+  evaluated: { collision: boolean; zone: boolean; vest: boolean; helmet: boolean }
   capturedAtMs: number
   staleAfterMs: number
 }

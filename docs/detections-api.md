@@ -97,6 +97,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 
 각 단계는 에피폴라 오차, 삼각측량 높이, 두 카메라 앞쪽 여부를 헝가리안 알고리즘 실행 전에 검사한다. 기본 에피폴라 허용 오차는 50px이며 `MAX_EPIPOLAR_ERROR_PX`로 바꿀 수 있다. 연결된 로컬 track 쌍에는 세션 범위의 전역 `object_id`가 부여된다.
 
+같은 번호 짝의 클래스가 바뀌면 기존 `track_links` 행을 새 클래스의 별도 객체로 전환하며, 과거 탐지와 객체 정보는 보존한다. DB 스키마 변경은 필요하지 않다. 이전 클래스로 돌아와도 번호 짝의 연결은 새 객체로 분리하지만, 바닥 추적이 켜진 사람의 최종 ID는 기존대로 위치 기반 추적에서 결정한다. 저장 중 무결성 오류가 발생하면 `detection_integrity_error` 로그에 세션·묶음·실험 조건과 DB 제약 이름(PostgreSQL) 또는 테이블·열 오류(SQLite)를 기록한다.
+
 `algorithm=improved`는 각 카메라 광선과 기준 평면의 교점을 구하고 두 교점의 XY 거리로 헝가리안 매칭한다. `baseline`은 에피폴라 매칭을 사용한다. 발목은 `Z=0.08m`(`GROUND_ANKLE_Z_M`), bbox는 `Z=0m` 평면을 사용하며 기본 거리 기준은 `MAX_GROUND_DISTANCE_M=1.5`이다. 0.08m는 실측 2x2 데이터(107명)에서 같은 사람의 두 교점이 가장 가까워지는 높이로, 삼각측량한 발목 높이 중앙값(0.073m)과도 일치한다. 1.5m는 정답 쌍의 최대 교점 거리(1.40m)를 포함하는 최소값(0.5m 단위)이다. 이전 기본값 2.0m는 S4 자동 실험에서 1.0m보다 놓침이 적어 정했던 값이다(정상 추적 95.4%, 놓침 4.6%, ID 변경 1회). 응답의 `matching_method`와 `ground_distance_m`으로 실제 적용 방식을 확인할 수 있다.
 
 `improved`에 켤 기능은 `IMPROVED_FEATURES`(기능 글자, 배포 기본값 `cdfg` = 바닥추적 + 한 카메라 보완 + 경고 유지 + 바닥 짝짓기)로 정한다. Unity 기능별 실험(2026-10-13)에서 효과가 확인된 것만 넣었고, `e`(시간차 보정)는 교차 구간 ID 바뀜이 늘어 빠졌다. `IMPROVED_FEATURES`를 비우면 아래 예전 방식(`ENABLE_*`)을 쓴다.
@@ -106,6 +108,8 @@ FastAPI의 `/docs`에서 동일한 명세를 대화형으로 확인할 수 있�
 트랙 쌍 유지는 `improved`에서 기본 활성화되며 `ENABLE_TRACK_PAIR_HOLD=false`로 이것만 끌 수 있다. 기존 카메라 간 트랙 쌍을 우선 유지하고, 새 상대의 비용이 기존 상대의 `TRACK_PAIR_IMPROVEMENT_RATIO` 배 이하인 상태가 `TRACK_PAIR_CONFIRM_FRAMES`번 연속되어야 교체를 허용한다. 기본값은 각각 `0.9`, `3`이다. 현재 상대와 도전자 연속 횟수는 `track_pair_states`에 저장된다.
 
 세션이 처음 처리될 때 모든 실험 설정을 조건별 `session_settings`에 저장한다. `algorithm=baseline`은 epipolar, `algorithm=improved`는 ground-plane 매칭이다. `POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved`는 최초 `basic + baseline` 요청의 원본 frame·bbox·foot을 대상 조건으로 다시 계산한다. 대상 조건의 기존 결과와 추적 상태는 교체된다.
+
+재계산은 대상 결과 삭제, 전체 원본 재처리, 추적·PPE 상태 및 대시보드·경고 갱신을 하나의 트랜잭션으로 처리한다. 모든 묶음이 성공해야 한 번 커밋하며, 중간 처리나 최종 커밋이 실패하면 기존 결과를 복원한다. 일반 `/detections`의 묶음별 커밋은 유지한다. 재현 결과와 트랜잭션의 한계는 [재계산 개선 보고서](recompute-atomicity-improvement.md)를 참고한다.
 
 `GET /health`의 `algorithms.baseline`과 `algorithms.improved`에서 각 알고리즘에 실제 적용되는 매칭, 칼만 필터, 트랙 쌍 유지, 발목 페어링 설정을 확인할 수 있다.
 
@@ -118,6 +122,10 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 ```
 
 `GET /sessions/{session_id}/results.csv?profile=precise&algorithm=improved`로 조건별 결과를 받는다.
+
+캘리브레이션 직접 등록과 solve-pnp 입력의 K는 양수 fx/fy와 마지막 행 `[0, 0, 1]`을 갖는 상삼각 pinhole 행렬이어야 한다. K·왜곡 계수·외부 파라미터는 유한값이어야 하며, 잘못된 요청은 기존 카메라 설정을 변경하기 전에 422로 거절한다. 비유한 입력이 포함된 검증 오류도 JSON-safe 422로 반환한다.
+
+CSV 내보내기는 DB에서 `(bundle_id, object_id)`별 첫 관측을 선택하고 500행씩 읽는다. 위치 행의 대표 관측·정렬과 위험 행·설정 열을 유지한다. CSV 버퍼가 1MiB를 넘으면 서버 임시 파일로 전환하고, DB 조회가 끝난 뒤 청크로 전송한다. 다운로드 중 DB 커서를 유지하지 않으며 임시 파일은 전송 종료 시 닫는다. 큰 내보내기는 OS 임시 디스크 공간이 필요하다. 측정 조건과 재현 명령은 [개선 보고서](results-export-improvement.md)를 참고한다.
 
 기능별 효과를 따로 재려면 `algorithm`에 기능 조합을 넣는다. `f-` 뒤에 기능 글자를 알파벳 순서로, 중복 없이 붙인다.
 
@@ -176,3 +184,12 @@ POST /sessions/{session_id}/recompute?profile=precise&algorithm=improved
 ```
 
 같은 `(session_id, frame)`의 정답을 다시 전송하면 HTTP 409를 반환한다.
+
+
+## Live algorithm and alert continuity (#105)
+
+See [configuration, alert lifecycle and position source](specs/live-alert-continuity.md).
+
+## Chair position provenance
+
+C/f-cd retains missing chairs for CHAIR_HOLD_MS (default 3000ms, range 0..10000; 0 disables) before risk calculation. Held positions have `position_source=held`, `position_observed_at_ms` and empty camera_tracks/observations. See [live alert continuity](specs/live-alert-continuity.md) for lifetime, CSV behavior and replay checks.

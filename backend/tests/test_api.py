@@ -73,7 +73,7 @@ def test_processing_timings_exposed_and_logged(caplog):
     assert set(timings) == {
         "validation_ms", "calibration_bundle_ms", "ingest_undistort_ms",
         "matching_position_tracking_ms", "floor_tracking_ms", "risk_ms", "dashboard_snapshot_ms", "commit_ms",
-        "response_prepare_ms", "total_ms",
+        "ppe_ms", "response_prepare_ms", "total_ms",
     }
     assert all(value >= 0 for value in timings.values())
     assert timings["total_ms"] >= sum(value for key, value in timings.items() if key != "total_ms")
@@ -950,7 +950,7 @@ def test_time_offset_correction_moves_position_to_later_photo_time():
     assert np.allclose(same_time, raw)
 
 
-def test_ingest_flush_conflict_rolls_back_and_returns_409(monkeypatch):
+def test_ingest_flush_conflict_rolls_back_and_returns_409(monkeypatch, caplog):
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.orm import Session
 
@@ -965,6 +965,8 @@ def test_ingest_flush_conflict_rolls_back_and_returns_409(monkeypatch):
         patch.setattr(Session, "flush", fail_flush)
         response = client.post("/detections", json=payload)
     assert response.status_code == 409
+    assert any("detection_integrity_error" in r.message and session_id in r.message
+               and "unique constraint" in r.message for r in caplog.records)
     with SessionLocal() as db:
         assert db.scalar(select(FrameBundle).where(FrameBundle.session_id == session_id)) is None
         assert db.get(SessionSettings, (session_id, "basic", "baseline")) is None
@@ -1036,3 +1038,45 @@ def test_stable_track_links_use_one_select_per_bundle(count):
     assert len(before) == len(after) == count
     for key in ("object_id", "world", "camera_tracks"):
         assert [m[key] for m in before] == [m[key] for m in after]
+
+
+@pytest.mark.parametrize("count", [1, 3])
+@pytest.mark.parametrize("algorithm", ["baseline", "f-cd"])
+def test_track_pair_class_changes_split_identity_without_conflict(count, algorithm, monkeypatch):
+    from backend.models import GlobalObject, TrackLink
+
+    monkeypatch.setattr(api_module, "LIVE_ALGORITHM", algorithm)
+    session_id = f"class-change-{algorithm}-{count}"
+    put_camera("cam1", [0, 0, 0], session_id)
+    put_camera("cam2", [-1, 0, 0], session_id)
+    identities = []
+    for pair, cls in enumerate(["person", "chair", "chair", "person"], 1):
+        body = detection_payload(pair_id=pair, session_id=session_id, ts2=pair * 1000)
+        for frame, dx in zip(body["frames"], (0, -100)):
+            frame["ts"] = pair * 1000
+            frame["detections"] = [
+                {"track_id": i + 1, "cls": cls, "conf": 0.9,
+                 "bbox": [950 - i * 25 + dx, 400, 970 - i * 25 + dx, 540]}
+                for i in range(count)]
+        response = client.post("/detections", json=body)
+        assert response.status_code == 201, response.text
+        matches = [m for m in response.json()["matches"] if m["camera_tracks"]]
+        assert len(matches) == count
+        identities.append({match["object_id"] for match in matches})
+    assert identities[0].isdisjoint(identities[1])
+    assert identities[1] == identities[2]
+    assert identities[3].isdisjoint(identities[1])
+    if algorithm == "baseline":
+        assert identities[3].isdisjoint(identities[0])
+    with SessionLocal() as db:
+        links = db.scalars(select(TrackLink).where(TrackLink.session_id == session_id)).all()
+        assert len(links) == count
+        if algorithm == "baseline":
+            assert {link.object_id for link in links} == identities[3]
+        assert {link.cls for link in links} == {"person"}
+        for pair, cls in enumerate(["person", "chair", "chair", "person"], 1):
+            rows = db.scalars(select(Detection).where(
+                Detection.session_id == session_id, Detection.frame_id == pair)).all()
+            assert len(rows) == count * 2
+            assert {row.object_id for row in rows} == identities[pair - 1]
+            assert {db.get(GlobalObject, row.object_id).cls for row in rows} == {cls}

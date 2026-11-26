@@ -172,6 +172,26 @@ def test_bundle_follows_server_rules():
     assert set(bundle["frames"][0]) == {"camera_id", "frame_id", "ts", "image_size", "detections"}
 
 
+def test_track_number_keeps_one_class():
+    from track_ids import ClassStableIds
+    ids = ClassStableIds()
+    assert ids(2, "person") == 2
+    assert ids(2, "person") == 2                       # 같은 클래스면 원래 번호
+    split = ids(2, "chair")                            # 11/25 s41: 사람 2번이 의자로 바뀜
+    assert split != 2 and split >= ClassStableIds.SPLIT_BASE
+    assert ids(2, "chair") == split                    # 바뀐 클래스도 계속 같은 새 번호
+    assert ids(2, "person") == 2                       # 다시 사람이 되면 원래 번호
+    assert ids(5, "chair") == 5 and ids(5, "person") not in (5, split)
+    assert ids(None, "person") is None
+
+
+def test_track_link_duplicate_409_does_not_stop_sending():
+    from bundle import explain_failure
+    assert explain_failure(409, {"detail": "this camera/frame/track detection was already stored"}) is None
+    assert explain_failure(409, {"detail": "this session/pair detection bundle was already stored"})
+    assert explain_failure(409, {"detail": "session was already processed with different experiment settings"})
+
+
 def test_frame_carries_pts_and_receive_times():
     frame = build_frame("cam1", 1, 1000, (1920, 1080), [], pts_ms=12.25, recv_ms=1010)
     assert frame["pts_ms"] == 12.25
@@ -807,3 +827,113 @@ def test_server_client_post_now_dry_run_writes_file(tmp_path):
     client.close()
     lines = (tmp_path / "sent_edge_heartbeat.jsonl").read_text().splitlines()
     assert [json.loads(line)["camera_id"] for line in lines] == ["cam1"]
+
+
+# ── 보호구 판별 (ppe_judge.py): 판별할 사람 고르기, 서버 계약 필드, Sender 연결 ──
+
+def _person(tid, bbox=(100, 100, 200, 400), cls="person"):
+    return {"track_id": tid, "cls": cls, "conf": 0.9, "bbox": list(bbox), "foot": [150, 400], "foot_src": "box"}
+
+
+def test_ppe_schedule_picks_new_people_first_and_waits_interval():
+    from ppe_judge import PpeSchedule
+    schedule = PpeSchedule(interval_ms=500, max_per_frame=2)
+    dets = [_person(1), _person(2), _person(3), _person(None), _person(4, cls="chair"),
+            _person(5, bbox=(0, 0, 20, 40))]                     # ID 없음·사람 아님·너무 작음은 판별 안 함
+    first = schedule.pick(dets, 1000)
+    assert first == [0, 1]                                         # 한 프레임 최대 2명
+    schedule.mark([dets[i]["track_id"] for i in first], 1000)
+    assert schedule.pick(dets, 1100) == [2]                        # 아직 판별 안 한 3번만
+    schedule.mark([3], 1100)
+    assert schedule.pick(dets, 1400) == []                         # 500ms 안 지남
+    assert schedule.pick(dets, 1500) == [0, 1]                     # 오래된 사람부터
+    assert schedule.pick(dets, 900) == [0, 1]                      # 시각이 뒤로 가면(재생 다시 시작) 다시 판별
+
+
+def test_ppe_schedule_rejects_interval_longer_than_server_hold():
+    from ppe_judge import PpeSchedule
+    with pytest.raises(ValueError):
+        PpeSchedule(interval_ms=3000)
+
+
+def test_judge_people_adds_server_contract_fields_only_when_judged():
+    from ppe_judge import PpeSchedule, judge_people
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    crops = []
+
+    def predict(images):
+        crops.extend(images)
+        # 안전모 씀(위쪽) + 조끼 안 씀 / 아무것도 없음
+        return [[(0, 0.8, 0.5, 0.1, 0.2, 0.1), (3, 0.7, 0.5, 0.5, 0.6, 0.4)], []][:len(images)]
+
+    schedule = PpeSchedule(interval_ms=500)
+    dets = [_person(1), _person(2), _person(3, cls="chair")]
+    assert judge_people(frame, dets, 1000, schedule, predict) == 2
+    assert crops[0].shape[:2] == (360, 120)                        # 학습과 같은 비율로 넓혀 자름 (위 15%, 아래 5%, 좌우 10%)
+    assert dets[0]["helmet"] == {"status": "wearing", "confidence": 0.8, "observed_at_ms": 1000}
+    assert dets[0]["vest"] == {"status": "not_wearing", "confidence": 0.7, "observed_at_ms": 1000}
+    assert dets[1]["helmet"] == {"status": "unknown", "confidence": None, "observed_at_ms": 1000}
+    assert "helmet" not in dets[2] and "vest" not in dets[2]       # 사람 이외 객체에는 안 붙임
+
+    later = [_person(1), _person(2)]
+    assert judge_people(frame, later, 1200, schedule, predict) == 0
+    assert all("helmet" not in d and "vest" not in d for d in later)   # 판별 안 한 프레임은 필드를 뺌
+
+
+def test_clean_detections_keeps_ppe_fields():
+    det = {**_person(1), "helmet": {"status": "wearing", "confidence": 0.8, "observed_at_ms": 1000}}
+    kept, removed = clean_detections([det], 1920, 1080)
+    assert removed == 0 and kept[0]["helmet"] == det["helmet"]
+
+
+def test_sender_attaches_ppe_with_frame_ts(tmp_path):
+    import time
+    from types import SimpleNamespace
+    from realtime import Sender
+
+    class FakeClient:
+        out_dir = tmp_path
+        last_failure = None
+        on_done = None
+        sent = []
+
+        def send(self, message, path, meta=None, age_ms=0.0):
+            self.sent.append((message, meta))
+            self.on_done(meta, 201, 1.0, 0.1)
+
+        def close(self, wait=None):
+            pass
+
+        def summary(self):
+            return "ok"
+
+    class FakeDetector:
+        last_ms = {"yolo": 1.0, "pose": 1.0}
+
+        def __call__(self, image):
+            return [_person(7)]
+
+    class FakeJudge:
+        last_ms = 4.0
+
+        def __call__(self, image, detections, ts_ms):
+            detections[0]["vest"] = {"status": "wearing", "confidence": 0.9, "observed_at_ms": ts_ms}
+
+    recorder = SimpleNamespace(tol_ms=50, corrected_ms=lambda f: f.recv_ms - 5)
+    client = FakeClient()
+    sender = Sender("classroom-1101-s1-t1", {"cam1": FakeDetector(), "cam2": FakeDetector()}, client, recorder,
+                    ppe={"cam1": FakeJudge()})
+    now = int(time.time() * 1000)
+    frame = lambda cam: SimpleNamespace(camera=cam, image=np.zeros((1080, 1920, 3), np.uint8), recv_ms=now, pts_ms=0.0)
+    sender.offer(1, frame("cam1"), frame("cam2"), 0)
+    for _ in range(100):
+        if client.sent:
+            break
+        time.sleep(0.02)
+    sender.close()
+
+    message, meta = client.sent[0]
+    cam1, cam2 = message["frames"]
+    assert cam1["detections"][0]["vest"]["observed_at_ms"] == cam1["ts"] == now - 5   # frame.ts 와 같은 시계
+    assert "vest" not in cam2["detections"][0]                                         # 판별기 없는 카메라
+    assert meta["ppe_ms"] == {"cam1": 4.0}

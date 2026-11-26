@@ -17,6 +17,8 @@ def main():
     parser.add_argument("--cam2-intrinsics", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--best", type=int, default=10)
+    parser.add_argument("--basic-from-precise", action="store_true",
+                        help="ID 0 단일 마커 계산을 건너뛰고 basic에 precise 자세를 넣는다 (라이브 전송은 항상 basic을 씀)")
     args = parser.parse_args()
     points = load_points(args.points)
     combined, reports = {}, {}
@@ -25,12 +27,15 @@ def main():
         K = np.asarray(intrinsic["K"], dtype=float)
         dist = np.asarray(intrinsic["dist"], dtype=float)
         images = args.run / camera_id
-        basic_rvec, basic_tvec, basic_error, _ = estimate_extrinsics(images, K, dist, 0, args.best)
         centers, counts, image_size = detect_centers(images, args.best)
         if tuple(intrinsic["image_size"]) != image_size:
             raise ValueError(f"{camera_id}: image size {image_size} differs from intrinsics {intrinsic['image_size']}")
         precise_rvec, precise_tvec, precise_error, validation, errors = solve(
             points, centers, image_size, K, dist)
+        if args.basic_from_precise:
+            basic_rvec, basic_tvec, basic_error = precise_rvec, precise_tvec, precise_error
+        else:
+            basic_rvec, basic_tvec, basic_error, _ = estimate_extrinsics(images, K, dist, 0, args.best)
         common = {"method": "charuco-aruco", "image_size": list(image_size), "K": K.tolist(),
                   "dist": dist.reshape(-1).tolist()}
         combined[camera_id] = {

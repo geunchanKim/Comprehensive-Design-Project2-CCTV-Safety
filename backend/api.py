@@ -1,6 +1,4 @@
 import os
-import csv
-import io
 import json
 import re
 import logging
@@ -10,12 +8,12 @@ from typing import get_args
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import Response
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 try:
+    from .chair_hold import CHAIR_HOLD_MS, hold_chairs
     from .profiling import StageTimer
     from .database import get_db
     from .geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
@@ -34,6 +32,7 @@ try:
                            update_kalman, update_pair_hysteresis)
     from .risk import WARNING_RELEASE_MARGIN_M, calculate_pair_risk, hysteresis_level
 except ImportError:  # Docker runs this directory as the import root.
+    from chair_hold import CHAIR_HOLD_MS, hold_chairs
     from profiling import StageTimer
     from database import get_db
     from geometry import (Calibration, combine_plane_positions, complete_box_foot, foot_point, fundamental_matrix,
@@ -181,6 +180,10 @@ def algorithm_features(algorithm: str) -> frozenset[str]:
     return frozenset(FEATURE_CODES[code] for code in codes)
 
 
+LIVE_ALGORITHM = os.getenv("LIVE_ALGORITHM", "baseline").strip()
+algorithm_features(LIVE_ALGORITHM)  # Fail startup rather than silently select another condition.
+
+
 def _checked_algorithm(algorithm: str) -> str:
     try:
         algorithm_features(algorithm)
@@ -211,6 +214,7 @@ def _experiment_settings(algorithm: Algorithm):
         "max_ground_distance_m": MAX_GROUND_DISTANCE_M,
         "kalman_process_noise": KALMAN_PROCESS_NOISE,
         "kalman_measurement_noise": KALMAN_MEASUREMENT_NOISE,
+        "chair_hold_ms": CHAIR_HOLD_MS if "floor" in algorithm_features(algorithm) else 0,
         "floor_track_gate_m": FLOOR_TRACK_GATE_M,
         "floor_track_max_missed": FLOOR_TRACK_MAX_MISSED,
         "single_camera_ankle_z_m": SINGLE_CAMERA_ANKLE_Z_M,
@@ -235,45 +239,11 @@ def download_session_results(session_id: str, profile: CalibrationProfile = "bas
     stored_settings = db.get(SessionSettings, (session_id, profile, algorithm))
     if stored_settings is None:
         raise HTTPException(404, "session results not found")
-    output = io.StringIO()
-    fields = ["record_type", "pair_id", "frame_id", "timestamp_ms", "object_id", "object2_id", "cls",
-              "x", "y", "z", "distance_m", "ttc_s", "level", "settings"]
-    writer = csv.DictWriter(output, fieldnames=fields)
-    writer.writeheader()
-    settings_json = json.dumps(stored_settings.settings, sort_keys=True)
-    detections = db.execute(select(Detection, FrameBundle.pair_id).join(
-        FrameBundle, Detection.bundle_id == FrameBundle.id).where(
-        Detection.session_id == session_id,
-        Detection.calibration_profile == profile,
-        Detection.algorithm == algorithm,
-        Detection.object_id.is_not(None),
-    ).order_by(Detection.captured_at_ms, Detection.bundle_id,
-               Detection.camera_id, Detection.track_id)).all()
-    seen = set()
-    for item, pair_id in detections:
-        key = (item.bundle_id, item.object_id)   # 짝이 된 두 카메라 탐지는 같은 사람 번호라 한 줄만
-        if key in seen:
-            continue
-        seen.add(key)
-        writer.writerow({"record_type": "position", "pair_id": pair_id,
-                         "frame_id": item.frame_id, "timestamp_ms": item.captured_at_ms,
-                         "object_id": item.object_id, "cls": item.cls,
-                         "x": item.world_x, "y": item.world_y, "z": item.world_z,
-                         "settings": settings_json})
-    events = db.execute(select(RiskEvent, FrameBundle.pair_id).join(
-                        FrameBundle, RiskEvent.bundle_id == FrameBundle.id).where(
-                        RiskEvent.session_id == session_id,
-                        FrameBundle.calibration_profile == profile,
-                        FrameBundle.algorithm == algorithm)
-                        .order_by(RiskEvent.captured_at_ms, RiskEvent.id)).all()
-    for event, pair_id in events:
-        writer.writerow({"record_type": "risk", "pair_id": pair_id,
-                         "timestamp_ms": event.captured_at_ms,
-                         "object_id": event.object1_id, "object2_id": event.object2_id,
-                         "distance_m": event.distance_m, "ttc_s": event.ttc_s,
-                         "level": event.level, "settings": settings_json})
-    return Response(output.getvalue(), media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{session_id}-results.csv"'})
+    try:
+        from .results_export import export_response
+    except ImportError:
+        from results_export import export_response
+    return export_response(db, session_id, profile, algorithm, stored_settings.settings)
 
 
 @router.put("/cameras/{camera_id}/calibration", response_model=CameraCalibrationIn)
@@ -347,7 +317,7 @@ def _object_id(db: Session, session_id, profile, algorithm,
                visible_tracks: tuple[set[int], set[int]], used_object_ids: set[int],
                exact_links=None) -> int:
     if exact_links is not None:
-        link = exact_links().get((track1, track2, cls))
+        link = exact_links().get((track1, track2))
     else:
         link = db.scalar(
             select(TrackLink).where(
@@ -358,10 +328,9 @@ def _object_id(db: Session, session_id, profile, algorithm,
                 TrackLink.camera1_track_id == track1,
                 TrackLink.camera2_id == camera2,
                 TrackLink.camera2_track_id == track2,
-                TrackLink.cls == cls,
             )
         )
-    if link and link.object_id not in used_object_ids:
+    if link and link.cls == cls and link.object_id not in used_object_ids:
         return link.object_id
 
     def new_object_id() -> int:
@@ -371,10 +340,12 @@ def _object_id(db: Session, session_id, profile, algorithm,
         db.flush()
         return global_object.id
 
-    # A historical bad pairing may have assigned this exact pair an ID already used
-    # by another person in the current bundle. Split it instead of merging positions.
+    # The DB key identifies a track pair without its class. Reuse that row but
+    # split object identity on class changes or IDs already used in this bundle.
+    # Historical detections and GlobalObjects retain their original identity.
     if link:
         link.object_id = new_object_id()
+        link.cls = cls
         return link.object_id
 
     # Reconnect only when one local track is stable and the old counterpart has
@@ -536,9 +507,9 @@ def _apply_floor_tracking(db: Session, session_id: str, profile: str, algorithm:
 
 
 def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algorithm: str,
-                                object1_id: int, object2_id: int, distance_m: float) -> str:
+                                object1_id: int, object2_id: int, distance_m: float, *, states=None) -> str:
     """F 경고 유지: 이 두 사람의 직전 경고 단계를 기억해서, 켜진 경고는 여유 거리만큼 더 멀어져야 끈다"""
-    state = db.scalar(select(RiskPairState).where(
+    state = states.get((object1_id, object2_id)) if states is not None else db.scalar(select(RiskPairState).where(
         RiskPairState.session_id == session_id,
         RiskPairState.calibration_profile == profile,
         RiskPairState.algorithm == algorithm,
@@ -548,23 +519,48 @@ def _risk_level_with_hysteresis(db: Session, session_id: str, profile: str, algo
     previous = state.level if state else "safe"
     level = hysteresis_level(distance_m, previous, WARNING_DISTANCE_M, DANGER_DISTANCE_M)
     if state is None:
-        db.add(RiskPairState(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
-                             object1_id=object1_id, object2_id=object2_id, level=level))
+        state = RiskPairState(session_id=session_id, calibration_profile=profile, algorithm=algorithm,
+                              object1_id=object1_id, object2_id=object2_id, level=level)
+        db.add(state)
+        if states is not None:
+            states[object1_id, object2_id] = state
     else:
         state.level = level
     return level
 
 
-def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+def _load_risk_states(db, session_id, profile, algorithm, people):
+    """Request-local lookup, scoped to current people; cap SQL bind parameters."""
+    chunks = [people[start:start + 400] for start in range(0, len(people), 400)]
+    states = {}
+    for i, first in enumerate(chunks):
+        for second in chunks[i:]:
+            for row in db.scalars(select(RiskPairState).where(
+                RiskPairState.session_id == session_id, RiskPairState.calibration_profile == profile,
+                RiskPairState.algorithm == algorithm, RiskPairState.object1_id.in_(first),
+                RiskPairState.object2_id.in_(second))):
+                states[row.object1_id, row.object2_id] = row
+    return states
+
+
+def _create_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm, *, commit=True):
     # Flush can fail before commit; apply the same rollback/409 contract.
     try:
-        return _store_detections(body, db, algorithm)
+        return _store_detections(body, db, algorithm, commit=commit)
     except IntegrityError as exc:
         db.rollback()
+        # PostgreSQL exposes the constraint name; SQLite reports table/columns.
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        logging.getLogger("uvicorn.error").error(
+            "detection_integrity_error session_id=%s pair_id=%s profile=%s algorithm=%s "
+            "constraint=%s database_error=%s",
+            body.session_id, body.pair_id, body.calibration_profile, algorithm,
+            constraint, str(exc.orig),
+        )
         raise HTTPException(409, "this camera/frame/track detection was already stored") from exc
 
 
-def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm):
+def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm, *, commit=True):
     timer = StageTimer()
     frames = sorted(body.frames, key=lambda frame: frame.camera_id)
     visible_tracks = tuple({item.track_id for item in frame.detections} for frame in frames)
@@ -585,7 +581,7 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
                 TrackLink.camera1_track_id.in_(visible_tracks[0]),
                 TrackLink.camera2_track_id.in_(visible_tracks[1]),
             )).all()
-            exact_link_cache = {(row.camera1_track_id, row.camera2_track_id, row.cls): row
+            exact_link_cache = {(row.camera1_track_id, row.camera2_track_id): row
                                 for row in rows}
         return exact_link_cache
 
@@ -957,9 +953,14 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
         if floor_entries or singles:
             matches.extend(_apply_floor_tracking(db, body.session_id, profile, algorithm, settings,
                                                  floor_entries, singles, frames, calibrations))
+        hold_chairs(db, body.session_id, profile, algorithm,
+                    max(frame.ts for frame in frames), matches)
     timer.mark("floor_tracking_ms")
     risks = []
     hysteresis = settings["warning_hysteresis"]
+    people = sorted({match["object_id"] for match in matches if match["cls"] == "person"})
+    risk_states = (_load_risk_states(db, body.session_id, profile, algorithm, people)
+                   if hysteresis and len(people) >= 2 else None)
     if ENABLE_RISK_ANALYSIS or hysteresis:
         for first, second in combinations(matches, 2):
             if first["cls"] != "person" and second["cls"] != "person":
@@ -979,7 +980,7 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
             level = result.level
             if hysteresis and people:
                 level = _risk_level_with_hysteresis(db, body.session_id, profile, algorithm,
-                                                    object1_id, object2_id, result.distance_m)
+                                                    object1_id, object2_id, result.distance_m, states=risk_states)
             risk = {"object1_id": object1_id, "object2_id": object2_id,
                     "distance_m": result.distance_m, "ttc_s": result.ttc_s, "level": level}
             risks.append(risk)
@@ -990,6 +991,12 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
     bundle_id = bundle.id
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
+    try:
+        from .ppe import attach_ppe
+    except ImportError:
+        from ppe import attach_ppe
+    attach_ppe(db, body, matches)
+    timer.mark("ppe_ms")
     result = {"bundle_id": bundle.id, "session_id": body.session_id, "pair_id": body.pair_id,
               "calibration_profile": profile, "sync_delta_ms": sync_delta,
               "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
@@ -1001,18 +1008,23 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
         from dashboard_api import publish
     publish(db, body, algorithm, result)
     timer.mark("dashboard_snapshot_ms")
-    db.commit()
-    timer.mark("commit_ms")
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    timer.mark("commit_ms" if commit else "flush_ms")
     unmatched = {frame.camera_id: [row[0].track_id for i, row in enumerate(records[frame.camera_id]) if i not in used[n]]
                  for n, frame in enumerate(frames)}
     timer.mark("response_prepare_ms")
     timings = timer.result()
-    logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
-        "session_id": body.session_id, "pair_id": body.pair_id,
-        "calibration_profile": profile, "algorithm": algorithm,
-        "timings_ms": timings, "input_detections": sum(len(f.detections) for f in frames),
-        "match_count": len(matches), "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
-    }, allow_nan=False))
+    if commit:
+        # Replays are not durable until the outer transaction commits.
+        logging.getLogger("uvicorn.error").info("detection_timing %s", json.dumps({
+            "session_id": body.session_id, "pair_id": body.pair_id,
+            "calibration_profile": profile, "algorithm": algorithm,
+            "timings_ms": timings, "input_detections": sum(len(f.detections) for f in frames),
+            "match_count": len(matches), "commit": os.getenv("APP_COMMIT_SHA", "unknown"),
+        }, allow_nan=False))
     return {"bundle_id": bundle_id, "session_id": body.session_id, "pair_id": body.pair_id,
             "calibration_profile": profile, "sync_delta_ms": sync_delta,
             "pts_delta_ms": pts_delta, "recv_delta_ms": recv_delta,
@@ -1023,12 +1035,24 @@ def _store_detections(body: DetectionBundleIn, db: Session, algorithm: Algorithm
 
 @router.post("/detections", response_model=DetectionBundleOut, status_code=status.HTTP_201_CREATED)
 def create_detections(body: DetectionBundleIn, db: Session = Depends(get_db)):
-    return _create_detections(body, db, algorithm="baseline")
+    return _create_detections(body, db, algorithm=LIVE_ALGORITHM)
 
 
 @router.post("/sessions/{session_id}/recompute")
 def recompute_session(session_id: str, profile: CalibrationProfile,
                       algorithm: Algorithm = "baseline", db: Session = Depends(get_db)):
+    """Atomically replace one condition by replaying the original edge observations."""
+    try:
+        return _recompute_session(session_id, profile, algorithm, db)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "session recompute conflicts with stored results") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _recompute_session(session_id, profile, algorithm, db):
     """Re-run the original edge observations for one experiment condition."""
     _checked_algorithm(algorithm)
     source_profile, source_algorithm = "basic", "baseline"
@@ -1094,12 +1118,18 @@ def recompute_session(session_id: str, profile: CalibrationProfile,
     except ImportError:
         from dashboard_api import reset_stream
     reset_stream(db, session_id, profile, algorithm)
+    # Replace the entire condition in one transaction, including dashboard/PPE/
+    # tracking/alerts. Any replay or final-commit failure restores prior results.
+    for payload in payloads:
+        _create_detections(payload, db, algorithm=algorithm, commit=False)
     db.commit()
-
-    results = [_create_detections(payload, db, algorithm=algorithm) for payload in payloads]
+    logging.getLogger("uvicorn.error").info("recompute_complete %s", json.dumps({
+        "session_id": session_id, "calibration_profile": profile,
+        "algorithm": algorithm, "recomputed_bundles": len(payloads),
+    }))
     return {"session_id": session_id, "source_profile": source_profile,
             "source_algorithm": source_algorithm, "calibration_profile": profile,
-            "algorithm": algorithm, "recomputed_bundles": len(results)}
+            "algorithm": algorithm, "recomputed_bundles": len(payloads)}
 
 
 @router.post("/ground-truth", response_model=GroundTruthOut, status_code=status.HTTP_201_CREATED)

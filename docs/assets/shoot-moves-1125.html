@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>촬영 동선판</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* Layout: scene tabs, then a floor map beside (or above, on phones) the cue for the current step */
+:root{--bg:#eef1ee;--panel:#fbfcfb;--floor:#dfe5e1;--ink:#17211d;--mute:#586861;--line:#b4c0ba;
+--a:#1557b8;--b:#8a2c8f;--chair:#5f4a2c;--ok:#1d6b47;--warn:#96600a;--bad:#b3261e;--on:#fff;
+--sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121815;--panel:#1b2420;--floor:#26312c;--ink:#e8efeb;--mute:#9fb0a8;--line:#4c5c55;--a:#7db2ff;--b:#e79bea;--chair:#d3b78a;--ok:#6fd0a0;--warn:#f0bd5c;--bad:#ff8d84;--on:#101613;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#121815;--panel:#1b2420;--floor:#26312c;--ink:#e8efeb;--mute:#9fb0a8;--line:#4c5c55;--a:#7db2ff;--b:#e79bea;--chair:#d3b78a;--ok:#6fd0a0;--warn:#f0bd5c;--bad:#ff8d84;--on:#101613;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5}
+.wrap{max-width:1040px;margin:auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:14px 32px;display:grid;gap:12px}
+button,select{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px 12px;min-height:42px;cursor:pointer}
+button:focus-visible,select:focus-visible{outline:3px solid var(--a);outline-offset:2px}
+button:disabled{opacity:.4;cursor:default}
+.tabs{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
+.tabs button{padding:6px 0;font-weight:700}
+.tabs [aria-pressed=true],.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+h1{font-size:22px;margin:0;text-wrap:balance}
+p{margin:0}.mute{color:var(--mute)}
+.main{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;align-items:start}
+svg{display:block;width:100%;height:auto;background:var(--floor);border-radius:6px}
+.side{display:grid;gap:12px;min-width:0}
+.say{font-size:18px;font-weight:700}
+.ctl{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:6px}
+.pairs{display:grid;gap:4px;font-variant-numeric:tabular-nums}
+.pair{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding:4px 0}
+.pair b{font-weight:700}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.wear{display:flex;flex-wrap:wrap;gap:4px 16px}
+.wa{color:var(--a);font-weight:700}.wb{color:var(--b);font-weight:700}
+.opt{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mover{transition:transform 1s ease-in-out}
+@media (prefers-reduced-motion:reduce){.mover{transition:none}}
+@media (max-width:720px){.tabs{grid-template-columns:repeat(4,minmax(0,1fr))}.main{grid-template-columns:minmax(0,1fr)}h1{font-size:19px}}
+body{margin:0}[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+ <div class="tabs" id="tabs"></div>
+ <div><h1 id="title"></h1><p class="mute" id="goal"></p></div>
+ <div class="main">
+  <svg id="map" viewBox="-20 0 490 440" role="img" aria-label="위에서 본 촬영 구역과 동선"></svg>
+  <div class="side">
+   <div class="ctl"><button id="prev">이전</button><button id="play" class="go">재생</button><button id="next">다음</button></div>
+   <div><p class="mute" id="count"></p><p class="say" id="say"></p></div>
+   <div class="pairs" id="pairs"></div>
+   <div class="wear" id="wear"></div>
+   <p class="mute" id="tip"></p>
+   <p class="mute">카메라: cam1 (−0.5, −2.5), cam2 (3.5, −2.5)</p>
+   <p class="mute">화면 아래가 카메라 쪽(−y)입니다. 실선은 방금 움직인 길, 점선은 전체 동선, 작은 점은 거리 표시 테이프입니다.</p>
+  </div>
+ </div>
+</div>
+<script>
+const C={c1:[-.5,-2.5],c2:[3.5,-2.5],t1:[-.5,-.95],t2:[3.5,-.95],h1:[2.63,1.53],h2:[3.07,1.4],o1:[[1,0],[2,2],[1,2]],o2:[[2,0],[1,2],[2,2]]};
+const $=id=>document.getElementById(id),R={mid:C};
+const Q=[3,0],P=[1,1];
+const st=(A,B,say,x={})=>({A,B,say,...x});
+const s1=(n,w)=>({t:n+' 보호구 판별',g:'안전모와 조끼를 맞게 알아보는지 봅니다. 30초',wear:w,ch:null,tip:'두 사람이 나란히 뒤로 물러납니다. 서로 엇갈리지 않고 늘 3m 떨어집니다. 두 카메라 사이를 보고 섭니다.',s:[st([0,0],[3,0],'가까운 줄에서 5초'),st([0,1],[3,1],'한 칸 뒤로 가서 5초'),st([0,3],[3,3],'맨 뒤 줄에서 5초')]});
+const PW=['안전모+조끼','없음'];
+function scenes(){return {
+'s20':s1('s20',['안전모+조끼','야구모자']),'s21':s1('s21',['안전모','조끼']),'s22':s1('s22',['없음','안전모+조끼']),
+s23:{t:'s23 겹치기',g:'cam1에서 사람이 사람을 가릴 때 ID와 짝이 끊기는지 봅니다. 1분',wear:['없음','없음'],ch:null,tip:'A는 그대로 서 있고 B만 옆 칸을 오갑니다. 나왔다 들어가기를 3번 합니다. cam1 화면에서 실제로 겹치는지 먼저 확인합니다.',s:[st([1,0],[2,2],'cam1에서 겹쳐 5초',{ray:1}),st([1,0],[1,2],'B 옆 칸으로 나와 5초'),st([1,0],[2,2],'B 다시 겹쳐 5초 (나왔다 들어가기 3번)',{ray:1})]},
+s24:{t:'s24 사람에게 다가가기',g:'사람끼리의 경고 거리를 봅니다. 1분',wear:PW,ch:null,tip:'A는 움직이지 않습니다. 0.4m에서는 서로 마주 봅니다.',s:[3,2.5,2.1,1.9,1.6,1.4,3].map((x,i)=>st([1,1],[x,1],i==6?'B 출발 자리로 돌아와 5초':i?'B 다가가서 5초':'B 출발 자리에서 5초'))},
+'s25':{t:'s25 의자에 다가가기',g:'사람과 의자의 경고 거리를 봅니다. 1분',wear:PW,ch:[3,0],tip:'A만 들어옵니다. 의자는 방향 1이고 앉는 쪽이 +y입니다. 십자 (3, 1)은 딱 1.0m라 서지 않습니다.',s:[3,2,1.1,.9,.6,.4,3].map((y,i)=>st([3,y],null,i==6?'A 출발 자리로 돌아와 5초':i?'A 다가가서 5초':'A 출발 자리에서 5초'))},
+s26:{t:'s26 의자 뒤 사람에게 다가가기',g:'의자에 다리가 가린 B의 경고와 동시에 나는 경고를 봅니다. 30초',wear:PW,ch:[3,0],tip:'B는 움직이지 않습니다. 한 화면 이상에서 B의 다리가 의자에 가리는지 먼저 봅니다. 안 가리면 의자를 방향 2로 돌립니다.',s:[st([3,3],[3,.4],'출발 전, 5초'),st([3,2],[3,.4],'A 다가가서 5초'),st([3,1.1],[3,.4],'A 더 다가가서 5초, 끝')]},
+'s27':{t:'s27 의자 가리기',g:'사람이 의자를 가려도 주의 경고가 이어지는지 봅니다. 30초',wear:PW,ch:[3,2],tip:'B만 들어옵니다. 의자를 (3, 2)에 방향 1로 놓습니다. 화면에서 의자를 절반 넘게 가리는지 보고, 의자 중심에서 0.6m를 줄자로 맞춥니다.',s:[st(null,C.h1,'B cam1과 의자 사이에서 5초',{ray:1}),st(null,C.h2,'B cam2와 의자 사이에서 5초',{ray:2})]}}}
+const IDS=Object.keys(scenes()),ok=()=>IDS.includes(location.hash.slice(1));
+let id=ok()?location.hash.slice(1):IDS[0],k=0,timer=null;
+const X=x=>65+(x+.1)*100,Y=y=>335-y*95;
+// one scale on both axes so drawn distances match
+const U=95,px=p=>[82+p[0]*U,318-p[1]*U];
+const col=n=>`var(--${n})`;
+function line(a,b,c,w,dash,mk){const[p,q]=[px(a),px(b)];return `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${c}" stroke-width="${w}" ${dash?`stroke-dasharray="${dash}"`:''} ${mk?`marker-end="url(#${mk})"`:''}/>`}
+function txt(p,s,c,z=13,w=500){return `<text x="${p[0]}" y="${p[1]}" text-anchor="middle" font-size="${z}" font-weight="${w}" fill="${c}">${s}</text>`}
+let drawn='';
+function draw(){const c='mid',S=scenes(c),s=S[id],L=R[c];k=Math.min(k,s.s.length-1);const v=s.s[k],ch=v.ch||s.ch,pv=s.s[k-1];
+document.querySelectorAll('#tabs button').forEach(b=>b.setAttribute('aria-pressed',b.textContent==id));
+$('title').textContent=s.t;$('goal').textContent=s.g;$('tip').textContent=s.tip;$('say').textContent=v.say;$('count').textContent=`${k+1} / ${s.s.length}단계`;
+$('prev').disabled=!k;$('next').disabled=k==s.s.length-1;$('play').textContent=timer?'멈춤':'재생';
+const w=s.wear;
+$('wear').innerHTML=`<span><span class="wa">A</span> ${w[0]}</span><span><span class="wb">B</span> ${w[1]}</span>`;
+const D=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]),pr=[];if(v.A&&v.B)pr.push(['A–B',v.A,v.B]);if(ch){if(v.A)pr.push(['A–의자',v.A,ch]);if(v.B)pr.push(['B–의자',v.B,ch])}
+const lv=d=>d<.5?['bad','위험']:d<1?['warn','주의']:['ok','경고 없음'];
+$('pairs').innerHTML=pr.map(([n,a,b])=>{const d=D(a,b),l=lv(d);return `<div class="pair"><span>${n} ${d.toFixed(d>1.3&&d<1.4?2:1)}m</span><b class="${v.skip?'':l[0]}">${v.skip?'채점 안 함':l[1]}</b></div>`}).join('');
+let h=`<defs>${['a','b'].map(n=>`<marker id="m${n}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="${col(n)}"/></marker>`).join('')}</defs>`;
+for(let i=0;i<4;i++)h+=line([i,0],[i,3],col('line'),1)+line([0,i],[3,i],col('line'),1);
+for(let x=0;x<4;x++)for(let y=0;y<4;y++)h+=line([x-.08,y],[x+.08,y],col('mute'),3)+line([x,y-.08],[x,y+.08],col('mute'),3);
+for(let i=0;i<4;i++){const a=px([i,3]),b=px([3,i]);h+=txt([a[0],a[1]-16],`x=${i}`,col('mute'),12)+txt([b[0]+43,b[1]+4],`y=${i}`,col('mute'),12)}
+[[1.4,1],[1.6,1],[1.9,1],[2.1,1],[2.5,1],[3,.4],[3,.6],[3,.9],[3,1.1]].forEach(p=>{const q=px(p);h+=`<circle cx="${q[0]}" cy="${q[1]}" r="3" fill="${col('mute')}"/>`});
+[['t1','cam1'],['t2','cam2']].forEach(([t,n])=>{const q=px(L[t]);h+=`<rect x="${q[0]-22}" y="${q[1]-11}" width="44" height="22" rx="4" fill="${col('ink')}"/>`+txt([q[0],q[1]+4.5],n,col('bg'),12,700)});
+h+=txt([px([1.5,0])[0],428],'카메라 쪽',col('mute'),12);
+if(v.ray){const cm=L['c'+v.ray],tg=ch||v.B,e=[tg[0]+(tg[0]-cm[0])*.04,tg[1]+(tg[1]-cm[1])*.04];h+=line(cm,e,col('ink'),1.5,'2 4')}
+for(const n of['A','B']){const z=n.toLowerCase();for(let i=1;i<s.s.length;i++){const a=s.s[i-1][n],b=s.s[i][n];if(a&&b&&D(a,b)>.01)h+=line(a,b,col(z),1.5,'4 5')}
+ if(pv&&pv[n]&&v[n]&&D(pv[n],v[n])>.01){const q=px(pv[n]);h+=line(pv[n],v[n],col(z),4,'','m'+z)+`<circle cx="${q[0]}" cy="${q[1]}" r="12" fill="none" stroke="${col(z)}" stroke-width="2" stroke-dasharray="3 3"/>`}}
+pr.forEach(([n,a,b])=>{const d=D(a,b);if(d<1&&!v.skip)h+=line(a,b,col(lv(d)[0]),7)});
+if(ch){const q=px(ch),d=v.dir||1;h+=`<rect x="${q[0]-15}" y="${q[1]-15}" width="30" height="30" rx="3" fill="${col('floor')}" stroke="${col('chair')}" stroke-width="3"/>`+(d==1?`<rect x="${q[0]-16}" y="${q[1]+10}" width="32" height="8" fill="${col('chair')}"/>`:`<rect x="${q[0]-18}" y="${q[1]-16}" width="8" height="32" fill="${col('chair')}"/>`)+txt([q[0],q[1]+3],'의자',col('chair'),10,700)}
+if(drawn!=='ok'){$('map').innerHTML='<g id="bg"></g>'+['A','B'].map(n=>`<g id="p${n}" class="mover"><circle r="14" fill="${col(n.toLowerCase())}"/><text y="5" text-anchor="middle" font-size="15" font-weight="700" fill="var(--on)">${n}</text></g>`).join('');drawn='ok'}
+$('bg').innerHTML=h;
+for(const n of['A','B']){const g=$('p'+n),p=v[n];g.style.opacity=p?1:0;if(p){const q=px(p);g.style.transform=`translate(${q[0]}px,${q[1]}px)`}}}
+function stop(){clearInterval(timer);timer=null}
+function pick(n){stop();id=n;k=0;draw()}
+IDS.forEach(n=>{const b=document.createElement('button');b.id='tab-'+n;b.textContent=n;b.onclick=()=>{history.replaceState(null,'','#'+n);pick(n)};$('tabs').append(b)});
+$('prev').onclick=()=>{stop();k--;draw()};$('next').onclick=()=>{stop();k++;draw()};
+$('play').onclick=()=>{if(timer)stop();else{const n=scenes('mid')[id].s.length;if(k>=n-1)k=0;timer=setInterval(()=>{k++;if(k>=n-1)stop();draw()},2200)}draw()};
+
+addEventListener('hashchange',()=>{if(ok())pick(location.hash.slice(1))});
+draw();
+</script>
+</body>
+</html>

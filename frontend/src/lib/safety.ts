@@ -1,11 +1,20 @@
-import type { Alert, AlertKind, ClassInfo, Level, TrackedObject, Vec2, Zone } from '../api/types'
+import type { Alert, AlertKind, ClassInfo, Level, PpeItem, PpeState, TrackedObject, Vec2, Zone } from '../api/types'
 
 export const LEVEL_TEXT: Record<Alert['level'], string> = { warning: '주의', danger: '위험' }
+
+// 보호구 항목: [키, 이름, 평면도 배지 글자]
+export const PPE_ITEMS: [PpeItem, string, string][] = [['vest', '안전조끼', '조끼'], ['helmet', '안전모', '안전모']]
+
+export const PPE_STATUS_TEXT: Record<PpeState['status'], string> = { wearing: '착용', not_wearing: '미착용', unknown: '미판단' }
+
+// 화면에 보일 보호구 상태. snapshot이 오래되면 마지막 값을 믿지 않고 미판단으로 본다
+export const ppeStatus = (state: PpeState, stale: boolean): PpeState['status'] => (stale ? 'unknown' : state.status)
 
 export const KIND_TEXT: Record<AlertKind, string> = {
   collision: '충돌',
   zone: '위험 구역 접근·진입',
   vest: '안전조끼 미착용',
+  helmet: '안전모 미착용',
   system: '시스템',
 }
 
@@ -60,6 +69,8 @@ export function alertTitle(alert: Alert, objects: TrackedObject[], zones: Zone[]
       return `${who} → ${zones.find((z) => z.zoneId === alert.zoneId)?.name ?? '위험 구역'}`
     case 'vest':
       return `${who} · 안전조끼 미착용`
+    case 'helmet':
+      return `${who} · 안전모 미착용`
     case 'system':
       return alert.message ?? '시스템 경고'
   }

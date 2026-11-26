@@ -112,6 +112,9 @@ def explain_failure(status, response) -> str | None:
         return "이 session_id로 캘리브레이션이 등록되지 않았어요. 해민에게 같은 이름으로 등록됐는지 확인하세요"
     if status == 422 and "image_size" in text:
         return "해상도가 캘리브레이션과 달라요. Tapo 앱 화질을 '최고 화질'(1920x1080)로 맞추세요"
+    if status == 409 and "camera/frame/track" in text:
+        # 서버가 번호 짝을 저장하다 중복이 난 경우. 그 묶음만 빠지고 다음 묶음은 정상이라 멈추지 않는다
+        return None
     if status == 409 and "experiment settings" in text:
         return "이 session_id는 다른 서버 설정으로 이미 처리됐어요. 새 이름(-v2)을 쓰세요"
     if status == 409:
