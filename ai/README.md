@@ -164,6 +164,9 @@ python eval/timing_summary.py runs/edge/<session_id> [runs/edge/<다른 세션> 
 
 | 문서 | 내용 |
 | --- | --- |
+| [보호구 판별·데이터셋](../docs/specs/ppe-dataset.md) | PPE 판별 방식과 데이터셋 |
+| [탐지 오탐률 라벨링](../docs/specs/detection-label-set.md) | 실제 영상 라벨 세트 |
+| [보호구 연동 재생 테스트](../docs/specs/ppe-integration-replay.md) | v93·v94 연동 검증 |
 | [프로젝트 소개](../README.md) | 전체 시스템과 서버 실행 |
 | [캘리브레이션](calibration/README.md) | 카메라 보정과 서버 등록 |
 | [폴더 구조](#폴더-구조) | 녹화·탐지·평가 결과 저장 위치 |
