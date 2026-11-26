@@ -41,6 +41,7 @@ import torch
 from ultralytics import YOLO
 
 from feet import attach_feet, box_foot  # noqa: F401  (발 위치 계산은 feet.py)
+from track_ids import ClassStableIds
 
 AI_DIR = Path(__file__).resolve().parent.parent           # ai/
 WEIGHTS = {
@@ -131,6 +132,7 @@ class Detector:
         # 발목 방식이면 포즈 모델을 하나 더 쓴다 (사람 박스와 짝지어 발목만 가져옴)
         self.pose = YOLO(POSE_WEIGHTS) if foot == "ankle" else None
         self.last_ms = {"yolo": 0.0, "pose": 0.0}   # 마지막 호출에서 걸린 시간 (실시간 속도 기록용)
+        self.stable_ids = ClassStableIds()          # 같은 추적 번호가 클래스를 바꾸면 새 번호로 나눔
 
     @staticmethod
     def _check_classes(wanted: set, available: tuple, model: str):
@@ -167,9 +169,10 @@ class Detector:
                                                 boxes.xyxy.tolist(), ids):
                 if conf < self.class_conf.get(class_map[cls_idx], self.conf):
                     continue
+                cls = class_map[cls_idx]
                 detections.append({
-                    "track_id": None if tid is None else tid + offset,
-                    "cls": class_map[cls_idx],
+                    "track_id": None if tid is None else self.stable_ids(tid + offset, cls),
+                    "cls": cls,
                     "conf": round(conf, 3),
                     "bbox": [round(v, 1) for v in xyxy],
                 })
