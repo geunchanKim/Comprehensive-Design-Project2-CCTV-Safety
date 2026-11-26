@@ -95,6 +95,33 @@ def load_model(weights, wanted: set, offset: int):
     return model, class_map, offset
 
 
+class ClassStableIds:
+    """추적 번호 하나가 한 클래스만 갖게 한다.
+
+    ByteTrack은 클래스와 상관없이 상자를 이어 붙여서, 같은 번호가 사람이었다가 의자가 되기도 한다
+    (11/25 복도 s41: cam1 2번이 사람 → 의자). 서버는 두 카메라 번호 짝을 클래스와 함께 기억하는데
+    중복 검사는 클래스를 보지 않아서, 이런 번호가 오면 409로 그 묶음을 거절한다.
+    처음 본 클래스는 원래 번호를 그대로 쓰고, 다른 클래스로 바뀌면 그 (번호, 클래스)에 새 번호를 준다.
+    """
+    SPLIT_BASE = 1_000_000          # 원래 번호(수천 이하)와 겹치지 않는 시작값
+
+    def __init__(self):
+        self._first_cls: dict[int, str] = {}
+        self._split: dict[tuple[int, str], int] = {}
+        self._next = self.SPLIT_BASE
+
+    def __call__(self, track_id: int | None, cls: str) -> int | None:
+        if track_id is None:
+            return None
+        if self._first_cls.setdefault(track_id, cls) == cls:
+            return track_id
+        key = (track_id, cls)
+        if key not in self._split:
+            self._split[key] = self._next
+            self._next += 1
+        return self._split[key]
+
+
 class Detector:
     """frame(BGR 이미지) → [{track_id, cls, conf, bbox, foot, foot_src}] 리스트"""
 
@@ -131,6 +158,7 @@ class Detector:
         # 발목 방식이면 포즈 모델을 하나 더 쓴다 (사람 박스와 짝지어 발목만 가져옴)
         self.pose = YOLO(POSE_WEIGHTS) if foot == "ankle" else None
         self.last_ms = {"yolo": 0.0, "pose": 0.0}   # 마지막 호출에서 걸린 시간 (실시간 속도 기록용)
+        self.stable_ids = ClassStableIds()          # 같은 추적 번호가 클래스를 바꾸면 새 번호로 나눔
 
     @staticmethod
     def _check_classes(wanted: set, available: tuple, model: str):
@@ -167,9 +195,10 @@ class Detector:
                                                 boxes.xyxy.tolist(), ids):
                 if conf < self.class_conf.get(class_map[cls_idx], self.conf):
                     continue
+                cls = class_map[cls_idx]
                 detections.append({
-                    "track_id": None if tid is None else tid + offset,
-                    "cls": class_map[cls_idx],
+                    "track_id": None if tid is None else self.stable_ids(tid + offset, cls),
+                    "cls": cls,
                     "conf": round(conf, 3),
                     "bbox": [round(v, 1) for v in xyxy],
                 })

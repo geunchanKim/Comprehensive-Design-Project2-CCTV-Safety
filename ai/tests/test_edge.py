@@ -172,6 +172,26 @@ def test_bundle_follows_server_rules():
     assert set(bundle["frames"][0]) == {"camera_id", "frame_id", "ts", "image_size", "detections"}
 
 
+def test_track_number_keeps_one_class():
+    from detector import ClassStableIds
+    ids = ClassStableIds()
+    assert ids(2, "person") == 2
+    assert ids(2, "person") == 2                       # 같은 클래스면 원래 번호
+    split = ids(2, "chair")                            # 11/25 s41: 사람 2번이 의자로 바뀜
+    assert split != 2 and split >= ClassStableIds.SPLIT_BASE
+    assert ids(2, "chair") == split                    # 바뀐 클래스도 계속 같은 새 번호
+    assert ids(2, "person") == 2                       # 다시 사람이 되면 원래 번호
+    assert ids(5, "chair") == 5 and ids(5, "person") not in (5, split)
+    assert ids(None, "person") is None
+
+
+def test_track_link_duplicate_409_does_not_stop_sending():
+    from bundle import explain_failure
+    assert explain_failure(409, {"detail": "this camera/frame/track detection was already stored"}) is None
+    assert explain_failure(409, {"detail": "this session/pair detection bundle was already stored"})
+    assert explain_failure(409, {"detail": "session was already processed with different experiment settings"})
+
+
 def test_frame_carries_pts_and_receive_times():
     frame = build_frame("cam1", 1, 1000, (1920, 1080), [], pts_ms=12.25, recv_ms=1010)
     assert frame["pts_ms"] == 12.25
