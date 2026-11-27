@@ -101,8 +101,10 @@ ai/
 │   └── packs/                 저장한 탐지 묶음 (real-* = 실측 15개, s1~s4 = Unity)
 ├── ppe/                     보호구(안전모·조끼) 판별: 사람 영역 자르기 → 4종 탐지 → 사람별 상태
 │   ├── build_crops.py         Construction-PPE → 사람 영역 데이터셋, 사람별 정답
-│   ├── train_ppe.py           보호구 모델 학습 (runs/ppe_v1)
+│   ├── build_site_crops.py    11/25 실제 촬영 녹화 → 사람 영역 데이터셋 (자전거 헬멧, v2)
+│   ├── train_ppe.py           보호구 모델 학습 (runs/ppe_v1, runs/ppe_v2)
 │   ├── eval_person.py         사람별 착용 판별 정확도
+│   ├── eval_site.py           11/25 보호구 정지 장면(s20~s22)으로 모델 채점
 │   └── ppe_common.py          자르기·라벨·상태 결정 규칙 (CI 테스트)
 ├── scripts/, train.py, configs/   자체 학습 데이터·모델 (최종 실험은 COCO 원본 사용)
 ├── tests/                   단위 테스트

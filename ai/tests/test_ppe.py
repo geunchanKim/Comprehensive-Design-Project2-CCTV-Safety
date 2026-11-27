@@ -55,3 +55,14 @@ def test_decide_state_is_unknown_without_confident_box():
     state = decide_state([(1, 0.2, 0.5, 0.1, 0.2, 0.1)])
     assert state == {"helmet": {"status": "unknown", "confidence": None},
                      "vest": {"status": "unknown", "confidence": None}}
+
+
+def test_site_crops_head_box_must_sit_on_top_of_the_person():
+    from build_site_crops import head_ok, to_yolo
+    person, torso, crop = (100, 100, 200, 500), (110, 170, 190, 300), (90, 40, 210, 520)
+    assert head_ok((130, 110, 170, 150), torso, person)          # 머리 가운데 130 < 100 + 0.13*400
+    assert not head_ok((130, 150, 170, 190), torso, person)      # 조끼 깃(목) 높이는 머리가 아님
+    assert not head_ok(None, torso, person)
+    line = to_yolo(0, (130, 110, 170, 150), crop).split()
+    assert line[0] == "0" and abs(float(line[1]) - 0.5) < 1e-6   # 가로 가운데
+    assert abs(float(line[3]) - 40 / 120) < 1e-6 and abs(float(line[4]) - 40 / 480) < 1e-6
